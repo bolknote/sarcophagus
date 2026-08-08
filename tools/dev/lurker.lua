@@ -10,6 +10,10 @@
 -- Assumes lume is in the same directory as this file if it does not exist
 -- as a global
 local lume = rawget(_G, "lume") or require((...):gsub("[^/.\\]+$", "lume"))
+-- The game redirects the global print function to its on-screen message log.
+-- Keep the real console writer captured before that redirect so development
+-- diagnostics never become player-facing messages after a hot reload.
+local console_print = rawget(_G, "oldprint") or print
 
 local lurker = { _version = "1.0.1" }
 
@@ -64,7 +68,7 @@ end
 
 
 function lurker.print(...)
-  print("[lurker] " .. lume.format(...))
+  console_print("[lurker] " .. lume.format(...))
 end
 
 

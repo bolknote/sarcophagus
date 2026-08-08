@@ -75,7 +75,10 @@ function love.load()
 	spt.water = img_load("water.png")
 	spt.smoke_d = img_load("smoke_d.png")
 	spt.inv = img_load("inv.png")
-	spt.wasted = img_load("wasted.png")
+	spt.wasted = {
+		en = img_load("wasted.png"),
+		ru = img_load("wasted_ru.png"),
+	}
 	spt.sarco = img_load("sacro.png")
 	spt.invg = img_load("inv_g.png")
 	spt.bobber = img_load("bobber.png")

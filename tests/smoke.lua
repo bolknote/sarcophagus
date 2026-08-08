@@ -339,13 +339,79 @@ local function validate_display()
 		"Retina changed atlas pixels to %dx%d"
 	):format(atlas_width, atlas_height))
 	assert(quad:getDPIScale() == 1, "Retina changed atlas DPI scale")
+	local russian_death_title = assert(
+		quadlist["wasted_ru.png"],
+		"Russian death title is missing from the sprite atlas"
+	)
+	assert(russian_death_title.w == 437 and russian_death_title.h == 78,
+		"Russian death title dimensions changed")
+	local english_title = {}
+	local russian_title = {
+		getViewport = function()
+			return 0, 0, 437, 78
+		end,
+	}
+	local death_titles = { en = english_title, ru = russian_title }
+	assert(death_title_sprite(death_titles, "ru") == russian_title,
+		"Russian locale does not select its localized death title")
+	assert(death_title_sprite(death_titles, "unknown") == english_title,
+		"Unknown locale does not fall back to the English death title")
+	local title_x, title_y, score_x, score_y = death_title_layout(
+		russian_title,
+		width,
+		height,
+		"ru"
+	)
+	assert(title_x == math.floor((width - 437) / 2),
+		"localized death title is not centered by its real width")
+	assert(title_y == math.floor(height / 2 - 100)
+		and score_x == title_x + 12 and score_y == title_y + 76,
+		"localized death score layout is invalid")
+	local _, english_title_y, _, english_score_y = death_title_layout(
+		{
+			getViewport = function()
+				return 0, 0, 256, 78
+			end,
+		},
+		width,
+		height,
+		"en"
+	)
+	assert(english_score_y == english_title_y + 72,
+		"English death score spacing changed")
 	assert(DEFAULT_AMBIENT_LIGHT == 0.10, "default cave visibility changed")
+	local clean_water = { water_render_colors(0) }
+	local dirty_water = { water_render_colors(200) }
+	assert(clean_water[4] < 0.35 and dirty_water[4] < 0.35,
+		"water fill is opaque enough to look like a solid rectangle")
+	assert(dirty_water[1] > clean_water[1]
+		and dirty_water[2] > clean_water[2]
+		and dirty_water[3] < clean_water[3],
+		"dirty water no longer changes from blue towards green")
+	assert(clean_water[8] > clean_water[4],
+		"water surface is not distinguishable from its fill")
+	local _, wrapped_inventory_name = pixel_font:getWrap(
+		"2]·Очень длинное название предмета для проверки",
+		210
+	)
+	assert(gui_wrapped_line_count(
+		"2]·Очень длинное название предмета для проверки",
+		210,
+		pixel_font
+	) == #wrapped_inventory_name and #wrapped_inventory_name > 1,
+		"inventory frame does not account for wrapped item names")
 	assert(normalize_gameplay_key("up", false) == "w",
 		"up arrow is not a gameplay/crafting alternative to W")
 	assert(normalize_gameplay_key("down", false) == "s",
 		"down arrow is not a gameplay/crafting alternative to S")
 	assert(normalize_gameplay_key("up", true) == "up",
 		"Ctrl+arrow no longer reaches development controls")
+	assert(not development_reload_requested("f7", false, true),
+		"plain F7 triggers a development reload instead of prayer")
+	assert(development_reload_requested("f7", true, true),
+		"Ctrl+F7 no longer triggers a development reload")
+	assert(not development_reload_requested("f7", true, false),
+		"release build accepts the development reload shortcut")
 	assert(normalize_esc_menu_key("up", "up") == "w",
 		"up arrow is not an Esc-menu alternative to W")
 	assert(normalize_esc_menu_key("down", "down") == "s",
@@ -354,6 +420,24 @@ local function validate_display()
 		"left arrow is not an Esc-menu alternative to A")
 	assert(normalize_esc_menu_key("right", "right") == "d",
 		"right arrow is not an Esc-menu alternative to D")
+	assert(achievement_page_after_key(1, "right", 7) == 2,
+		"right arrow does not advance achievement pages")
+	assert(achievement_page_after_key(1, "left", 7) == 7,
+		"left arrow does not wrap achievement pages")
+	assert(achievement_page_after_key(7, "d", 7) == 1,
+		"D does not wrap achievement pages")
+	assert(achievement_page_after_key(2, "a", 7) == 1,
+		"A does not move to the previous achievement page")
+	assert(menu_save_position(nil, nil) == 1,
+		"menu has no safe initial save slot before its first update")
+	assert(menu_save_position(nil, 4) == 4,
+		"menu ignores the save slot restored from metadata")
+	assert(menu_save_position("invalid", 12) == 1,
+		"menu accepts a malformed save slot")
+	assert(menu_move_save_position(nil, -1, nil) == 9,
+		"an immediate up-arrow cannot wrap from the first save slot")
+	assert(menu_move_save_position(nil, 1, nil) == 2,
+		"an immediate down-arrow cannot move from the first save slot")
 	assert(tool_damage_per_second({ dmgmin = 2, dmgmax = 6, digspeed = 2 }) == 2,
 		"weapon DPS does not use the average of minimum and maximum damage")
 	assert(next_numeric_id({ [1] = true, [3] = true }) == 4,
@@ -702,11 +786,137 @@ local function validate_display()
 		"legacy save preview is being upscaled on Retina")
 
 	local original_language = LANGUAGE
+	local original_font = font
+	-- validate_display runs before love.load, while the live reload happens
+	-- during gameplay. Supply the same kind of initialized runtime font so
+	-- language_set also reapplies names to the content tables in this test.
+	font = pixel_font
 	for _, language in ipairs({"en", "ru"}) do
 		language_set(language, false)
-		local expected_smash_tag = language == "ru" and "#дробление" or "#smash"
-		assert(craft_tool_tag("smash") == expected_smash_tag,
-			language .. " crafting tool tag is invalid")
+		local expected_tool_tags = language == "ru" and {
+			dig = "#копание",
+			cut = "#резка",
+			chop = "#рубка",
+			smash = "#дробление",
+			pierce = "#пробой",
+			water = "#вода",
+			oil = "#масло",
+			vinegar = "#уксус",
+			salsa = "#сальса",
+		} or {
+			dig = "#dig",
+			cut = "#cut",
+			chop = "#chop",
+			smash = "#smash",
+			pierce = "#pierce",
+			water = "#water",
+			oil = "#oil",
+			vinegar = "#vinegar",
+			salsa = "#salsa",
+		}
+		for tool, expected_tag in pairs(expected_tool_tags) do
+			assert(craft_tool_tag(tool) == expected_tag,
+				language .. " tool tag is invalid: " .. tool)
+			local tool_panel = draw_tool({ tool = { [tool] = 2 } }, "", 0)
+			assert(tool_panel:find(msg.gui.item[tool] .. "2", 1, true),
+				language .. " inventory tool stat is not localized: " .. tool)
+		end
+		for _, tool in ipairs({ "dig", "cut", "chop", "smash", "pierce" }) do
+			local expected_tag = expected_tool_tags[tool]
+			assert(
+				ground_gather_requirements({ [tool] = 2 })
+					== " {#3e8948ff}(" .. expected_tag .. ":2)",
+				language .. " ground requirement is not localized: " .. tool
+			)
+			if language == "ru" then
+				assert(not msg.gui.itemlack[tool]:find("#" .. tool, 1, true),
+					"Russian missing-tool message leaks English tag: " .. tool)
+			end
+		end
+		for stone_id, definition in pairs(stone) do
+			for tool in pairs(definition.gather or {}) do
+				assert(expected_tool_tags[tool],
+					("stone %s has an unlocalized gather tool: %s")
+						:format(stone_id, tostring(tool)))
+			end
+		end
+		local unknown_recipe_tools = {}
+		for recipe_id, recipe in pairs(craft.recipies) do
+			for tool in pairs(recipe.tools or {}) do
+				if not expected_tool_tags[tool] then
+					unknown_recipe_tools[tool] = recipe_id
+				end
+			end
+		end
+		local unknown_recipe_tool_names = {}
+		for tool, recipe_id in pairs(unknown_recipe_tools) do
+			unknown_recipe_tool_names[#unknown_recipe_tool_names + 1] =
+				tool .. " (recipe " .. recipe_id .. ")"
+		end
+		table.sort(unknown_recipe_tool_names)
+		assert(#unknown_recipe_tool_names == 0,
+			"unlocalized recipe tools: " .. table.concat(unknown_recipe_tool_names, ", "))
+		local internal_tool_stats = {
+			crafthit = true,
+			craftspeed = true,
+			dighands = true,
+			dighit = true,
+			digstat = true,
+			digspeed = true,
+			dmg = true,
+			dmgmax = true,
+			dmgmin = true,
+			dmgtype = true,
+			hithit = true,
+		}
+		local unknown_item_tool_stats = {}
+		for item_id, definition in pairs(item) do
+			for stat in pairs(definition.tool or {}) do
+				if not expected_tool_tags[stat] and not internal_tool_stats[stat] then
+					unknown_item_tool_stats[stat] = item_id
+				end
+			end
+		end
+		local unknown_item_tool_names = {}
+		for stat, item_id in pairs(unknown_item_tool_stats) do
+			unknown_item_tool_names[#unknown_item_tool_names + 1] =
+				stat .. " (item " .. item_id .. ")"
+		end
+		table.sort(unknown_item_tool_names)
+		assert(#unknown_item_tool_names == 0,
+			"unclassified item tool stats: " .. table.concat(unknown_item_tool_names, ", "))
+		assert(
+			ground_gather_requirements(stone[144].gather)
+				== " {#3e8948ff}(" .. expected_tool_tags.cut .. ":2)",
+			language .. " seaweed requirement is not localized"
+		)
+		if language == "ru" then
+			assert(msg.item[281].name == "Памятка об огне и плавке",
+				"fire tutorial item is still presented as a burning fire")
+			assert(msg.item[193].info ==
+				"Использование: расходует камень и возвращает вас на Перекрёсток.",
+				"Hearthstone still advertises the nonexistent Innkeeper")
+			local russian_seaweed_name = stone[144].name
+			stone[144].name = "Seaweed"
+			language_set(language, false)
+			assert(stone[144].name == russian_seaweed_name
+				and stone[144].name == "Водоросли",
+				("Russian content names are not restored after a Lua reload "
+					.. "(before=%s, after=%s, message=%s)"):format(
+						tostring(russian_seaweed_name),
+						tostring(stone[144].name),
+						tostring(msg.stone[144] and msg.stone[144].name)
+					))
+		end
+		assert(msg.achi.gui[6]:find("←/→", 1, true),
+			language .. " achievement controls omit the arrow keys")
+		local expected_gather_tag = language == "ru"
+			and " {#3e8948ff}(#рубка:3)"
+			or " {#3e8948ff}(#chop:3)"
+		assert(ground_gather_requirements({ chop = 3 }) == expected_gather_tag,
+			language .. " ground gathering requirement is not localized")
+		assert(ground_gather_requirements({ dig = 0 }) == "",
+			language .. " zero-level ground gathering requirement is visible")
 		local expected_diet_tags = language == "ru"
 			and " {#d87644ff}(#экзотика, #заморозка, #сахар)"
 			or " {#d87644ff}(#exotic, #freezable, #sugar)"
@@ -745,17 +955,28 @@ local function validate_display()
 			language .. " ground card title crosses its right border"
 		)
 
-		local action_key, action_hint = ground_card_action_hint(true, true)
-		assert(action_key == "Space" and action_hint == msg.gui[14],
-			language .. " carried block incorrectly inherits the ground action")
-		action_key, action_hint = ground_card_action_hint(false, true)
-		assert(action_key == "V" and action_hint == msg.gui[27],
-			language .. " usable ground block action is missing")
-		action_key, action_hint = ground_card_action_hint(false, false)
-		assert(action_key == nil and action_hint == nil,
-			language .. " ground card shows an unavailable action")
+	local action_key, action_hint = ground_card_action_hint(true, true)
+	assert(action_key == "Space" and action_hint == msg.gui[14],
+		language .. " carried block incorrectly inherits the ground action")
+	action_key, action_hint = ground_card_action_hint(false, true)
+	assert(action_key == "V" and action_hint == msg.gui[27],
+		language .. " usable ground block action is missing")
+	action_key, action_hint = ground_card_action_hint(false, false, stone[89])
+	assert(action_key == "Space" and action_hint == msg.gui[45],
+		language .. " Jack-o'-lantern pickup action is missing")
+	assert(stone[89].digtoinv == 92 and item[92].put == 89,
+		language .. " Jack-o'-lantern no longer round-trips through inventory")
+	action_key, action_hint = ground_card_action_hint(false, false, {
+		gather = { dig = 1 },
+	})
+	assert(action_key == "Space" and action_hint == msg.gui[46],
+		language .. " diggable ground block action is missing")
+	action_key, action_hint = ground_card_action_hint(false, false)
+	assert(action_key == nil and action_hint == nil,
+		language .. " ground card shows an unavailable action")
 	end
 	language_set(original_language, false)
+	font = original_font
 
     finish(0, (
 		"mode=display logical=%dx%d pixels=%dx%d dpi=%.2f atlas=%dx%d highdpi=%s usedpiscale=%s"
@@ -939,14 +1160,18 @@ function smoke.install(specification)
     local mode, value = specification:match("^([^:]+):?(.*)$")
     local original_load = love.load
 
+	local function ignore_real_input()
+		love.keypressed = function() end
+		love.keyreleased = function() end
+		love.mousepressed = function() end
+		love.mousereleased = function() end
+		love.wheelmoved = function() end
+	end
+
 	-- Smoke tests drive the game directly and never expect real input.  Ignore
 	-- events from the temporary LÖVE windows so typing elsewhere cannot reach
 	-- partially initialized gameplay callbacks while a test is quitting.
-	love.keypressed = function() end
-	love.keyreleased = function() end
-	love.mousepressed = function() end
-	love.mousereleased = function() end
-	love.wheelmoved = function() end
+	ignore_real_input()
 
     love.load = function(...)
         if mode == "locales" then
@@ -986,6 +1211,9 @@ function smoke.install(specification)
 		end
 
         original_load(...)
+		-- love.load installs the menu callbacks, so suppress real events again.
+		-- Tests that need menu input call love.menu_keypressed directly.
+		ignore_real_input()
 
 		if mode == "persistence" then
 			local ok, err = pcall(validate_persistence)

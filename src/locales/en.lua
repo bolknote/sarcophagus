@@ -42,7 +42,7 @@ msg.game = {
 	[39] = " {#c28569ff}[Locked tip]",
 	[40] = "  {#c28569ff}You can't use this item in crafting.",
 	[41] = " Screenshot saved ",
-	[42] = "You prayed with no result (faith decreased to 0). You had _1_% chance to success. (Confused? Talk to golem).",
+	[42] = "Your prayer went unanswered. Faith fell to 0. Success chance: _1_%. (Confused? Talk to the golem.)",
 	[43] = "You're so tired you started to bleed.",
 	[44] = "Inventory is full.",
 	[45] = "Equipped weapons are used to calculate damage in combat. You don't have to equip working tools.",
@@ -267,6 +267,8 @@ msg.gui =
 	[42] = "Faith ",
 	[43] = "Achievements",
 	[44] = 'Water (_1_% dirty)',
+	[45] = "Pick up   ",
+	[46] = "Dig       ",
 
 	
 
@@ -316,7 +318,8 @@ msg.gui.item =
 	pierce = '#pierce: ',
 	water = '#water: ',
 	oil = '#oil: ',
-	vinegar = '#vinegar:'
+	vinegar = '#vinegar:',
+	salsa = '#salsa: '
 }
 
 msg.gui.itemlack = 
@@ -826,7 +829,8 @@ info = "It's too short to be useful."
 }
 
 msg.item[91] = { name = 'Pumpkin', }
-msg.item[92] = { name = "Jack-o'-lantern", }
+msg.item[92] = { name = "Jack-o'-lantern",
+info = "Place it to light the area. Hold Space to return it to your inventory. It rots after one day."}
 msg.item[93] = { name = 'Pumpkin piece', }
 msg.item[94] = { name = 'Pumpkin seed', 
 info = 'This plant will require: {#e8b796ff}[+] loam [+] light [+] water [+] fertilization.'}
@@ -1081,7 +1085,7 @@ tips = {"This delicate plant grows only indoors and you'll need a door to make i
 msg.item[192] = { name = "Cave jelly"}
 
 msg.item[193] = { name = "Hearthstone",
-info = 'Use: Returns you to The Crossroads. Speak to an Innkeeper in a different place to change your home location.'}
+info = 'Use: Consumes the stone and returns you to The Crossroads.'}
 
 
 msg.item[194] = { name = "Seaweed",
@@ -1704,7 +1708,8 @@ msg.stone[85] = { name = 'Cobweb', }
 msg.stone[86] = { name = 'Webstring', }
 msg.stone[87] = { name = 'Webstring', }
 msg.stone[88] = { name = 'Pumpkin', }
-msg.stone[89] = { name = "Jack-o'-lantern", }
+msg.stone[89] = { name = "Jack-o'-lantern",
+info = "A carved pumpkin that lights the area. Hold Space to return it to your inventory before it rots."}
 msg.stone[90] = { name = 'Pumpkin', }
 msg.stone[91] = { name = 'Apple sapling',
 info = "Right now it's just a stick with some leaves. Someday it will become a tree. Perhaps it will."
@@ -1976,7 +1981,7 @@ msg.achi.gui =
 [3] = '{#fee761ff}Unlocked!{#ffffffff}',
 [4] = '{#be4a2fff}Failed{#ffffffff}',
 [5] = 'Category: ',
-[6] = '{#fee761ff}A]{#ffffffff} and {#fee761ff}D]{#ffffffff} to cycle, {#fee761ff}N]{#ffffffff} to hide/show',
+[6] = '{#fee761ff}A/D{#ffffffff} or {#fee761ff}←/→{#ffffffff} to cycle, {#fee761ff}N{#ffffffff} to hide/show',
 [7] = "there's a reward",
 [8] = "",
 

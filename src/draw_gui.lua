@@ -29,6 +29,11 @@ local function longest_visible_line(text)
 	return longest
 end
 
+function gui_wrapped_line_count(text, wrap_width, text_font)
+	local _, lines = (text_font or font):getWrap(text, wrap_width)
+	return math.max(1, #lines)
+end
+
 function ground_card_border(top, text, body_rows)
 	top = top:gsub("\n$", "")
 	local top_width = utf8.len(top)
@@ -47,7 +52,7 @@ function ground_card_border(top, text, body_rows)
 	return border, frame_width
 end
 
-function ground_card_action_hint(is_carrying, can_use_ground)
+function ground_card_action_hint(is_carrying, can_use_ground, ground_definition)
 	if is_carrying then
 		return "Space", msg.gui[14]
 	end
@@ -56,7 +61,31 @@ function ground_card_action_hint(is_carrying, can_use_ground)
 		return "V", msg.gui[27]
 	end
 
+	if ground_definition and ground_definition.gather then
+		if (ground_definition.digtoinv or 0) > 0 then
+			return "Space", msg.gui[45]
+		end
+		return "Space", msg.gui[46]
+	end
+
 	return nil, nil
+end
+
+function ground_gather_requirements(gather)
+	local requirements = {}
+
+	for tool, level in pairs(gather or {}) do
+		if level ~= 0 then
+			requirements[#requirements + 1] = craft_tool_tag(tool)..":"..level
+		end
+	end
+
+	table.sort(requirements)
+	if #requirements == 0 then
+		return ""
+	end
+
+	return " {#3e8948ff}("..table.concat(requirements, ", ")..")"
 end
 
 function draw_gui ()
@@ -143,13 +172,27 @@ for k=1,9 do
 
 		--dump (pl.inv_show[start+k])
 
+		local item_line_count = 1
+
 		if n then
 
 			n = draw_itemname (pl.inv[pl.inv_show[start+k]])
+			local marker = pl.invselect==pl.inv_show[start+k]
+				and (ctrshow and "■" or "·")
+				or " "
+			local plain_name = item[v.i].name
+			if item[v.i].transform or item[v.i].transformi then
+				plain_name = plain_name .. " ≈"
+			end
+			item_line_count = gui_wrapped_line_count(
+				ks .. marker .. plain_name,
+				210,
+				font
+			)
 
 			if pl.invselect==pl.inv_show[start+k] then
 				pl.invselect_k = k
-				scnt = k
+				scnt = icnt + item_line_count
 
 				if ctrshow then
 					invstr = invstr.."{#ffffffff}"..ks.."■"..n.."{#ffffffff}"
@@ -174,12 +217,13 @@ for k=1,9 do
 		if v.t then
 			local p = math.floor (v.t/item[v.i].ttl*100)
 			if item[v.i].w==nil then item[v.i].w = #item[v.i].name end
-			invstrdur = invstrdur.."                           "..draw_pc (p).."\n"
+			invstrdur = invstrdur.."                           "..draw_pc (p)
 		end
+		invstrdur = invstrdur..string.rep("\n", item_line_count)
 
 		invstr = invstr.."\n"
 	
-		icnt = icnt + 1
+		icnt = icnt + item_line_count
 
 end
 
@@ -192,12 +236,17 @@ end
 
 		if v then
 
-			eqc = eqc + 1
-
 			local n = item[v.i].name
+			local prefix = pl.invselect==ev and ev.." [" or ev.."  "
+			local suffix = pl.invselect==ev and "]" or " "
+			local item_line_count = gui_wrapped_line_count(
+				prefix .. n .. suffix,
+				210,
+				font
+			)
 
 			if pl.invselect==ev then
-				scnt = eqc
+				scnt = ecnt + item_line_count
 				einvstr = einvstr.."{#5a6988ff}"..ev.." {#63c74dff}["..n.."]"
 			else
 				einvstr = einvstr.."{#5a6988ff}"..ev.."  {#ead4aaff}"..n.." "
@@ -206,12 +255,14 @@ end
 			if v.t then
 				local p = math.floor (v.t/item[v.i].ttl*100)
 				if item[v.i].w==nil then item[v.i].w = #item[v.i].name end
-				einvstrdur = einvstrdur.."                           "..draw_pc (p).."\n"		
+				einvstrdur = einvstrdur.."                           "..draw_pc (p)
 			end
+			einvstrdur = einvstrdur..string.rep("\n", item_line_count)
 
 			einvstr = einvstr.."\n"
 
-			ecnt = ecnt + 1
+			ecnt = ecnt + item_line_count
+			eqc = eqc + 1
 		end
 
 	end
@@ -563,13 +614,7 @@ end
 		--str=str.."\n"..tostring(has_light (r.x,r.y))
 
 
-		if stone[ground].gather then
-			for k,v in pairs(stone[ground].gather) do
-				if v~=0 then 
-					str = str.." {#3e8948ff}("..k..":"..v..")"
-				end
-			end
-		end
+		str = str..ground_gather_requirements(stone[ground].gather)
 
 
 		local cnt = 2
@@ -603,7 +648,8 @@ end
 
 		local action_key, action_hint = ground_card_action_hint(
 			pl.iscarry ~= nil,
-			pl.canuse
+			pl.canuse,
+			stone[ground]
 		)
 		if action_key then
 			str = str.."\n{#fee761ff}"..action_key.."]{#ffffffff} "..action_hint
@@ -713,15 +759,26 @@ if ground and #ground>0 then
 			break
 		end
 
+		local plain_name = item[v.i].name
+		if item[v.i].transform or item[v.i].transformi then
+			plain_name = plain_name .. " ≈"
+		end
+		local item_line_count = gui_wrapped_line_count(
+			i .. ") " .. plain_name,
+			w * 32,
+			font
+		)
+
 		ginvstr = ginvstr.."{#d87644ff}"..i..") {#ead4aaff}"..draw_itemname(v)
 
 		if v.t then
 			local p = math.floor (v.t/item[v.i].ttl*100)
-			ginvstrdur = ginvstrdur.."                           "..draw_pc (p).."\n"		
+			ginvstrdur = ginvstrdur.."                           "..draw_pc (p)
 		end
+		ginvstrdur = ginvstrdur..string.rep("\n", item_line_count)
 
 		ginvstr = ginvstr.."\n"
-		gicnt = gicnt + 1
+		gicnt = gicnt + item_line_count
 
 	end
 
@@ -753,8 +810,8 @@ if ground and #ground>0 then
 	love.graphics.setColor (1,1,1,1)
 
 	love.graphics.printf(text_color(border),gx+w*1,gy+h*0.5,400)
-	love.graphics.printf(text_color (ginvstr),gx+w*3,gy+h*2.5,400)
-	love.graphics.printf(text_color (ginvstrdur),gx+w*3,gy+h*2.5,400)
+	love.graphics.printf(text_color (ginvstr),gx+w*3,gy+h*2.5,w*32)
+	love.graphics.printf(text_color (ginvstrdur),gx+w*3,gy+h*2.5,w*32)
 
 
 

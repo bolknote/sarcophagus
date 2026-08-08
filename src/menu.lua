@@ -21,6 +21,27 @@ local function localized_save_files()
 	return files
 end
 
+function menu_save_position(position, fallback)
+	position = tonumber(position) or tonumber(fallback) or 1
+	position = math.floor(position)
+	if position < 1 or position > 9 then
+		return 1
+	end
+	return position
+end
+
+function menu_move_save_position(position, step, fallback)
+	position = menu_save_position(position, fallback)
+	return ((position - 1 + step) % 9) + 1
+end
+
+local function ensure_menu_selection()
+	game.metasave = game.metasave or {}
+	game.savepos = menu_save_position(game.savepos, game.metasave.gamepos)
+	game.files = game.files or localized_save_files()
+	stradd = stradd or ""
+end
+
 local generation_started_at = 0
 local generation_progress = 0
 local generation_stage = 1
@@ -282,6 +303,11 @@ function love.menu_keypressed(key, scan)
 		return
 	end
 
+	-- A queued key event can be delivered after love.load and before the first
+	-- menu_update.  Prepare the slot state here as well, so early arrows,
+	-- Enter, and save deletion cannot operate on nil fields.
+	ensure_menu_selection()
+
 	if scan == "q" then
 		love.event.quit()
 	end
@@ -338,20 +364,22 @@ function love.menu_keypressed(key, scan)
 	if scan == "w" then
 		sound_add("button", 4, {kill = 1})
 		stradd = ""
-		game.savepos = game.savepos - 1
-		if game.savepos < 1 then
-			game.savepos = 9
-		end
+		game.savepos = menu_move_save_position(
+			game.savepos,
+			-1,
+			game.metasave.gamepos
+		)
 		read_screenshot(game.savepos)
 	end
 
 	if scan == "s" then
 		sound_add("button", 4, {kill = 1})
 		stradd = ""
-		game.savepos = game.savepos + 1
-		if game.savepos > 9 then
-			game.savepos = 1
-		end
+		game.savepos = menu_move_save_position(
+			game.savepos,
+			1,
+			game.metasave.gamepos
+		)
 		read_screenshot(game.savepos)
 	end
 
@@ -418,7 +446,8 @@ end
 
 local function initialize_menu()
 	stradd = ""
-	game.savepos = game.savepos or game.metasave.gamepos or 1
+	game.metasave = game.metasave or {}
+	game.savepos = menu_save_position(game.savepos, game.metasave.gamepos)
 	read_screenshot(game.savepos)
 
 	game.files = localized_save_files()

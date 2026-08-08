@@ -196,6 +196,19 @@ function draw_tool_pad (str)
 
 end
 
+local displayed_tool_stats = {
+	"dig",
+	"cut",
+	"chop",
+	"smash",
+	"pierce",
+	"water",
+	"oil",
+	"vinegar",
+	"salsa",
+}
+
+
 function draw_tool (it,dstr,dcnt,sep)
 
 	sep = sep or "\n"
@@ -206,44 +219,11 @@ function draw_tool (it,dstr,dcnt,sep)
 
 	local a = 0
 
-	if it.tool.dig then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.dig..it.tool.dig)
-		a = 1
-	end
-
-	if it.tool.cut then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.cut..it.tool.cut)
-		a = 1
-	end
-
-	if it.tool.chop then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.chop..it.tool.chop)
-		a = 1
-	end
-
-	if it.tool.smash then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.smash..it.tool.smash)
-		a = 1
-	end
-
-	if it.tool.pierce then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.pierce..it.tool.pierce)
-		a = 1
-	end
-
-	if it.tool.water then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.water..it.tool.water)
-		a = 1
-	end
-
-	if it.tool.oil then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.oil..it.tool.oil)
-		a = 1
-	end
-
-	if it.tool.vinegar then 
-		dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item.vinegar..it.tool.vinegar)
-		a = 1
+	for _, stat in ipairs(displayed_tool_stats) do
+		if it.tool[stat] then
+			dstr = dstr.."{#3e8948ff}"..draw_tool_pad(msg.gui.item[stat]..it.tool[stat])
+			a = 1
+		end
 	end
 
 

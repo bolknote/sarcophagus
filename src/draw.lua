@@ -1,3 +1,41 @@
+function death_title_sprite(sprites, language)
+	return sprites[language] or sprites.en
+end
+
+function death_title_layout(sprite, screen_width, screen_height, language)
+	local _, _, sprite_width, sprite_height = sprite:getViewport()
+	local sprite_x = math.floor((screen_width - sprite_width) / 2)
+	local sprite_y = math.floor(screen_height / 2 - 100)
+	-- Both title sprites are 78 px high, but the English artwork has four
+	-- transparent rows below its visible shadow that the Russian artwork uses.
+	-- Compensate so the score begins at the same visual distance from the
+	-- lettering instead of overlapping the Russian shadow.
+	local score_offset = sprite_height - 6
+	if language == "ru" then
+		score_offset = score_offset + 4
+	end
+
+	return sprite_x, sprite_y, sprite_x + 12, sprite_y + score_offset
+end
+
+function water_render_colors(dirtiness)
+	local pollution = math.max(0, math.min(1, (tonumber(dirtiness) or 0) * 0.005))
+
+	-- Water used to be an opaque tinted rectangle. In a dark cave that hid the
+	-- background almost completely, so even a pool looked like a rendering bug.
+	-- Keep the clean-to-dirty hue shift, but let the cave texture show through
+	-- and give the exposed surface a readable pixel highlight.
+	return
+		0.30 + pollution * 0.45,
+		0.50 + pollution * 0.50,
+		1.00 - pollution * 0.70,
+		0.28 + pollution * 0.06,
+		0.55 + pollution * 0.25,
+		0.78 + pollution * 0.20,
+		1.00 - pollution * 0.25,
+		0.72
+end
+
 function love.draw()
 	
 
@@ -403,10 +441,13 @@ end
 						love.graphics.setCanvas(water_canvas)
 						love.graphics.setShader(shader2)
 
-						local dr = (wb.dr or draw_water_dr or 0) * 0.005
+						local dirtiness = wb.dr or draw_water_dr or 0
 						draw_water_dr = wb.dr
+						local fill_r, fill_g, fill_b, fill_a,
+							surface_r, surface_g, surface_b, surface_a =
+							water_render_colors(dirtiness)
 
-						love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.5+dr*0.1)
+						love.graphics.setColor(fill_r, fill_g, fill_b, fill_a)
 
 						local h = 16
 
@@ -415,17 +456,17 @@ end
 						if w<0 then w = 0 end
 						
 						if draw_water == nil and maptile (x-1,y,'col')==1 then
-							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.7+dr*0.1)
+							love.graphics.setColor(fill_r, fill_g, fill_b, math.min(1, fill_a + 0.15))
 							love.graphics.rectangle("fill",h*ix-math.ceil(vi.xoffset/2)-h/2,h*iy-math.ceil(vi.yoffset/2)+w, h/2, h-w)
-							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.5+dr*0.1)
+							love.graphics.setColor(fill_r, fill_g, fill_b, fill_a)
 						end
 
 						--if pl.xt == x-1 then
 
 						if draw_water ~= nil and wb.w==nil and maptile (x,y,'col')==1 then
-							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.7+dr*0.1)
+							love.graphics.setColor(fill_r, fill_g, fill_b, math.min(1, fill_a + 0.15))
 							love.graphics.rectangle("fill",h*ix-math.ceil(vi.xoffset/2),h*iy-math.ceil(vi.yoffset/2)+w, h/2, h-w)
-							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.5+dr*0.1)
+							love.graphics.setColor(fill_r, fill_g, fill_b, fill_a)
 						end
 
 						--end
@@ -433,6 +474,17 @@ end
 						if wb.w~=nil and (maptile (x,y+1,'col')==1 or (readmap (x,y+1,'w') or 0) > 9900) then
 							draw_water = wb.w
 							love.graphics.rectangle("fill",h*ix-math.ceil(vi.xoffset/2),h*iy-math.ceil(vi.yoffset/2)+w, h, h-w)
+						end
+
+						if wb.w and wb.w > 0 and (readmap(x,y-1,'w') or 0) < 100 then
+							love.graphics.setColor(surface_r, surface_g, surface_b, surface_a)
+							love.graphics.rectangle(
+								"fill",
+								h*ix-math.ceil(vi.xoffset/2),
+								h*iy-math.ceil(vi.yoffset/2)+w,
+								h,
+								1
+							)
 						end
 
 						--love.graphics.draw (quad, spt.fish,h*ix-math.ceil(vi.xoffset/2),h*iy-math.ceil(vi.yoffset/2)+w,0,0.5,0.5)
@@ -742,11 +794,18 @@ end
 
 
 	if pl.dying then
+		local death_title = death_title_sprite(spt.wasted, LANGUAGE)
+		local title_x, title_y, score_x, score_y = death_title_layout(
+			death_title,
+			screen.width,
+			screen.height,
+			LANGUAGE
+		)
 		love.graphics.setColor (1,1,1,1-game.fade)
-		love.graphics.draw (quad, spt.wasted,math.floor ((screen.width-256)/2),math.floor (screen.height/2-100),0,1,1)
+		love.graphics.draw (quad, death_title,title_x,title_y,0,1,1)
 		love.graphics.printf (
 			msg.gui[40]..pl.daylived.."\n"..msg.gui[39]..math.floor(pl.score),
-			math.floor ((screen.width-256)/2)+12,math.floor (screen.height/2-100)+72,10000)
+			score_x,score_y,10000)
 
 		love.graphics.setColor (1,1,1,1)
 	end

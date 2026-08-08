@@ -20,6 +20,22 @@
 achi = {}
 
 
+function achievement_page_after_key(page,key,page_count)
+
+	local direction = 0
+	if key=='d' or key=='right' then
+		direction = 1
+	elseif key=='a' or key=='left' then
+		direction = -1
+	end
+
+	if direction==0 then return page end
+
+	return ((page - 1 + direction) % page_count) + 1
+
+end
+
+
 function achi_reset ()
 
 	for i,v in ipairs(achi) do

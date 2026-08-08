@@ -156,17 +156,7 @@ end
 
 
 console.reload = function (f)
-
-	ini_quad ()
-	lurker.scan()
-
-	local stones =  loadfile ('src/stones.lua')
-	stones ()
-
-	local stones =  loadfile ('src/ani.lua')
-	stones ()
-	
-	screen_res ()
+	development_reload_assets()
 
 end
 
@@ -374,6 +364,32 @@ function normalize_gameplay_key(key, developer_arrow)
 	return key
 end
 
+function development_reload_requested(key, control_down, development)
+	return development and control_down and key == "f7"
+end
+
+function development_reload_assets()
+	-- Reloaded content files contain their canonical English names. Preserve
+	-- the language of the current session and apply it again after every file
+	-- has been rebuilt, even if the reload also replaced src/msg.lua.
+	local active_language = LANGUAGE
+
+	ini_quad ()
+	lurker.scan()
+
+	local reload_stones = assert(loadfile('src/stones.lua'))
+	reload_stones()
+
+	local reload_animations = assert(loadfile('src/ani.lua'))
+	reload_animations()
+
+	if active_language then
+		language_set(active_language, false)
+	end
+
+	screen_res ()
+end
+
 function love.keypressed(key,s)
 
 	--print (s)
@@ -529,23 +545,11 @@ function love.keypressed(key,s)
 
 
 	if game.achishow then
-
-		if key=='d' then
-			game.achipage = game.achipage + 1
-			if game.achipage>#msg.achitypes then
-				game.achipage = 1
-			end
-		end
-
-
-		if key=='a' then
-			game.achipage = game.achipage - 1
-			if game.achipage<1 then
-				game.achipage = #msg.achitypes
-			end
-		end
-
-
+		game.achipage = achievement_page_after_key(
+			game.achipage,
+			key,
+			#msg.achitypes
+		)
 
 	end
 
@@ -562,19 +566,11 @@ function love.keypressed(key,s)
 
 	end
 
-	if key == "f7" and IS_DEVELOPMENT then
-
-			ini_quad ()
-			lurker.scan()
-
-			local stones =  loadfile ('src/stones.lua')
-			stones ()
-
-			local stones =  loadfile ('src/ani.lua')
-			stones ()
-			
-			screen_res ()
-
+	local control_down = love.keyboard.isScancodeDown("lctrl")
+		or love.keyboard.isScancodeDown("rctrl")
+	if development_reload_requested(key, control_down, IS_DEVELOPMENT) then
+		development_reload_assets()
+		return
 	end
 
 	-- load
@@ -1023,8 +1019,9 @@ function love.keypressed(key,s)
 
 
 	if key == 'f7' then
+		local prayer_chance = math.ceil(pl.stats.faith.hp)
 
-		if love.math.random (0,99) < math.ceil(pl.stats.faith.hp) then
+		if love.math.random (0,99) < prayer_chance then
 
 			stat_spend ('faith', 100)
 			buff_remove (2)
@@ -1102,7 +1099,8 @@ function love.keypressed(key,s)
 
 
 		else
-			textwall (msg.game[42],false,{[1] = math.ceil(pl.stats.faith.hp)})
+			stat_spend ('faith', 100)
+			textwall (msg.game[42],false,{[1] = prayer_chance})
 		end
 
 
