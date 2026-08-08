@@ -26,6 +26,10 @@ fi
 LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
 LOVE_BIN="$love_binary" "$script_directory/check-ui-strings.sh"
 
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_SMOKE_TEST=display \
+    "$love_binary" "$project_root"
+
 /usr/bin/env -u SARCOPHAGUS_LANGUAGE \
     SARCOPHAGUS_BUILD_MODE=development \
     SARCOPHAGUS_SMOKE_TEST=settings \

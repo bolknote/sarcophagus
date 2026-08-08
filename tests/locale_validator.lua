@@ -87,8 +87,8 @@ local function validate_overlay(base, overlay, path, errors, warnings)
 end
 
 function validator.validate()
-	local english = require("locales.en")
-	local russian = require("locales.ru")
+	local english = require("src.locales.en")
+	local russian = require("src.locales.ru")
 	local errors = {}
 	local warnings = {}
 

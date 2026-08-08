@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="sacro.png" alt="Sarcophagus" width="380">
+  <img src="docs/assets/sarcophagus-logo.png" alt="Sarcophagus" width="380">
 
   **A demanding pixel-art sandbox survival game built with Lua and LÖVE**
 
@@ -54,7 +54,7 @@ There is deliberately no complete in-game wiki. Discovery is part of the game.
 
 | Input | Action |
 |---|---|
-| `W`, `A`, `S`, `D` | Move and jump |
+| `W`, `A`, `S`, `D` / arrow keys | Move and jump |
 | `Shift` | Run / speed up |
 | `Space` | Dig, pick up or drop a carried block |
 | `E` / left mouse button | Attack or examine a block |
@@ -147,26 +147,23 @@ The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the i
 | Path | Purpose |
 |---|---|
 | `main.lua` | Entry point and module loading |
-| `mapgen.lua` | Procedural world generation |
-| `items.lua` | Item definitions and behaviour |
-| `stones.lua` | Blocks, plants and structures |
-| `craft.lua` | Crafting system and recipes |
-| `mobs_ai.lua` | Creatures and AI |
-| `msg.lua` | Localization bootstrap and language switching |
-| `i18n.lua` | Deep merge and English fallback |
-| `settings.lua` | Language settings independent of save slots |
-| `locales/en.lua` | Complete English text |
-| `locales/ru.lua` | Active incremental Russian translation |
-| `locales/ru_legacy.lua` | Preserved old Russian draft; excluded from releases |
+| `src/` | Game runtime and Lua modules |
+| `src/mapgen.lua` | Procedural world generation |
+| `src/items.lua` | Item definitions and behaviour |
+| `src/stones.lua` | Blocks, plants and structures |
+| `src/locales/` | English locale and active Russian overlay |
+| `assets/maps/` | Map chunks used by world generation |
+| `assets/sounds/` | Runtime sound assets |
+| `assets/sprites/` | Development sprite sources; replaced by the atlas in releases |
+| `archive/` | Legacy code and assets excluded from releases |
+| `scripts/` | Tests, exact release manifest, audit and build scripts |
+| `tests/fixtures/9.sav` | Backward-compatibility save fixture |
 | `docs/localization-glossary.md` | Russian terminology and translation style |
-| `gr/` | Source sprite images |
-| `sound/` | Sound and music assets |
-| `maps/` | Map chunks used by world generation |
 | `plan.md` | Modernization roadmap |
 
 ## Save data
 
-LÖVE stores user data under the `sarcophagus` identity. The game supports nine save slots and writes a screenshot alongside each save. The bundled `9.sav` is retained as a compatibility fixture during modernization.
+LÖVE stores user data under the `sarcophagus` identity. The game supports nine save slots and writes a screenshot alongside each save. `tests/fixtures/9.sav` is retained as a compatibility fixture during modernization.
 
 ## Credits and links
 
@@ -222,7 +219,7 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 
 | Клавиша | Действие |
 |---|---|
-| `W`, `A`, `S`, `D` | Движение и прыжок |
+| `W`, `A`, `S`, `D` / стрелки | Движение и прыжок |
 | `Shift` | Бег / ускорение |
 | `Space` | Копать, подобрать или положить переносимый блок |
 | `E` / левая кнопка мыши | Атаковать или осмотреть блок |
@@ -315,26 +312,23 @@ love /абсолютный/путь/к/Sarcophagus
 | Путь | Назначение |
 |---|---|
 | `main.lua` | Точка входа и загрузка модулей |
-| `mapgen.lua` | Процедурная генерация мира |
-| `items.lua` | Предметы и их поведение |
-| `stones.lua` | Блоки, растения и сооружения |
-| `craft.lua` | Крафт и рецепты |
-| `mobs_ai.lua` | Существа и искусственный интеллект |
-| `msg.lua` | Инициализация локализации и переключение языка |
-| `i18n.lua` | Рекурсивное объединение и английский fallback |
-| `settings.lua` | Настройка языка независимо от игровых слотов |
-| `locales/en.lua` | Полный английский текст |
-| `locales/ru.lua` | Активный пополняемый русский перевод |
-| `locales/ru_legacy.lua` | Сохранённый старый черновик; не входит в релиз |
+| `src/` | Игровой рантайм и Lua-модули |
+| `src/mapgen.lua` | Процедурная генерация мира |
+| `src/items.lua` | Предметы и их поведение |
+| `src/stones.lua` | Блоки, растения и сооружения |
+| `src/locales/` | Английская локаль и активный русский слой |
+| `assets/maps/` | Фрагменты карты для генератора мира |
+| `assets/sounds/` | Звуки, используемые игрой |
+| `assets/sprites/` | Исходники спрайтов для разработки; в релизе заменяются атласом |
+| `archive/` | Старый код и ассеты, исключённые из релиза |
+| `scripts/` | Тесты, точный манифест, аудит и сборка релиза |
+| `tests/fixtures/9.sav` | Контрольный сейв для обратной совместимости |
 | `docs/localization-glossary.md` | Терминология и стиль русского перевода |
-| `gr/` | Исходные изображения спрайтов |
-| `sound/` | Звуки и музыка |
-| `maps/` | Фрагменты карты для генератора мира |
 | `plan.md` | План модернизации |
 
 ## Сохранения
 
-LÖVE хранит пользовательские данные под идентификатором `sarcophagus`. Игра поддерживает девять слотов и сохраняет снимок экрана рядом с каждым сейвом. Файл `9.sav` оставлен в репозитории как контрольный пример для проверки обратной совместимости.
+LÖVE хранит пользовательские данные под идентификатором `sarcophagus`. Игра поддерживает девять слотов и сохраняет снимок экрана рядом с каждым сейвом. Файл `tests/fixtures/9.sav` оставлен как контрольный пример для проверки обратной совместимости.
 
 ## Авторство и ссылки
 

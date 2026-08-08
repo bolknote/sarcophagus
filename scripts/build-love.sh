@@ -11,6 +11,7 @@ staging_directory="$build_root/staging"
 smoke_archive="$build_root/Sarcophagus-smoke.love"
 distribution_directory="$project_root/dist"
 release_archive="$distribution_directory/Sarcophagus.love"
+release_manifest="$script_directory/release-manifest.txt"
 
 if [[ ! -f "$project_root/main.lua" || ! -f "$project_root/version.txt" ]]; then
     echo "Project root validation failed: $project_root" >&2
@@ -22,6 +23,18 @@ if [[ ! -x "$love_binary" ]]; then
     echo "Set LOVE_BIN to an executable LÖVE 11.5 binary." >&2
     exit 1
 fi
+
+if [[ ! -f "$release_manifest" ]]; then
+    echo "Release manifest not found: $release_manifest" >&2
+    exit 1
+fi
+
+while IFS= read -r runtime_file; do
+    if [[ -z "$runtime_file" || ! -f "$project_root/$runtime_file" ]]; then
+        echo "Release manifest entry is missing: $runtime_file" >&2
+        exit 1
+    fi
+done < "$release_manifest"
 
 LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
 LOVE_BIN="$love_binary" "$script_directory/check-ui-strings.sh"
@@ -35,31 +48,11 @@ SARCOPHAGUS_SMOKE_TEST=atlas \
 SARCOPHAGUS_ATLAS_OUTPUT="$generated_directory" \
     "$love_binary" "$project_root"
 
-rsync -a \
-    --exclude '/.git/' \
-    --exclude '/.tools/' \
-    --exclude '/build/' \
-    --exclude '/dist/' \
-    --exclude '/docs/' \
-    --exclude '/gr/' \
-    --exclude '/scripts/' \
-    --exclude '/.DS_Store' \
-    --exclude '/.gitignore' \
-    --exclude '/9.sav' \
-    --exclude '/README.md' \
-    --exclude '/plan.md' \
-    --exclude '/main_old.lua' \
-    --exclude '/moving_editor.lua' \
-    --exclude '/lurker.lua' \
-    --exclude '/lume.lua' \
-    --exclude '/locales/ru_legacy.lua' \
-    --exclude '/texture.lua' \
-    --exclude '/sarcophagous.sublime-project' \
-    --exclude '/sarcophagous.sublime-workspace' \
-    --exclude '/maps/log.txt' \
-    --exclude '/maps/sar.sublime-completions' \
-    --exclude '/maps/sarco.py' \
+rsync -a --files-from="$release_manifest" \
     "$project_root/" "$staging_directory/"
+
+mkdir -p "$staging_directory/tests"
+cp "$project_root/tests/smoke.lua" "$staging_directory/tests/smoke.lua"
 
 printf '%s\n' 'return { build_mode = "release" }' > "$staging_directory/release_config.lua"
 cp "$generated_directory/quad.png" "$staging_directory/quad.png"
@@ -85,11 +78,7 @@ rmdir "$staging_directory/tests"
 make_archive "$release_archive"
 rm -f "$smoke_archive"
 
-if /usr/bin/unzip -Z1 "$release_archive" | \
-    grep -E '(^|/)(gr|tests|docs|scripts|\.git)(/|$)|(^|/)(9\.sav|lurker\.lua|moving_editor\.lua|ru_legacy\.lua)$' >/dev/null; then
-    echo "Release archive contains development-only files" >&2
-    exit 1
-fi
+"$script_directory/audit-release.sh" "$release_archive"
 
 shasum -a 256 "$release_archive"
 echo "Built $release_archive"

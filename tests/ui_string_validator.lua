@@ -1,17 +1,17 @@
 local validator = {}
 
 local presentation_files = {
-	"achievements.lua",
-	"craft.lua",
-	"draw.lua",
-	"draw_gui.lua",
-	"escmenu.lua",
-	"items.lua",
-	"joystick.lua",
-	"keypressed.lua",
-	"menu.lua",
-	"mobs_ai.lua",
-	"textgui.lua",
+	"src/achievements.lua",
+	"src/craft.lua",
+	"src/draw.lua",
+	"src/draw_gui.lua",
+	"src/escmenu.lua",
+	"src/items.lua",
+	"src/joystick.lua",
+	"src/keypressed.lua",
+	"src/menu.lua",
+	"src/mobs_ai.lua",
+	"src/textgui.lua",
 }
 
 local forbidden_phrases = {

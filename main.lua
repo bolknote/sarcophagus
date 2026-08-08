@@ -11,16 +11,15 @@
 
 server_version = ""
 game_version = love.filesystem.read('version.txt')
-BUILD_MODE = require("build_mode").detect()
+BUILD_MODE = require("src.build_mode").detect()
 IS_DEVELOPMENT = BUILD_MODE == "development"
 world = {}
 
 io.stdout:setvbuf("no")
 
---local imgData = love.image.newImageData ('font/icon.png') 
+--local imgData = love.image.newImageData ('packaging/icon.png')
 --love.window.setIcon (imgData)
 love.window.setTitle('Sarcophagus v.'..game_version)
-love.window.setMode(1280, 720, {usedpiscale = false, centered = false, resizable = true, borderless = false, vsync = 1})
 
 love.graphics.setDefaultFilter("nearest", "nearest", 1)
 --love.window.maximize ()
@@ -30,43 +29,43 @@ love.audio.setOrientation(0, 0, 1, 0,-1,0)
 love.audio.setDistanceModel("exponentclamped")
 
 if IS_DEVELOPMENT then
-	lurker = require "lurker"		
+	lurker = require "tools.dev.lurker"
 end
 
-binser = require "binser"
-require ("mainlib")
+binser = require "src.binser"
+require ("src.mainlib")
 
 ini_quad ()
 
 
-require ("load")
-require ("update")
-require ("draw")
+require ("src.load")
+require ("src.update")
+require ("src.draw")
 
-require ("vars")
-require ("menu")
-require ("items")
-require ("stones")
-require ("dispenser")
-require ("mapgen")
-require ("checks")
-require ("mobs_ai")
-require ("craft")
-require ("msg")
-require ("textgui")
-require ("keypressed")
-require ("ext")
-require ("moving")
-require ("ani")
-require ("buffs")
-require ("disaster")
-require ("projes")
-require ("sound")
-require ("fishing")
-require ("escmenu")
-require ("joystick")
-require ("achievements")
-require ('draw_gui')
+require ("src.vars")
+require ("src.menu")
+require ("src.items")
+require ("src.stones")
+require ("src.dispenser")
+require ("src.mapgen")
+require ("src.checks")
+require ("src.mobs_ai")
+require ("src.craft")
+require ("src.msg")
+require ("src.textgui")
+require ("src.keypressed")
+require ("src.ext")
+require ("src.moving")
+require ("src.ani")
+require ("src.buffs")
+require ("src.disaster")
+require ("src.projes")
+require ("src.sound")
+require ("src.fishing")
+require ("src.escmenu")
+require ("src.joystick")
+require ("src.achievements")
+require ("src.draw_gui")
 
 utf8 = require("utf8")
 
@@ -76,8 +75,6 @@ if smoke_test then
 end
 
 if IS_DEVELOPMENT then
-	moving_editor = loadfile('moving_editor.lua')
+	moving_editor = loadfile('tools/dev/moving_editor.lua')
 end
-
-
 
