@@ -23,10 +23,9 @@ io.stdout:setvbuf("no")
 --local imgData = love.image.newImageData ('font/icon.png') 
 --love.window.setIcon (imgData)
 love.window.setTitle('Sarcophagus v.'..game_version)
-love.window.setMode(1280, 720, {usedpiscale = false, centered = false, resizable = true, borderless = false, vsync = true})
+love.window.setMode(1280, 720, {usedpiscale = false, centered = false, resizable = true, borderless = false, vsync = 1})
 
 love.graphics.setDefaultFilter("nearest", "nearest", 1)
-love.filesystem.setIdentity("sarcophagus")
 --love.window.maximize ()
 
 love.audio.setOrientation(0, 0, 1, 0,-1,0)
@@ -74,8 +73,12 @@ require ('draw_gui')
 
 utf8 = require("utf8")
 
-moving_editor =  loadfile ('moving_editor.lua')
+local smoke_test = os.getenv("SARCOPHAGUS_SMOKE_TEST")
+if smoke_test then
+	require("tests.smoke").install(smoke_test)
+end
 
+moving_editor =  loadfile ('moving_editor.lua')
 
 
 
