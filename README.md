@@ -144,6 +144,32 @@ Build a release-mode `.love` archive with a pre-generated sprite atlas:
 
 The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the isolated runtime under `.tools/` by default; set `LOVE_BIN` to use another LÖVE 11.5 executable.
 
+### Native packages
+
+Build the universal Intel/Apple Silicon macOS app on macOS:
+
+```sh
+./scripts/build-macos.sh
+```
+
+Without credentials this creates an ad-hoc-signed package for local testing. A public download that opens normally under Gatekeeper must be signed with a **Developer ID Application** certificate and notarized by Apple:
+
+```sh
+MACOS_SIGNING_IDENTITY='Developer ID Application: Name (TEAMID)' \
+MACOS_NOTARY_PROFILE='sarcophagus-notary' \
+./scripts/build-macos.sh
+```
+
+`MACOS_NOTARY_PROFILE` is a Keychain profile previously created with `xcrun notarytool store-credentials`. The script signs the bundled frameworks and app with the hardened runtime, submits the ZIP through `notarytool`, staples the ticket and verifies it. This is what removes the old “unidentified developer” / “app is damaged” workaround; an unsigned or ad-hoc-signed Internet download cannot legitimately promise the same result. See [Apple's notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+After `dist/Sarcophagus.love` has been built, create the Windows x64 package on Windows:
+
+```powershell
+powershell.exe -NoProfile -File scripts\build-windows.ps1
+```
+
+The script downloads the pinned official LÖVE 11.5 runtime, embeds a system-DPI-aware manifest before fusing the game, verifies both the manifest and embedded `.love`, includes the required DLLs and LÖVE license, and creates a ZIP under `dist/`. Users of that package should not need the old Compatibility → High DPI override or `run.bat`.
+
 ## Project layout
 
 | Path | Purpose |
@@ -310,6 +336,32 @@ love /абсолютный/путь/к/Sarcophagus
 ```
 
 Результат сохраняется в `dist/Sarcophagus.love`. По умолчанию оба сценария используют изолированный runtime из `.tools/`; другой исполняемый файл LÖVE 11.5 можно указать через `LOVE_BIN`.
+
+### Нативные пакеты
+
+Для сборки универсального приложения macOS (Intel и Apple Silicon) на macOS:
+
+```sh
+./scripts/build-macos.sh
+```
+
+Без учётных данных получается пакет с локальной ad-hoc-подписью — он предназначен только для проверки на машине разработчика. Публичную загрузку, которую Gatekeeper открывает штатно, необходимо подписать сертификатом **Developer ID Application** и нотарифицировать у Apple:
+
+```sh
+MACOS_SIGNING_IDENTITY='Developer ID Application: Имя (TEAMID)' \
+MACOS_NOTARY_PROFILE='sarcophagus-notary' \
+./scripts/build-macos.sh
+```
+
+`MACOS_NOTARY_PROFILE` — заранее созданный в Keychain профиль `xcrun notarytool store-credentials`. Сценарий подписывает frameworks и само приложение с hardened runtime, отправляет ZIP через `notarytool`, прикрепляет нотариальный ticket и проверяет результат. Именно это устраняет старые инструкции про «неизвестного разработчика», «приложение повреждено» и `xattr`; для неподписанного или ad-hoc-подписанного файла из интернета честно устранить Gatekeeper-предупреждение нельзя. Подробности есть в [руководстве Apple по нотарификации](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+После сборки `dist/Sarcophagus.love` Windows x64-пакет создаётся на Windows:
+
+```powershell
+powershell.exe -NoProfile -File scripts\build-windows.ps1
+```
+
+Сценарий загружает закреплённый официальный runtime LÖVE 11.5, до встраивания игры добавляет системный DPI-aware manifest, проверяет manifest и вложенный `.love`, прикладывает необходимые DLL и лицензию LÖVE, затем создаёт ZIP в `dist/`. Пользователю такого пакета не должны требоваться прежняя настройка Compatibility → High DPI и `run.bat`.
 
 ## Структура проекта
 

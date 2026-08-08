@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1"
+          xmlns:asmv3="urn:schemas-microsoft-com:asm.v3"
+          manifestVersion="1.0">
+  <assemblyIdentity
+      type="win32"
+      name="Sarcophagus"
+      version="0.0.0.0"
+      processorArchitecture="amd64" />
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <asmv3:application>
+    <asmv3:windowsSettings>
+      <!-- Windows Vista through 8.1. This matches the old "Application"
+           compatibility override without requiring a user-side setting. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+      <!-- Windows 10 and newer. LÖVE 11.5 is not per-monitor-DPI-aware, so
+           declaring system awareness is safer than claiming PerMonitorV2. -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">system</dpiAwareness>
+    </asmv3:windowsSettings>
+  </asmv3:application>
+</assembly>

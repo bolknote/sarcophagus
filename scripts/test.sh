@@ -25,6 +25,7 @@ fi
 
 LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
 LOVE_BIN="$love_binary" "$script_directory/check-ui-strings.sh"
+"$script_directory/check-platform-packaging.sh"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=display \
