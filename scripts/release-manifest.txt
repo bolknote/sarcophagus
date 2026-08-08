@@ -1,4 +1,5 @@
 conf.lua
+LICENSE.md
 main.lua
 version.txt
 src/BlobReader.lua

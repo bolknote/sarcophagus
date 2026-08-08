@@ -52,22 +52,70 @@ There is deliberately no complete in-game wiki. Discovery is part of the game.
 
 ## Controls
 
+These are the default keyboard and mouse bindings. The contextual panels in
+the game show which actions are currently available; most gameplay actions can
+also be rebound from the start screen.
+
+### Start screen
+
+| Input | Action |
+|---|---|
+| `W`, `S` / `↑`, `↓` | Select a save slot |
+| `Enter` | Load the selected save or start a new game |
+| `Backspace` + `Shift` | Delete the selected save |
+| `L` | Start a new game with **Legacy**, when available |
+| `F2` | Switch language |
+| `C` | Configure keyboard or gamepad bindings |
+| `H` / `O` | Open the game homepage / Discord channel |
+| `Q` | **Switch worlds** (the current implementation closes the game) |
+
+### Gameplay and inventory
+
 | Input | Action |
 |---|---|
 | `W`, `A`, `S`, `D` / arrow keys | Move and jump |
 | `Shift` | Run / speed up |
-| `Space` | Dig, pick up or drop a carried block |
+| `Space` | Dig, pick up or place a carried block; hold up/down to direct digging |
 | `E` / left mouse button | Attack or examine a block |
+| `O` | Examine the block shown in the contextual panel |
+| `V` | Use the block at the player position or drink water |
 | `R` / right mouse button | Throw or empty an item |
 | `1`–`9` | Select an inventory item |
-| `Q` | Pick up an item from the ground |
-| `Tab` | Cycle ground items |
-| `C` | Open crafting |
-| `Enter` | Use or consume the selected item |
-| `I` | Inspect the selected item |
-| `V` | Use the block at the player position |
-| `F1`–`F4` | Quest, diet, self-harm and key help |
+| Mouse wheel, `[` / `]`, `-` / `=` (`+`) | Cycle inventory slots; over the journal, scroll its text |
+| `0` | Cycle between the inventory and equipped items |
+| `Q` / mouse button 5 | Pick up the first ground item |
+| `Shift` + `1`–`9` | Pick up a specific ground item |
+| `Tab` / middle mouse button | Cycle ground items |
+| `M` | Sort the items on the ground at the player position |
+| `Z` / mouse button 4 | Put down the selected item or prepare a placeable block |
+| `P` | Equip or unequip the selected item |
+| `Enter` / `U` | Use or consume the selected item |
+| `I` | Inspect the selected item and, for food, show dietary information |
+| `C` | Open or close crafting for the selected item |
+| `Shift` + `C` | Open crafting with all items available at the current location |
+| `Ctrl` | Toggle highlighting of ground items similar to the selected item |
+| Right `Alt` | Toggle highlighting of all ground items |
+| Left `Alt` (hold) | Show plant problems |
+| `/` | Hide or show the journal |
+| `Esc` | Close the current contextual screen or open the pause/options menu |
+
+### Information and contextual screens
+
+| Input | Action |
+|---|---|
+| `F1` | Show quest |
+| `F2` | Show diet |
+| `F3` | Self-harm |
+| `F4` | Show keys |
+| `F5` | Screenshot |
+| `F7` | Pray |
 | `F8` / `N` | Achievements |
+| `A`, `D` / `←`, `→` | Change the achievement category |
+| `W`, `S` / `↑`, `↓`, then `Enter` | Select and make a recipe in the crafting screen |
+| `W`, `S` / `↑`, `↓` | Navigate the pause menu |
+| `A`, `D` / `←`, `→`, `Enter` or `Space` | Adjust or activate the selected pause-menu option |
+| Numeric keypad `8`, `2`, `4`, `6` | Move the virtual cursor when playing without a mouse |
+| `Backspace` / `Esc` in key setup | Skip the current binding / cancel setup |
 
 Keyboard, mouse and gamepads are supported by the original game.
 
@@ -236,9 +284,11 @@ LÖVE stores user data under the `sarcophagus` identity. The game supports nine 
 - [Official Sarcophagus page and downloads](https://acerbial.itch.io/sarcophagus)
 - [LÖVE framework](https://love2d.org/)
 
-## License note
+## License
 
-No project-wide license is currently included in this source snapshot. Do not assume that the source code or assets may be redistributed or relicensed beyond the permissions provided by applicable law and the original distribution terms. Third-party libraries and assets may have their own licenses.
+Sarcophagus is distributed under the [MIT License](LICENSE.md). Copyright (c)
+2019 **Dmitry Smirnov**, the original author. Third-party libraries and assets
+retain their own copyright notices and license terms.
 
 ---
 
@@ -282,22 +332,70 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 
 ## Управление
 
+Ниже перечислены стандартные клавиши и кнопки мыши. Контекстные панели игры
+показывают доступные в данный момент действия; большинство игровых действий
+можно переназначить со стартового экрана.
+
+### Стартовый экран
+
+| Клавиша | Действие |
+|---|---|
+| `W`, `S` / `↑`, `↓` | Выбрать слот сохранения |
+| `Enter` | Загрузить выбранное сохранение или начать новую игру |
+| `Backspace` + `Shift` | Удалить выбранное сохранение |
+| `L` | Начать новую игру с **наследием**, если оно доступно |
+| `F2` | Сменить язык |
+| `C` | Настроить клавиши или геймпад |
+| `H` / `O` | Открыть страницу игры / канал Discord |
+| `Q` | **Сменить мир** (текущая реализация закрывает игру) |
+
+### Игра и инвентарь
+
 | Клавиша | Действие |
 |---|---|
 | `W`, `A`, `S`, `D` / стрелки | Движение и прыжок |
 | `Shift` | Бег / ускорение |
-| `Space` | Копать, подобрать или положить переносимый блок |
+| `Space` | Копать, подобрать или поставить переносимый блок; вверх/вниз задают направление копания |
 | `E` / левая кнопка мыши | Атаковать или осмотреть блок |
+| `O` | Осмотреть блок, показанный на контекстной панели |
+| `V` | Использовать блок в позиции игрока или напиться воды |
 | `R` / правая кнопка мыши | Бросить или опустошить предмет |
 | `1`–`9` | Выбрать предмет в инвентаре |
-| `Q` | Поднять предмет с земли |
-| `Tab` | Переключать предметы на земле |
-| `C` | Открыть крафт |
-| `Enter` | Использовать или съесть выбранный предмет |
-| `I` | Осмотреть выбранный предмет |
-| `V` | Использовать блок в позиции игрока |
-| `F1`–`F4` | Задание, рацион, самоповреждение и справка |
+| Колесо мыши, `[` / `]`, `-` / `=` (`+`) | Переключать ячейки инвентаря; над журналом — прокручивать его текст |
+| `0` | Переключаться между инвентарём и надетыми предметами |
+| `Q` / кнопка мыши 5 | Поднять первый предмет с земли |
+| `Shift` + `1`–`9` | Поднять с земли конкретный предмет |
+| `Tab` / средняя кнопка мыши | Переключать предметы на земле |
+| `M` | Отсортировать предметы на земле в позиции игрока |
+| `Z` / кнопка мыши 4 | Положить выбранный предмет или подготовить устанавливаемый блок |
+| `P` | Надеть или снять выбранный предмет |
+| `Enter` / `U` | Использовать или съесть выбранный предмет |
+| `I` | Осмотреть выбранный предмет; для еды — показать пищевую ценность |
+| `C` | Открыть или закрыть крафт для выбранного предмета |
+| `Shift` + `C` | Открыть крафт из всех предметов, доступных в текущем месте |
+| `Ctrl` | Включить или выключить подсветку предметов, похожих на выбранный |
+| Правый `Alt` | Включить или выключить подсветку всех предметов на земле |
+| Левый `Alt` (удерживать) | Показать проблемы растений |
+| `/` | Скрыть или показать журнал |
+| `Esc` | Закрыть текущий контекстный экран или открыть меню паузы и настроек |
+
+### Справка и контекстные экраны
+
+| Клавиша | Действие |
+|---|---|
+| `F1` | Показать задание |
+| `F2` | Показать рацион |
+| `F3` | Укусить себя |
+| `F4` | Показать клавиши |
+| `F5` | Снимок экрана |
+| `F7` | Молитва |
 | `F8` / `N` | Достижения |
+| `A`, `D` / `←`, `→` | Листать категории достижений |
+| `W`, `S` / `↑`, `↓`, затем `Enter` | Выбрать и изготовить рецепт на экране крафта |
+| `W`, `S` / `↑`, `↓` | Перемещаться по меню паузы |
+| `A`, `D` / `←`, `→`, `Enter` или `Space` | Изменить или активировать выбранную настройку меню паузы |
+| Цифровой блок `8`, `2`, `4`, `6` | Перемещать виртуальный курсор при игре без мыши |
+| `Backspace` / `Esc` при настройке | Пропустить текущее действие / отменить настройку |
 
 Оригинальная игра поддерживает клавиатуру, мышь и геймпады.
 
@@ -466,6 +564,8 @@ LÖVE хранит пользовательские данные под иден
 - [Официальная страница Sarcophagus и загрузки](https://acerbial.itch.io/sarcophagus)
 - [Игровой фреймворк LÖVE](https://love2d.org/)
 
-## Примечание о лицензии
+## Лицензия
 
-В этом снимке исходников нет общей лицензии проекта. Не следует считать, что код или ресурсы разрешено распространять либо перелицензировать сверх того, что допускают закон и условия оригинального распространения. У сторонних библиотек и материалов могут быть собственные лицензии.
+Sarcophagus распространяется по [лицензии MIT](LICENSE.md). Правообладатель —
+оригинальный автор игры **Дмитрий Смирнов**, copyright (c) 2019. Сторонние
+библиотеки и материалы сохраняют собственные уведомления и условия лицензий.
