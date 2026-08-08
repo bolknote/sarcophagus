@@ -454,6 +454,12 @@ local function validate_display()
 		"mob collision logic ignores a blocked ceiling")
 	assert(not mob_collision_blocked({ right = 1, down = 1, left = 1, up = 1 }),
 		"mob collision logic reports a clear path as blocked")
+	assert(carried_block_placement_warning(56, nil) == msg.stone[56].info,
+		"stonework placement failure does not explain its support requirement")
+	assert(carried_block_placement_warning(56, { 1, 1 }) == nil,
+		"stonework rejects a valid attachment point")
+	assert(carried_block_placement_warning(35, nil) == nil,
+		"ordinary carried blocks incorrectly require side support")
 	assert(virtual_cursor_delta(nil, -1) == -12,
 		"keyboard cursor movement lost its negative direction")
 	assert(virtual_cursor_delta(-0.5, 1) == 4,
@@ -612,6 +618,68 @@ local function validate_display()
 	assert(sound_ambient_id() == 10 and game.ambient_sound == 10,
 		"removed cave ambience can still be selected")
 	game.ambient_sound = original_ambient_sound
+
+	local original_world_for_ttl = world
+	local original_time_for_ttl = game.time
+	local original_ttl_list = game.ttl_list
+	local ttl_test_id = 9999
+	local original_ttl_test_stone = stone[ttl_test_id]
+	local observed_ttl_times = {}
+	world = { [10] = { [10] = { b = ttl_test_id, t = 0 } } }
+	game.ttl_list = {}
+	stone[ttl_test_id] = {
+		ttl = 10,
+		die = ttl_test_id,
+		ondie = function ()
+			observed_ttl_times[#observed_ttl_times + 1] = game.time
+		end,
+	}
+	game.time = 35
+	assert(ttl_advance_block(10, 10) == 3,
+		"off-screen TTL simulation discarded missed cycles")
+	assert(#observed_ttl_times == 3
+		and observed_ttl_times[1] == 10
+		and observed_ttl_times[2] == 20
+		and observed_ttl_times[3] == 30,
+		"missed TTL cycles were not replayed at their scheduled times")
+	assert(world[10][10].t == 30 and game.time == 35,
+		"TTL catch-up lost the next deadline or changed current game time")
+
+	world = {
+		[10] = {
+			[10] = { b = 100, t = 0, age = 1, stage = 1 },
+			[12] = { b = 5 },
+		},
+		[11] = {
+			[10] = { b = 13, wt = 1000, e = 1000 },
+		},
+	}
+	game.ttl_list = {}
+	game.time = stone[100].ttl * 3 + 1
+	assert(ttl_advance_block(10, 10) == 3,
+		"off-screen plant did not replay every missed growth cycle")
+	assert(math.abs(world[10][10].age - 1.3) < 0.000001,
+		"off-screen plant age advanced by the wrong amount")
+
+	-- The giant weed's late seed stage is deterministic when it reaches a
+	-- solid ceiling. Catch-up must preserve that original rule as well.
+	world = {
+		[9] = { [10] = { b = 1 } },
+		[10] = {
+			[10] = { b = 14, t = 0 },
+			[12] = { b = 5 },
+		},
+	}
+	game.ttl_list = {}
+	game.time = stone[14].ttl + stone[15].ttl + 1
+	assert(ttl_advance_block(10, 10) == 2 and world[10][10].b == 16,
+		"giant weed cannot reach its ceiling seed stage during catch-up")
+
+	stone[ttl_test_id] = original_ttl_test_stone
+	world = original_world_for_ttl
+	game.time = original_time_for_ttl
+	game.ttl_list = original_ttl_list
+
 	local center_collision = tocollide({{
 		x = 32,
 		y = 32,

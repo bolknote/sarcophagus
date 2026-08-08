@@ -157,9 +157,20 @@ fi
 for macos_icon_marker in \
     'packaging/macos/Sarcophagus.icns' \
     'CFBundleIconFile' \
+    'Delete :CFBundleIconName' \
+    'OS X AppIcon.icns' \
     'Contents/Resources/Sarcophagus.icns'; do
     if ! grep -Fq "$macos_icon_marker" "$macos_builder"; then
         echo "macOS builder is missing icon integration: $macos_icon_marker" >&2
+        exit 1
+    fi
+done
+for macos_archive_marker in \
+    'love_archive_override="${LOVE_ARCHIVE:-}"' \
+    'if [[ -z "$love_archive_override" ]]' \
+    '"$script_directory/build-love.sh"'; do
+    if ! grep -Fq "$macos_archive_marker" "$macos_builder"; then
+        echo "macOS builder can reuse a stale default archive: $macos_archive_marker" >&2
         exit 1
     fi
 done

@@ -5,7 +5,8 @@ set -euo pipefail
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 version="$(tr -d '[:space:]' < "$project_root/version.txt")"
-love_archive="${LOVE_ARCHIVE:-$project_root/dist/Sarcophagus.love}"
+love_archive_override="${LOVE_ARCHIVE:-}"
+love_archive="${love_archive_override:-$project_root/dist/Sarcophagus.love}"
 love_app="${LOVE_APP:-$project_root/.tools/love-11.5/runtime/love.app}"
 signing_identity="${MACOS_SIGNING_IDENTITY:--}"
 notary_profile="${MACOS_NOTARY_PROFILE:-}"
@@ -52,8 +53,11 @@ if [[ -n "$notary_profile" && "$signing_identity" == "-" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$love_archive" ]]; then
+if [[ -z "$love_archive_override" ]]; then
     "$script_directory/build-love.sh"
+elif [[ ! -f "$love_archive" ]]; then
+    echo "Explicit LOVE_ARCHIVE not found: $love_archive" >&2
+    exit 1
 fi
 "$script_directory/audit-release.sh" "$love_archive"
 
@@ -69,7 +73,9 @@ if ! cmp -s "$love_archive" "$application/Contents/Resources/Sarcophagus.love"; 
 fi
 mv "$application/Contents/MacOS/love" "$application/Contents/MacOS/Sarcophagus"
 chmod +x "$application/Contents/MacOS/Sarcophagus"
-rm -f "$application/Contents/Resources/GameIcon.icns"
+rm -f \
+    "$application/Contents/Resources/GameIcon.icns" \
+    "$application/Contents/Resources/OS X AppIcon.icns"
 cp "$icon_source" "$application/Contents/Resources/Sarcophagus.icns"
 
 info_plist="$application/Contents/Info.plist"
@@ -80,6 +86,7 @@ info_plist="$application/Contents/Info.plist"
 "$plist_buddy" -c "Set :NSHumanReadableCopyright © Dmitry Smirnov" "$info_plist"
 "$plist_buddy" -c "Add :CFBundleIconFile string Sarcophagus.icns" "$info_plist" 2>/dev/null || \
     "$plist_buddy" -c "Set :CFBundleIconFile Sarcophagus.icns" "$info_plist"
+"$plist_buddy" -c "Delete :CFBundleIconName" "$info_plist" 2>/dev/null || true
 "$plist_buddy" -c "Delete :CFBundleDocumentTypes" "$info_plist" 2>/dev/null || true
 "$plist_buddy" -c "Delete :UTExportedTypeDeclarations" "$info_plist" 2>/dev/null || true
 "$plist_buddy" -c "Add :CFBundleDisplayName string Sarcophagus" "$info_plist" 2>/dev/null || \
@@ -157,6 +164,17 @@ if [[ "$verified_icon" != "Sarcophagus.icns" ]]; then
     echo "Packaged macOS app references an unexpected icon: $verified_icon" >&2
     exit 1
 fi
+if "$plist_buddy" -c 'Print :CFBundleIconName' \
+    "$verification_directory/Sarcophagus.app/Contents/Info.plist" >/dev/null 2>&1; then
+    echo "Packaged macOS app still contains the inherited LÖVE icon name." >&2
+    exit 1
+fi
+for inherited_icon in "GameIcon.icns" "OS X AppIcon.icns"; do
+    if [[ -e "$verification_directory/Sarcophagus.app/Contents/Resources/$inherited_icon" ]]; then
+        echo "Packaged macOS app still contains the inherited LÖVE icon: $inherited_icon" >&2
+        exit 1
+    fi
+done
 find "$verification_directory" -mindepth 1 -delete
 rmdir "$verification_directory"
 

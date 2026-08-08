@@ -1,3 +1,14 @@
+function carried_block_placement_warning (block_id,support)
+	local definition = stone[block_id]
+	if support or not definition or not definition.coby then
+		return nil
+	end
+
+	local localized = msg.stone and msg.stone[block_id]
+	return (localized and localized.info) or msg.game[37]
+end
+
+
 function moving ()
 
 	game.pass = 'playerpass'
@@ -139,7 +150,16 @@ function moving ()
 			br.x = br.x - 1
 		end
 
-		if pl.iscob and pl.cob==nil then
+		local placement_warning = carried_block_placement_warning (
+			pl.iscarry.b,
+			pl.cob
+		)
+		if placement_warning then
+			textwall (placement_warning)
+			-- Consume this press. Without this guard the failed placement returned
+			-- from moving every frame until Space was released, leaving the player
+			-- apparently stuck without explaining the attachment requirement.
+			pl.candrop = 0
 			return
 		end
 

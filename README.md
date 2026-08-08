@@ -75,6 +75,8 @@ Keyboard, mouse and gamepads are supported by the original game.
 
 The original version `0.10.591` is available for Windows, macOS and Linux from the [official itch.io page](https://acerbial.itch.io/sarcophagus). The itch.io page describes the original project as in development.
 
+The current modernized version in this repository is `0.11.0`.
+
 ### Original development log
 
 The [official devlog](https://acerbial.itch.io/sarcophagus/devlog) documents several milestones from 2019:
@@ -83,7 +85,7 @@ The [official devlog](https://acerbial.itch.io/sarcophagus/devlog) documents sev
 - **15 November 2019 — Butler bot:** the Butler bot became an achievement reward.
 - **12 November 2019 — version 0.10.40:** the first published achievement system contained 27 achievements. Early achievements helped introduce new players to the game, while some achievements also provided rewards and acted as an additional quest system.
 
-The local `0.10.591` source contains 41 achievement definitions, so it includes work completed after those devlog entries.
+The imported `0.10.591` source contains 41 achievement definitions, so it includes work completed after those devlog entries.
 
 This repository is a source snapshot currently being modernized. The work includes:
 
@@ -154,6 +156,8 @@ Build the universal Intel/Apple Silicon macOS app on macOS:
 ./scripts/build-macos.sh
 ```
 
+The macOS command rebuilds `dist/Sarcophagus.love` first, so an older archive cannot silently enter a new app. Set `LOVE_ARCHIVE=/path/to/game.love` only when packaging an explicitly supplied, already audited archive.
+
 Without credentials this creates an ad-hoc-signed package for local testing. A public download that opens normally under Gatekeeper must be signed with a **Developer ID Application** certificate and notarized by Apple:
 
 ```sh
@@ -178,13 +182,13 @@ After `dist/Sarcophagus.love` has been built, create the Linux x86_64 AppImage o
 ./scripts/build-linux-appimage.sh
 ```
 
-The script downloads the official LÖVE 11.5 AppImage and pinned AppImage tooling, rejects every binary whose SHA-256 differs from the recorded value, fuses the game into the native runner, installs the project desktop entry and icon, then extracts the result again to verify its contents and embedded `.love`. The output is `dist/Sarcophagus-linux-x86_64-0.10.591.AppImage`.
+The script downloads the official LÖVE 11.5 AppImage and pinned AppImage tooling, rejects every binary whose SHA-256 differs from the recorded value, fuses the game into the native runner, installs the project desktop entry and icon, then extracts the result again to verify its contents and embedded `.love`. The output is `dist/Sarcophagus-linux-x86_64-0.11.0.AppImage`.
 
 Make a downloaded build executable and launch it directly:
 
 ```sh
-chmod +x Sarcophagus-linux-x86_64-0.10.591.AppImage
-./Sarcophagus-linux-x86_64-0.10.591.AppImage
+chmod +x Sarcophagus-linux-x86_64-0.11.0.AppImage
+./Sarcophagus-linux-x86_64-0.11.0.AppImage
 ```
 
 The `Linux AppImage` GitHub Actions workflow runs the complete test suite with the same pinned LÖVE runtime, builds the `.love`, creates the AppImage and publishes it together with a SHA-256 file as a workflow artifact. The packaging procedure follows the [official LÖVE distribution guidance](https://love2d.org/wiki/Game_Distribution) and the [AppImage AppDir specification](https://docs.appimage.org/reference/appdir.html).
@@ -296,6 +300,8 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 
 Оригинальная версия `0.10.591` доступна для Windows, macOS и Linux на [официальной странице itch.io](https://acerbial.itch.io/sarcophagus). На itch.io исходный проект по-прежнему обозначен как находящийся в разработке.
 
+Текущая модернизированная версия в этом репозитории — `0.11.0`.
+
 ### Оригинальный журнал разработки
 
 В [официальном devlog](https://acerbial.itch.io/sarcophagus/devlog) описаны несколько этапов разработки 2019 года:
@@ -304,7 +310,7 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 - **15 ноября 2019 — Butler bot:** робот-дворецкий был добавлен как награда за достижение.
 - **12 ноября 2019 — версия 0.10.40:** опубликована первая система из 27 достижений. Ранние достижения помогали новым игрокам освоиться, а часть достижений давала награды и дополняла систему заданий.
 
-В локальных исходниках `0.10.591` уже определено 41 достижение, то есть они содержат более поздние изменения, не описанные этими записями.
+В импортированных исходниках `0.10.591` уже определено 41 достижение, то есть они содержат более поздние изменения, не описанные этими записями.
 
 Этот репозиторий представляет собой снимок исходников, который сейчас модернизируется. В план входят:
 
@@ -375,6 +381,8 @@ Release-сборщик сериализует метаданные атласа 
 ./scripts/build-macos.sh
 ```
 
+Перед этим macOS-сценарий сам пересобирает `dist/Sarcophagus.love`, поэтому старый архив не может незаметно попасть в новое приложение. Переменную `LOVE_ARCHIVE=/путь/к/game.love` следует задавать только для явно выбранного и уже проверенного готового архива.
+
 Без учётных данных получается пакет с локальной ad-hoc-подписью — он предназначен только для проверки на машине разработчика. Публичную загрузку, которую Gatekeeper открывает штатно, необходимо подписать сертификатом **Developer ID Application** и нотарифицировать у Apple:
 
 ```sh
@@ -399,13 +407,13 @@ powershell.exe -NoProfile -File scripts\build-windows.ps1
 ./scripts/build-linux-appimage.sh
 ```
 
-Сценарий загружает официальный AppImage LÖVE 11.5 и закреплённые инструменты AppImage, отклоняет любой бинарник с несовпадающей SHA-256, встраивает игру в нативный раннер, устанавливает desktop-файл и иконку проекта, а затем повторно извлекает результат и проверяет его состав и вложенный `.love`. Результат сохраняется как `dist/Sarcophagus-linux-x86_64-0.10.591.AppImage`.
+Сценарий загружает официальный AppImage LÖVE 11.5 и закреплённые инструменты AppImage, отклоняет любой бинарник с несовпадающей SHA-256, встраивает игру в нативный раннер, устанавливает desktop-файл и иконку проекта, а затем повторно извлекает результат и проверяет его состав и вложенный `.love`. Результат сохраняется как `dist/Sarcophagus-linux-x86_64-0.11.0.AppImage`.
 
 Загруженному пакету нужно дать право на запуск:
 
 ```sh
-chmod +x Sarcophagus-linux-x86_64-0.10.591.AppImage
-./Sarcophagus-linux-x86_64-0.10.591.AppImage
+chmod +x Sarcophagus-linux-x86_64-0.11.0.AppImage
+./Sarcophagus-linux-x86_64-0.11.0.AppImage
 ```
 
 Workflow `Linux AppImage` в GitHub Actions запускает полный набор тестов с тем же закреплённым LÖVE, собирает `.love` и AppImage и сохраняет AppImage вместе с файлом SHA-256 как артефакт workflow. Схема упаковки следует [официальной инструкции LÖVE](https://love2d.org/wiki/Game_Distribution) и [спецификации AppDir](https://docs.appimage.org/reference/appdir.html).

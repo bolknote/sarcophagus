@@ -19,11 +19,59 @@ function ttl_gather ()
 end
 
 
+local TTL_CATCH_UP_LIMIT = 128
+local TTL_CATCH_UP_BATCH = 512
+
+function ttl_advance_block (x,y,target_time,max_cycles)
+	target_time = target_time or game.time
+	max_cycles = max_cycles or TTL_CATCH_UP_LIMIT
+
+	local processed = 0
+	local ok, result = pcall(function ()
+		while processed < max_cycles do
+			local tile,map = maptile (x,y,"all")
+			local started = map.t
+			local lifetime = tile.ttl
+
+			if type(started)~="number" or type(lifetime)~="number"
+				or lifetime<=0 or target_time<=started+lifetime then
+				break
+			end
+
+			-- Run every missed transition at the time it should have happened.
+			-- writemap and ondie callbacks can create more TTL blocks, so using the
+			-- historical time also gives those blocks the correct starting time.
+			game.time = started + lifetime
+			writemap (x,y,tile.die)
+			if tile.ondie then
+				tile.ondie (x,y)
+			end
+			game.time = target_time
+			processed = processed + 1
+		end
+
+		return processed
+	end)
+
+	game.time = target_time
+	if not ok then
+		error(result,0)
+	end
+
+	return result
+end
+
+
 function ttl_checks (arr,mode)
 	local c = 0
+	local catch_up_budget = TTL_CATCH_UP_BATCH
 
 	for k,v in pairs(arr) do
-		checks(v[1],v[2],{update = true})
+		local advanced = checks(v[1],v[2],{
+			update = true,
+			ttl_max_cycles = math.min(TTL_CATCH_UP_LIMIT,catch_up_budget),
+		}) or 0
+		catch_up_budget = catch_up_budget - advanced
 		c = c + 1
 		
 		local tile,map = maptile (v[1],v[2],"all")
@@ -47,6 +95,10 @@ function ttl_checks (arr,mode)
 
 		end
 
+		if catch_up_budget<=0 then
+			break
+		end
+
 	end
 	if mode and mode.ver then print ('checked '..c) end
 end
@@ -56,6 +108,7 @@ function checks(x,y,mode)
 
 
 	mode = mode or {}
+	local ttl_processed = 0
 	local tile,map = maptile (x,y,"all")
 
 	--pumpkin fix
@@ -431,17 +484,14 @@ function checks(x,y,mode)
 				end
 
 				--ttl block check
-				if map.t and tile.ttl then 
-
-					if game.time > map.t + tile.ttl then --dying
-
-						writemap (x,y,tile.die) 
-
-						if tile.ondie then
-							tile.ondie (x,y)
-						end
-
-					end
+				if map.t and tile.ttl then
+					ttl_processed = ttl_advance_block (
+						x,
+						y,
+						game.time,
+						mode.ttl_max_cycles
+					)
+					tile,map = maptile (x,y,"all")
 				end
 
 				--fertility
@@ -595,6 +645,5 @@ function checks(x,y,mode)
 	end
 	end
 
+	return ttl_processed
 end
-
-
