@@ -485,7 +485,7 @@ function love.keypressed(key,s)
 
 	
 -- save
-	if key == "f6" and debug then
+	if key == "f6" and IS_DEVELOPMENT then
 		textwall (msg.game[3],true)
 		game_save (game.savepos)
 		game.screenshot = true
@@ -542,7 +542,7 @@ function love.keypressed(key,s)
 
 	end
 
-	if key == "f7" and debug then
+	if key == "f7" and IS_DEVELOPMENT then
 
 			ini_quad ()
 			lurker.scan()
@@ -558,7 +558,7 @@ function love.keypressed(key,s)
 	end
 
 	-- load
-	if key == "f9" and debug then
+	if key == "f9" and IS_DEVELOPMENT then
 		game_load (game.savepos)
 		game.pause = nil
 		game.escmenu = nil
@@ -904,23 +904,23 @@ function love.keypressed(key,s)
 	end
 	
 	
-	if key == "up" and debug then
+	if key == "up" and IS_DEVELOPMENT then
 		currentBlock = currentBlock + 1
 		if game.blocks[currentBlock] == nil then currentBlock = 1 end
 	end
 
-	if key == "down" and debug then
+	if key == "down" and IS_DEVELOPMENT then
 		currentBlock = currentBlock - 1
 		if currentBlock<1 then currentBlock = #game.blocks end
 	end
 
-	if key == "left" and debug then
+	if key == "left" and IS_DEVELOPMENT then
 		currentItem = currentItem - 1
 		if currentItem<1 then currentItem = #game.items end
 	end
 
 
-	if key == "right" and debug then
+	if key == "right" and IS_DEVELOPMENT then
 		currentItem = currentItem + 1
 		if game.items[currentItem] == nil then currentItem = 1 end
 	end
@@ -993,7 +993,7 @@ function love.keypressed(key,s)
 		--dump (has_light(pl.tx,pl.ty))
 	end
 
-	if key == 'f7' and is_pressed ('rshift') and debug then
+	if key == 'f7' and is_pressed ('rshift') and IS_DEVELOPMENT then
 
 		buff_add (1)
 		buff_add (4)
@@ -1249,4 +1249,3 @@ function love.keypressed(key,s)
 
 
 end
-

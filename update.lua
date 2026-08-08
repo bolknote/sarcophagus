@@ -631,7 +631,7 @@ function love.update(d)
 	if pl.dying == nil then
 
 		if game.craft == false and game.achishow==nil then
-			if is_pressed("\\") and debug then
+			if is_pressed("\\") and IS_DEVELOPMENT then
 				moving_editor()
 			else
 				if pl.rest<=0 then

@@ -2515,7 +2515,7 @@ end
 
 function ini_quad ()
 
-	if debug then
+	if IS_DEVELOPMENT then
 		--collecting quad
 		local files = love.filesystem.getDirectoryItems('/gr')
 		local images = {}
@@ -2645,7 +2645,6 @@ function spiral_spin (maxstep)
 
 
 end
-
 
 
 

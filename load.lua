@@ -7,7 +7,9 @@ function love.load()
 	min_dt = 1/30
    	next_time = love.timer.getTime()
 
-   	moving_editor =  loadfile ('moving_editor.lua')
+	if IS_DEVELOPMENT then
+		moving_editor = loadfile('moving_editor.lua')
+	end
 	
 	
 	font = love.graphics.newFont("font/GohuFont-Medium.ttf",14) --11
@@ -318,7 +320,7 @@ r, pl.xt, pl.yt = px2tile (pl.x, pl.y)
 
 	sublime = '{"scope": "source.lua", "completions": ['..sublime..']}'
 
-	if debug then
+	if IS_DEVELOPMENT then
 		love.filesystem.write ('sar.sublime-completions', sublime)
 	end
 
@@ -337,7 +339,7 @@ r, pl.xt, pl.yt = px2tile (pl.x, pl.y)
 	"		except ValueError as verr:\n"..
 	"			pass"
 
-	if debug then
+	if IS_DEVELOPMENT then
 		love.filesystem.write ('sarco.py', sublime)
 	end
 

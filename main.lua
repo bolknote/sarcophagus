@@ -11,12 +11,9 @@
 
 server_version = ""
 game_version = love.filesystem.read('version.txt')
-debug = true
+BUILD_MODE = require("build_mode").detect()
+IS_DEVELOPMENT = BUILD_MODE == "development"
 world = {}
-
-
-local info = love.filesystem.getInfo("gr/")
-if info==nil then debug = nil end
 
 io.stdout:setvbuf("no")
 
@@ -32,7 +29,7 @@ love.audio.setOrientation(0, 0, 1, 0,-1,0)
 --love.audio.setDistanceModel("inverseclamped")
 love.audio.setDistanceModel("exponentclamped")
 
-if debug then
+if IS_DEVELOPMENT then
 	lurker = require "lurker"		
 end
 
@@ -78,8 +75,9 @@ if smoke_test then
 	require("tests.smoke").install(smoke_test)
 end
 
-moving_editor =  loadfile ('moving_editor.lua')
-
+if IS_DEVELOPMENT then
+	moving_editor = loadfile('moving_editor.lua')
+end
 
 
 
