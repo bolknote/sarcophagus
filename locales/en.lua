@@ -142,6 +142,18 @@ msg.menu = {
 	etymology = "{#3a4466ff}— from the Greek sarx meaning “flesh”, and phagein - “to eat”{#ffffffff}",
 }
 
+msg.ui = {
+	time = "Week _1_, Day _2_, _3_:_4_",
+	location = "Loc: _1_:_2_",
+	robot_exterminate = "exterminate!",
+}
+
+msg.joystick = {
+	title = "{#be4a2fff}Key setup{#5a6988ff}\n\n",
+	bind = "{#ffffffff}Press joystick/keyboard key for {#fee761ff}_1_{#ccccccff} (default is {#be4a2fff}_2_{#ffffffff})",
+	footer = "\n\n\n\nPress {#fee761ff}ESC{#ffffffff} to cancel, {#fee761ff}Backspace{#ffffffff} to skip this key.",
+}
+
 
 
 msg.mapgen = {
@@ -300,6 +312,7 @@ msg.craft =
 	[1] = " {#124e89ff}recipes containing {#e8b796ff}_1_{#ffffffff}:\n\n{#8b9bb4ff}  Product ........................[ Reagents (tools) crafting time ]\n\n",
 	[2] = " {#124e89ff}using ground and inventory items:\n\n{#8b9bb4ff}  Product ........................[ Reagents (tools) crafting time ]\n\n",
 	[3] = "\n\n{#ffffffff}{#fee761ff}W]{#ffffffff},{#fee761ff}S]{#ffffffff} to select, {#fee761ff}Enter]{#ffffffff} to craft, {#fee761ff}C]{#ffffffff} to cancel",
+	requires = " (requires: ",
 
 }
 
@@ -2202,4 +2215,3 @@ msg.achi[41] =
 }
 
 return msg
-

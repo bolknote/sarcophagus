@@ -66,9 +66,12 @@ local function validate_settings()
 
     local ok, result = pcall(function()
         language_set("en", false)
+        assert(telltime(0) == "Week 00, Day 00, 00:00", "English time format is invalid")
         language_next()
         assert(LANGUAGE == "ru", "language switch did not activate Russian")
         assert(msg.menu.pick_slot == "Выберите слот игры:\n\n", "Russian menu was not activated")
+        assert(telltime(0) == "Неделя 00, день 00, 00:00", "Russian time format is invalid")
+        assert(utf8.len(draw_tool_pad("тест")) == 13, "UTF-8 UI padding is invalid")
 
         local loaded = SETTINGS_STORE.load()
         assert(loaded.language == "ru", "settings language was not restored")
@@ -158,6 +161,16 @@ function smoke.install(specification)
                 finish(0, "mode=locales " .. report)
             else
                 finish(1, "mode=locales " .. report)
+            end
+            return
+        end
+
+        if mode == "ui-strings" then
+            local ok, report = require("tests.ui_string_validator").validate()
+            if ok then
+                finish(0, "mode=ui-strings " .. report)
+            else
+                finish(1, "mode=ui-strings " .. report)
             end
             return
         end

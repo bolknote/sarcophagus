@@ -5428,7 +5428,7 @@ function str_recipie (i)
 
 	if r.tools or r.block then 
 
-		str = str..s_n.." (requires: "
+		str = str..s_n..msg.craft.requires
 
 		local b = readmap (pl.xt, pl.yt,"b")
 
@@ -5632,4 +5632,3 @@ function craft_itemsget ()
 	end
 	
 end
-

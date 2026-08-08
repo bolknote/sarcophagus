@@ -20,7 +20,12 @@ function telltime (t)
 	--dump (times)
 
 	--return game.time
-	return "Week "..string.format("%02d", times[1])..", Day "..string.format("%02d", times[2])..", "..string.format("%02d", times[3])..":"..string.format( "%02d", times[4])
+	return message(msg.ui.time, {
+		[1] = string.format("%02d", times[1]),
+		[2] = string.format("%02d", times[2]),
+		[3] = string.format("%02d", times[3]),
+		[4] = string.format("%02d", times[4]),
+	})
 
 end
 

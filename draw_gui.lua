@@ -750,7 +750,10 @@ end
 --local t = "Time: "..telltime(game.time).." † "..pl.deaths
 
 local t = telltime(game.time).." †"..pl.deaths..""
-local sc = math.floor(pl.score).."]──[".."Loc: "..(pl.tx-pl.startx-1)..":"..(pl.ty-pl.starty-5)..""
+local sc = math.floor(pl.score).."]──["..message(msg.ui.location, {
+	[1] = pl.tx-pl.startx-1,
+	[2] = pl.ty-pl.starty-5,
+})
 local faith = 0
 
 if altshow then
@@ -758,10 +761,10 @@ if altshow then
 end
 
 	local border = 
-	"┌["..t.."]─"..string.rep("─",32-string.len(t)).."┐\n"..
+	"┌["..t.."]─"..string.rep("─",32-utf8.len(t)).."┐\n"..
 	string.rep("│                                 │\n",8+faith)..
 
-	msg.gui[38]..sc.."]"..string.rep("─",28-string.len(sc)).."┘".."\n"
+	msg.gui[38]..sc.."]"..string.rep("─",28-utf8.len(sc)).."┘".."\n"
 
 
 	--fps:"..tostring(love.timer.getFPS()).."\n"..

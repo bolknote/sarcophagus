@@ -8,8 +8,9 @@ function draw_fullbox (n)
 	local tw = screen.width/w
 
 	local head = msg.gui[n]
+	local head_length = utf8.len(head)
 
-	local border = "┌─["..head.."]"..string.rep("─",tw-string.len (head)-5).."┐\n"..
+	local border = "┌─["..head.."]"..string.rep("─",tw-head_length-5).."┐\n"..
 	string.rep("│"..string.rep(" ",tw-4).."  │\n",th-2)..
 	"└"..string.rep("─",tw-2).."┘\n"
 
@@ -184,7 +185,7 @@ end
 
 function draw_tool_pad (str)
 	
-	str = str..string.rep(" ", 13-string.len(str))
+	str = str..string.rep(" ", 13-utf8.len(str))
 	return str
 
 end
@@ -1073,7 +1074,6 @@ function draw_cols()
 		love.graphics.rectangle ('line', v.x-vi.x,v.y - vi.y, v.w-v.x, v.h - v.y)
 	end
 end
-
 
 
 

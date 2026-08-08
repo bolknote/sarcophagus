@@ -49,7 +49,7 @@ function love.joy_update (d)
 
 	str = ""
 	step = step or 1
-	str = "{#be4a2fff}Key setup{#5a6988ff}\n\n"
+	str = msg.joystick.title
 
 
 	for i=1,#joy_setup do
@@ -66,12 +66,15 @@ function love.joy_update (d)
 		end
 		
 		if i==step then
-			str = str.."{#ffffffff}Press joystick/keyboard key for {#fee761ff}"..msg.key[joy_setup[step]].."{#ccccccff} (default is {#be4a2fff}"..joy_setup[step].."{#ffffffff})"
+			str = str..message(msg.joystick.bind, {
+				[1] = msg.key[joy_setup[step]],
+				[2] = joy_setup[step],
+			})
 		end
 
 	end
 
-	str = str.."\n\n\n\nPress {#fee761ff}ESC{#ffffffff} to cancel, {#fee761ff}Backspace{#ffffffff} to skip this key."
+	str = str..msg.joystick.footer
 
 
 	if step == #joy_setup then
@@ -315,4 +318,3 @@ function love.joystickhat (joystick, hat, direction)
 	end
 
 end
-

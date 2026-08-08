@@ -131,6 +131,7 @@ Validate the localization overlay separately:
 
 ```sh
 ./scripts/check-locales.sh
+./scripts/check-ui-strings.sh
 ```
 
 Build a release-mode `.love` archive with a pre-generated sprite atlas:
@@ -297,6 +298,7 @@ love /абсолютный/путь/к/Sarcophagus
 
 ```sh
 ./scripts/check-locales.sh
+./scripts/check-ui-strings.sh
 ```
 
 Для сборки release-архива `.love` с заранее подготовленным атласом спрайтов:

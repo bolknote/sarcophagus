@@ -2503,7 +2503,7 @@ function mob_robot (mob,id)
 		end
 
 		if dist<1 then
-			textbubble ('mob'..id,mob.tx,mob.ty+1,'exterminate!',1,{style=5,theme=3,pad=10,w=300,out=1})
+			textbubble ('mob'..id,mob.tx,mob.ty+1,msg.ui.robot_exterminate,1,{style=5,theme=3,pad=10,w=300,out=1})
 		
 			ani_setstatus (mob,'walk')
 		end
@@ -4862,4 +4862,3 @@ function inv_ground_sort (x,y)
 	return 0, c
 
 end
-

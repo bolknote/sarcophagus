@@ -24,6 +24,7 @@ if [[ ! -x "$love_binary" ]]; then
 fi
 
 LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
+LOVE_BIN="$love_binary" "$script_directory/check-ui-strings.sh"
 
 mkdir -p "$generated_directory" "$staging_directory" "$distribution_directory"
 find "$generated_directory" -mindepth 1 -delete

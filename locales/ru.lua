@@ -89,6 +89,22 @@ msg.menu = {
 	etymology = "{#3a4466ff}— от греческих sarx — «плоть» и phagein — «поедать»{#ffffffff}",
 }
 
+msg.ui = {
+	time = "Неделя _1_, день _2_, _3_:_4_",
+	location = "Поз: _1_:_2_",
+	robot_exterminate = "уничтожить!",
+}
+
+msg.joystick = {
+	title = "{#be4a2fff}Настройка управления{#5a6988ff}\n\n",
+	bind = "{#ffffffff}Нажмите кнопку контроллера или клавишу для действия {#fee761ff}_1_{#ccccccff} (по умолчанию: {#be4a2fff}_2_{#ffffffff})",
+	footer = "\n\n\n\nНажмите {#fee761ff}ESC{#ffffffff} для отмены или {#fee761ff}Backspace{#ffffffff}, чтобы пропустить действие.",
+}
+
+msg.craft = {
+	requires = " (нужно: ",
+}
+
 msg.mapgen = {
 	"Создание нового мира",
 	"Заполнение землёй",

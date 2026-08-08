@@ -24,6 +24,7 @@ if command -v luac >/dev/null 2>&1; then
 fi
 
 LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
+LOVE_BIN="$love_binary" "$script_directory/check-ui-strings.sh"
 
 /usr/bin/env -u SARCOPHAGUS_LANGUAGE \
     SARCOPHAGUS_BUILD_MODE=development \
