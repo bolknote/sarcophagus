@@ -112,7 +112,10 @@ jobs:
           Stop-Process -Id $process.Id -Force
           $package = Get-Item -LiteralPath "dist/Sarcophagus-windows-x64-$version.zip"
           $hash = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $($package.Name)" | Set-Content -LiteralPath "$($package.FullName).sha256" -Encoding ascii
+          [IO.File]::WriteAllText(
+            "$($package.FullName).sha256",
+            "$hash  $($package.Name)`n",
+            [Text.UTF8Encoding]::new($false))
 
       - name: Upload Windows package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
