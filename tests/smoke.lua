@@ -744,6 +744,16 @@ local function validate_display()
 			utf8.len(msg.stone[2].name) <= card_width - 9,
 			language .. " ground card title crosses its right border"
 		)
+
+		local action_key, action_hint = ground_card_action_hint(true, true)
+		assert(action_key == "Space" and action_hint == msg.gui[14],
+			language .. " carried block incorrectly inherits the ground action")
+		action_key, action_hint = ground_card_action_hint(false, true)
+		assert(action_key == "V" and action_hint == msg.gui[27],
+			language .. " usable ground block action is missing")
+		action_key, action_hint = ground_card_action_hint(false, false)
+		assert(action_key == nil and action_hint == nil,
+			language .. " ground card shows an unavailable action")
 	end
 	language_set(original_language, false)
 

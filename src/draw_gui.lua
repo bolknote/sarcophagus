@@ -47,6 +47,18 @@ function ground_card_border(top, text, body_rows)
 	return border, frame_width
 end
 
+function ground_card_action_hint(is_carrying, can_use_ground)
+	if is_carrying then
+		return "Space", msg.gui[14]
+	end
+
+	if can_use_ground then
+		return "V", msg.gui[27]
+	end
+
+	return nil, nil
+end
+
 function draw_gui ()
 
 -- GUI
@@ -589,8 +601,12 @@ end
 			cnt = cnt + 1
 		end	
 
-		if pl.canuse then
-			str = str.."\n{#fee761ff}V]{#ffffffff} "..msg.gui[27]
+		local action_key, action_hint = ground_card_action_hint(
+			pl.iscarry ~= nil,
+			pl.canuse
+		)
+		if action_key then
+			str = str.."\n{#fee761ff}"..action_key.."]{#ffffffff} "..action_hint
 			cnt = cnt + 1
 		end
 
