@@ -1282,7 +1282,7 @@ if readmap (x,y,'disarm') ~= 'ok' then
 		for i=1,10 do
 
 			local xa = love.math.random (1,5)
-			local ya = love.math.random (-3,-7)
+			local ya = love.math.random (-7,-3)
 
 			if (maptile (x+xa, y+ya, 'col') or 0)==0 then
 				mob_create (x+xa, y+ya,6)
@@ -1321,8 +1321,8 @@ check = function (x,y) -- quick checks
 			writemap (x,y,0)
 			mob_create (x,y,mob)
 		else
-			local w = #mobs+1
-			table.insert (mobs, w, mob)
+			local w = next_numeric_id(mobs)
+			mobs[w] = mob
 			writemap (x,y,0)
 		end
 

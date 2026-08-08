@@ -153,12 +153,16 @@ local function validate_persistence()
 		-- Old saves may predate disaster bookkeeping. Migration must supply every
 		-- field used by the current simulation.
 		pl.visited = nil
-		pl.ferted = nil
-		pl.disaster = nil
-		pl.disastercd = nil
-		game_migrate()
-		assert(type(pl.visited) == "table" and type(pl.ferted) == "table",
-			"save migration did not add exploration histories")
+			pl.ferted = nil
+			pl.disaster = nil
+			pl.disastercd = nil
+			local hidden_slot = pl.invsize + 50
+			pl.inv[hidden_slot] = item_make(31)
+			game_migrate()
+			assert(type(pl.visited) == "table" and type(pl.ferted) == "table",
+				"save migration did not add exploration histories")
+			assert(pl.inv[hidden_slot] == nil,
+				"save migration left an item in an inaccessible inventory slot")
 		for name in pairs(cf.disaster) do
 			assert(pl.disaster[name] and type(pl.disaster[name].cd) == "number",
 				"save migration did not add disaster state for " .. name)
@@ -350,6 +354,163 @@ local function validate_display()
 		"left arrow is not an Esc-menu alternative to A")
 	assert(normalize_esc_menu_key("right", "right") == "d",
 		"right arrow is not an Esc-menu alternative to D")
+	assert(tool_damage_per_second({ dmgmin = 2, dmgmax = 6, digspeed = 2 }) == 2,
+		"weapon DPS does not use the average of minimum and maximum damage")
+	assert(next_numeric_id({ [1] = true, [3] = true }) == 4,
+		"numeric ID allocation relies on the undefined length of a sparse table")
+	assert(mob_collision_blocked({ right = 1, down = 1, left = 1, up = 0 }),
+		"mob collision logic ignores a blocked ceiling")
+	assert(not mob_collision_blocked({ right = 1, down = 1, left = 1, up = 1 }),
+		"mob collision logic reports a clear path as blocked")
+	assert(virtual_cursor_delta(nil, -1) == -12,
+		"keyboard cursor movement lost its negative direction")
+	assert(virtual_cursor_delta(-0.5, 1) == 4,
+		"controller cursor movement uses the axis sign instead of the requested direction")
+	local original_inventory = pl.inv
+	local original_inventory_size = pl.invsize
+	local original_inventory_selection = pl.invselect
+	local original_inventory_show = pl.inv_show
+	local original_inventory_show_cursor = pl.inv_show_c
+	local duplicate_item = { i = 31, t = 1 }
+	local selected_duplicate = { i = 31, t = 2 }
+	pl.inv = { [1] = duplicate_item, [3] = selected_duplicate }
+	pl.invsize = 3
+	pl.invselect = 3
+	inv_compact()
+	assert(pl.inv[pl.invselect] == selected_duplicate,
+		"inventory compaction changed which duplicate item was selected")
+	assert(pl.inv[1] ~= nil and pl.inv[2] ~= nil and pl.inv[3] == nil,
+		"inventory compaction left a numeric hole")
+	local original_inv_ground_add = inv_ground_add
+	local overflow_item = { i = 31, t = 2 }
+	local dropped_overflow
+	pl.inv[42] = overflow_item
+	inv_ground_add = function(_, _, dropped)
+		dropped_overflow = dropped
+		return true
+	end
+	assert(inv_resize(-1) == 2, "inventory capacity was not reduced")
+	assert(dropped_overflow == overflow_item and pl.inv[42] == nil,
+		"inventory overflow left an inaccessible high-numbered slot")
+	inv_ground_add = original_inv_ground_add
+	local original_textwall_for_inventory = textwall
+	textwall = function() end
+	pl.inv = {
+		[1] = { i = 31, t = 0, c = game.time },
+		[2] = { i = 31, t = 0, c = game.time },
+	}
+	pl.invsize = 3
+	pl.invselect = 1
+	inv_tick_ttl()
+	local expired_count = inv_count()
+	assert(expired_count == 0,
+		"expiring one inventory item skipped another item moved by compaction")
+	textwall = original_textwall_for_inventory
+	pl.inv = original_inventory
+	pl.invsize = original_inventory_size
+	pl.invselect = original_inventory_selection
+	pl.inv_show = original_inventory_show
+	pl.inv_show_c = original_inventory_show_cursor
+
+	local original_stats = pl.stats
+	pl.stats = {
+		arms = { hp = 100, maxhp = 100 },
+		body = { hp = 100, maxhp = 100 },
+		heat = { hp = 100, maxhp = 100 },
+		water = { hp = 100, maxhp = 100 },
+	}
+	local function equipment_state()
+		return {
+			slowed = pl.slowed,
+			invsize = pl.invsize,
+			arms_hp = pl.stats.arms.hp,
+			arms_maxhp = pl.stats.arms.maxhp,
+			body_hp = pl.stats.body.hp,
+			body_maxhp = pl.stats.body.maxhp,
+			heat_hp = pl.stats.heat.hp,
+			heat_maxhp = pl.stats.heat.maxhp,
+			water_hp = pl.stats.water.hp,
+			water_maxhp = pl.stats.water.maxhp,
+		}
+	end
+	for _, item_id in ipairs({ 170, 356, 357, 195, 350, 351 }) do
+		local before = equipment_state()
+		item[item_id].onequip()
+		item[item_id].onunequip()
+		local after = equipment_state()
+		for field, expected in pairs(before) do
+			assert(math.abs(after[field] - expected) < 0.000001, (
+				"item %d does not undo equipment field %s"
+			):format(item_id, field))
+		end
+	end
+	pl.stats = original_stats
+
+	local original_ambient = game.ambient
+	game.ambient = nil
+	buff[8].on_start()
+	buff[8].on_remove()
+	assert(game.ambient == nil, "removing dark vision left the cave permanently bright")
+	game.ambient = original_ambient
+	local original_adddamage = pl.adddamage
+	local original_stat_spend = stat_spend
+	pl.adddamage = 0
+	stat_spend = function() end
+	buff[22].on_start()
+	buff[22].on_remove()
+	assert(pl.adddamage == 0, "removing warpaint left a permanent damage bonus")
+	pl.adddamage = original_adddamage
+	stat_spend = original_stat_spend
+
+	local original_buffs = pl.buffs
+	local original_bufftick = pl.bufftick
+	local original_lastshit = pl.lastshit
+	local original_game_time = game.time
+	local original_readmap_for_buffs = readmap
+	local original_writemap_for_buffs = writemap
+	local original_textwall_for_buffs = textwall
+	local original_sound_stop = sound_stop
+	local stopped_underwater_sound = false
+	pl.stats = { water = { pc = 50 } }
+	game.time = 100
+	stat_spend = function() end
+	readmap = function() return nil end
+	writemap = function() end
+	textwall = function() end
+	sound_stop = function(name)
+		if name == "underwater" then stopped_underwater_sound = true end
+	end
+	pl.buffs = { [19] = { ttl = 99, cnt = 1 } }
+	pl.bufftick = 99
+	buff_tick()
+	assert(stopped_underwater_sound and pl.buffs[19] == nil,
+		"naturally expired hold-breath did not run its cleanup")
+	local stopped_splash_sound = false
+	sound_stop = function(name)
+		if name == "splash" then stopped_splash_sound = true end
+	end
+	pl.slowed = pl.slowed - 0.1
+	pl.jumpyslow = pl.jumpyslow - 1.5
+	pl.buffs = { [18] = { ttl = 99 } }
+	pl.bufftick = 99
+	buff_tick()
+	assert(stopped_splash_sound and pl.buffs[18] == nil,
+		"naturally expired submerged effect left splash audio playing")
+	pl.buffs = { [16] = { ttl = 99 } }
+	pl.bufftick = 99
+	buff_tick()
+	assert(pl.buffs[16] and pl.buffs[16].ttl > game.time,
+		"diarrhoea refresh was immediately deleted by expiration cleanup")
+	pl.buffs = original_buffs
+	pl.bufftick = original_bufftick
+	pl.lastshit = original_lastshit
+	pl.stats = original_stats
+	game.time = original_game_time
+	stat_spend = original_stat_spend
+	readmap = original_readmap_for_buffs
+	writemap = original_writemap_for_buffs
+	textwall = original_textwall_for_buffs
+	sound_stop = original_sound_stop
 	assert(mystify("Raw clay") == "??? ????",
 		"ASCII undiscovered-item masking changed")
 	assert(mystify("Сырая глина") == "????? ?????",
@@ -392,6 +553,24 @@ local function validate_display()
 	proj = original_projectiles
 	dt = original_dt
 
+	local original_random = love.math.random
+	local damage_range
+	love.math.random = function(minimum, maximum)
+		damage_range = { minimum, maximum }
+		return maximum
+	end
+	assert(projectile_item_damage({
+		i = 5,
+		tool = { dmgmin = 7, dmgmax = 9 },
+	}) == 9, "thrown tool damage ignores the inventory instance stats")
+	assert(damage_range[1] == 7 and damage_range[2] == 9,
+		"thrown tool damage uses the wrong random range")
+	damage_range = nil
+	assert(projectile_item_damage({ i = 31 }) == 4,
+		"fixed damage of a thrown stone changed")
+	assert(damage_range == nil, "fixed projectile damage unexpectedly rolled a random value")
+	love.math.random = original_random
+
 	local animation = new_worldani("smoke-test", "assplode", {
 		test_marker = 42,
 	})
@@ -407,6 +586,82 @@ local function validate_display()
 		"prototype mob cleanup did not report the removed entry")
 	assert(mob_list[2] == nil and mob_list[7] ~= nil,
 		"prototype mob cleanup removed the wrong entry")
+	local original_mob_search_mobs = mobs
+	local original_mob_search_readmap = readmap
+	local original_global_b = _G.b
+	mobs = { [4] = { tx = 2, ty = 2, id = 1 } }
+	readmap = function() return nil end
+	_G.b = nil
+	assert(mob_search(1, 1, 5) == 1,
+		"active mob search uses an out-of-scope stored-mob list")
+	mobs = original_mob_search_mobs
+	readmap = original_mob_search_readmap
+	_G.b = original_global_b
+
+	local original_mobs = mobs
+	local original_global_m = _G.m
+	local original_creature = creature[999]
+	local original_readmap = readmap
+	local original_tile2px = tile2px
+	local original_coord_screen2true = coord_screen2true
+	local original_ani_new = ani_new
+	local original_ani_setstatus = ani_setstatus
+	local original_mob_upgrade = mob_upgrade
+	local global_m_sentinel = {}
+	_G.m = global_m_sentinel
+	mobs = { [1] = { id = 1 }, [3] = { id = 1 } }
+	creature[999] = { proto = { type = "smoke-mob", anidef = "idle" } }
+	readmap = function() return 0 end
+	tile2px = function() return { x = 0, y = 0 } end
+	coord_screen2true = function() end
+	ani_new = function() end
+	ani_setstatus = function() end
+	mob_upgrade = function() end
+	local created_mob_id = mob_create(1, 1, 999)
+	assert(created_mob_id == 4 and mobs[4] ~= nil,
+		"mob creation does not preserve IDs in a sparse mob table")
+	assert(_G.m == global_m_sentinel,
+		"mob creation leaked its temporary mob into a global variable")
+	mobs = original_mobs
+	_G.m = original_global_m
+	creature[999] = original_creature
+	readmap = original_readmap
+	tile2px = original_tile2px
+	coord_screen2true = original_coord_screen2true
+	ani_new = original_ani_new
+	ani_setstatus = original_ani_setstatus
+	mob_upgrade = original_mob_upgrade
+
+	local original_writemap = writemap
+	local original_maptile = maptile
+	local original_textwall = textwall
+	local original_mob_create = mob_create
+	local original_digcount = pl.digcount
+	local capsule_spawns = 0
+	local capsule_y_range
+	readmap = function() return nil end
+	writemap = function() end
+	maptile = function() return 0 end
+	textwall = function() end
+	mob_create = function() capsule_spawns = capsule_spawns + 1 end
+	love.math.random = function(minimum, maximum)
+		assert(minimum <= maximum, "high-tech capsule uses an inverted random interval")
+		if minimum < 0 then capsule_y_range = { minimum, maximum } end
+		return minimum
+	end
+	assert(stone[115].ondig(10, 20) == false,
+		"high-tech capsule no longer interrupts the normal dig action")
+	assert(capsule_spawns == 3, "high-tech capsule did not finish its ambush")
+	assert(capsule_y_range[1] == -7 and capsule_y_range[2] == -3,
+		"high-tech capsule uses the wrong vertical spawn range")
+	readmap = original_readmap
+	writemap = original_writemap
+	maptile = original_maptile
+	textwall = original_textwall
+	mob_create = original_mob_create
+	love.math.random = original_random
+	pl.digcount = original_digcount
+
 	local original_escmenu_position = game.escmenu
 	local original_sound_add = sound_add
 	sound_add = function() end

@@ -75,6 +75,25 @@
 
 	cols.boom = {-32,-32,96,96}
 	
+	function projectile_item_damage(inv)
+		if type(inv) ~= "table" then return 1 end
+
+		local definition = item[inv.i]
+		if type(definition) ~= "table" then return 1 end
+		if type(definition.dmg) == "number" then return definition.dmg end
+
+		local instance_tool = type(inv.tool) == "table" and inv.tool or {}
+		local definition_tool = type(definition.tool) == "table" and definition.tool or {}
+		local minimum = tonumber(instance_tool.dmgmin) or tonumber(definition_tool.dmgmin)
+		local maximum = tonumber(instance_tool.dmgmax) or tonumber(definition_tool.dmgmax)
+		if minimum == nil and maximum == nil then return 1 end
+
+		minimum = minimum or maximum
+		maximum = maximum or minimum
+		if minimum > maximum then minimum, maximum = maximum, minimum end
+		return love.math.random(minimum, maximum)
+	end
+
 
 	projes =
 	{
@@ -110,16 +129,7 @@
 				spt = img_load("throw_stone.png"),
 				--mob_hit (m)
 				onhit = function (x,y,what,m,i)
-					local d = 1
-					
-
-					if i and item[i.i].dmg then
-						d = item[i.i].dmg
-					else
-						if i and item[i.i].dmgmin then
-							d = love.math.random (item[i.i].tool.dmgmin,item[i.i].tool.dmgmax) or 1
-						end
-					end
+					local d = projectile_item_damage(i)
 
 					if m.n then
 						mob_hit (m.n, d)
@@ -147,11 +157,7 @@
 				spt = img_load("throw_knife.png"),
 				--mob_hit (m)
 				onhit = function (x,y,what,m,i,proj)
-					local d = 1
-
-					if i and item[i.i].tool then
-						d = love.math.random (item[i.i].tool.dmgmin,item[i.i].tool.dmgmax) or 1
-					end
+					local d = projectile_item_damage(i)
 
 					if m.n then
 						mob_hit (m.n, d)
@@ -165,11 +171,7 @@
 				spt = img_load("throw_axe.png"),
 				--mob_hit (m)
 				onhit = function (x,y,what,m,i,proj)
-					local d = 1
-
-					if i and item[i.i].tool then						
-						d = love.math.random (item[i.i].tool.dmgmin,item[i.i].tool.dmgmax) or 1
-					end
+					local d = projectile_item_damage(i)
 
 					if m.n then
 						mob_hit (m.n, d)
@@ -184,11 +186,7 @@
 		[7] = { --hammer
 				spt = img_load("throw_hammer.png"),
 				onhit = function (x,y,what,m,i,proj)
-					local d = 1
-
-					if i and item[i.i].tool then
-						d = love.math.random (item[i.i].tool.dmgmin,item[i.i].tool.dmgmax) or 1
-					end
+					local d = projectile_item_damage(i)
 
 					if m.n then
 						mob_hit (m.n, d)
@@ -202,11 +200,7 @@
 		[8] = { --spear
 				spt = img_load("throw_spear.png"),
 				onhit = function (x,y,what,m,i,proj)
-					local d = 1
-
-					if i and item[i.i].tool then
-						d = love.math.random (item[i.i].tool.dmgmin,item[i.i].tool.dmgmax) or 1
-					end
+					local d = projectile_item_damage(i)
 
 					if m.n then
 						mob_hit (m.n, d)
@@ -246,15 +240,7 @@
 		[11] = { --spear
 				spt = img_load("throw_stinger.png"),
 				onhit = function (x,y,what,m,i,proj)
-					local d = 1
-
-					if i and item[i.i].tool then
-
-						-- local s = proj.xspeed + proj.yspeed
-						-- print (s)
-						
-						d = love.math.random (item[i.i].tool.dmgmin,item[i.i].tool.dmgmax) or 1
-					end
+					local d = projectile_item_damage(i)
 
 					if m.n then
 						mob_hit (m.n, d)

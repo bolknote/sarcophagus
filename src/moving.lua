@@ -333,7 +333,7 @@ function moving ()
 				oxth = xth
 				oyth = yth
 
-				table.insert(proj,m)
+				proj[next_numeric_id(proj)] = m
 			end
 
 
@@ -381,7 +381,7 @@ function moving ()
 					proj = p
 				}
 
-				table.insert(proj,m)
+				proj[next_numeric_id(proj)] = m
 				pl.throw = 0
 
 			else
@@ -1105,7 +1105,7 @@ function moving ()
 
 					local dps = 0
 					if it and it.tool then
-						dps = ((it.tool.dmgmin or 0)+(it.tool.dmgmax or 0)/2)/(it.tool.digspeed or 1)
+						dps = tool_damage_per_second(it.tool)
 					end
 	
 					if dps>mins then

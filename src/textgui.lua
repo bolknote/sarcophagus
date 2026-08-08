@@ -250,7 +250,7 @@ function draw_tool (it,dstr,dcnt,sep)
 		
 		dstr = dstr.."{#ff0044ff}"..draw_tool_pad(msg.gui.item.dmg..it.tool.dmgmin.."-"..it.tool.dmgmax)
 		
-		local dps = (it.tool.dmgmin+it.tool.dmgmax/2)/(it.tool.digspeed or 1)
+		local dps = tool_damage_per_second(it.tool)
 		dps = string.format("%.2f", dps)
 		dstr = dstr.."{#ff0044aa}"..msg.gui.item.dps..dps
 		
@@ -1078,5 +1078,4 @@ function draw_cols()
 		love.graphics.rectangle ('line', v.x-vi.x,v.y - vi.y, v.w-v.x, v.h - v.y)
 	end
 end
-
 

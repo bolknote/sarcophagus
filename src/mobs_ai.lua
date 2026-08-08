@@ -99,6 +99,11 @@ end
 
 
 
+function mob_collision_blocked(togo)
+	return togo.right == 0 or togo.down == 0
+		or togo.left == 0 or togo.up == 0
+end
+
 creature = {}
 
 creature[1] = 	--slime slinger
@@ -363,7 +368,7 @@ function mob_slime(mob,id)
 										m.light = projes[mob.proj].light
 									end
 
-									table.insert(proj,m)
+									proj[next_numeric_id(proj)] = m
 
 							--end
 
@@ -716,7 +721,7 @@ function mob_spider (mob,id)
 					m.light = projes[mob.proj].light
 				end
 
-				table.insert(proj,m)
+				proj[next_numeric_id(proj)] = m
 
 			end
 		end
@@ -1322,7 +1327,7 @@ function mob_marsh (mob,id)
 			mob.y = mob.y + math.max(ystep,togo.up*-1)
 		end
 
-		if (togo.right*togo.down*togo.left*togo.right) == 0 and mob.line>5 then
+		if mob_collision_blocked(togo) and mob.line>5 then
 				mob.xspeed = love.math.random (-10,10)/5
 				mob.yspeed = love.math.random (-10,10)/5
 				mob.line = 0
@@ -1478,7 +1483,7 @@ function mob_invader (mob,id)
 				proj = mob.proj
 			}
 
-			table.insert(proj,m)
+			proj[next_numeric_id(proj)] = m
 		end
 
 		mob.dir = mob.dir or 'right'
@@ -1835,9 +1840,9 @@ function mob_frostie (mob,id)
 										m.light = projes[mob.proj].light
 									end
 
-									table.insert(proj,m)
-									table.insert(proj,m2)
-									table.insert(proj,m3)
+									proj[next_numeric_id(proj)] = m
+									proj[next_numeric_id(proj)] = m2
+									proj[next_numeric_id(proj)] = m3
 
 
 							end
@@ -2352,7 +2357,7 @@ function mob_ameba (mob,id)
 			mob.y = mob.y + math.max(ystep,togo.up*-1)
 		end
 
-		if (togo.right*togo.down*togo.left*togo.right) == 0 and mob.line>5 then
+		if mob_collision_blocked(togo) and mob.line>5 then
 				mob.xspeed = love.math.random (-10,10)/5
 				mob.yspeed = love.math.random (-10,10)/5
 				mob.line = 0
@@ -2960,7 +2965,7 @@ creature[14] = --
 				m.light = projes[mob.proj].light
 			end
 
-			table.insert(proj,m)
+			proj[next_numeric_id(proj)] = m
 
 
 			return
@@ -3026,7 +3031,7 @@ function mob_spinner (mob,id)
 						bounce = {1,1,1,1}
 					}
 
-				table.insert(proj,m)
+				proj[next_numeric_id(proj)] = m
 
 			end
 
@@ -3153,7 +3158,7 @@ function mob_spinner (mob,id)
 					m.light = projes[mob.proj].light
 				end
 
-				table.insert(proj,m)
+				proj[next_numeric_id(proj)] = m
 		end
 
 
@@ -4281,7 +4286,7 @@ function mob_search (x,y,r,id)
 		local dist = math.dist (x,y,v.tx,v.ty)
 		if dist<r then
 			if id==nil then
-				cnt = cnt + #b 
+				cnt = cnt + 1
 			else
 				if v.id == id then
 					cnt = cnt + 1
@@ -4313,7 +4318,7 @@ function mob_restore (x,y)
 
 	for k,v in pairs(b) do
 		mob_upgrade (v)
-		table.insert (mobs,v)
+		mobs[next_numeric_id(mobs)] = v
 	end
 
 	writemap (x,y,nil,'mobs')
@@ -4427,7 +4432,7 @@ end
 
 function mob_create (x,y,id,mode)
 
-	m = tablecopy (creature[id].proto)
+	local m = tablecopy (creature[id].proto)
 	m.id = id
 	m.save = {}
 	m.birth = game.time
@@ -4446,8 +4451,8 @@ function mob_create (x,y,id,mode)
 	ani_new (m, m.type)
 	ani_setstatus (m,m.anidef)
 
-	local w = #mobs+1
-	table.insert (mobs, w, m)
+	local w = next_numeric_id(mobs)
+	mobs[w] = m
 
 	mob_upgrade (mobs[w])
 	return w

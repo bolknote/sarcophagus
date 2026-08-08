@@ -4000,8 +4000,8 @@ onequip = function ()
 end,
 onunequip = function ()
 	pl.slowed = pl.slowed - 0.1
-	pl.stats.heat.maxhp = pl.stats.heat.maxhp + 25
-	pl.stats.heat.hp = pl.stats.heat.hp + 25
+	pl.stats.heat.maxhp = pl.stats.heat.maxhp - 25
+	pl.stats.heat.hp = pl.stats.heat.hp - 25
 end,
 
 }
@@ -4023,8 +4023,8 @@ onequip = function ()
 	pl.stats.heat.hp = pl.stats.heat.hp + 250
 end,
 onunequip = function ()
-	pl.stats.heat.maxhp = pl.stats.heat.maxhp + 250
-	pl.stats.heat.hp = pl.stats.heat.hp + 250
+	pl.stats.heat.maxhp = pl.stats.heat.maxhp - 250
+	pl.stats.heat.hp = pl.stats.heat.hp - 250
 end,
 
 }
@@ -4046,8 +4046,8 @@ onequip = function ()
 	pl.stats.heat.hp = pl.stats.heat.hp + 25
 end,
 onunequip = function ()
-	pl.stats.heat.maxhp = pl.stats.heat.maxhp + 25
-	pl.stats.heat.hp = pl.stats.heat.hp + 25
+	pl.stats.heat.maxhp = pl.stats.heat.maxhp - 25
+	pl.stats.heat.hp = pl.stats.heat.hp - 25
 end,
 
 }
@@ -4073,7 +4073,7 @@ onequip = function ()
 	pl.stats.heat.maxhp = pl.stats.heat.maxhp + 20
 end,
 onunequip = function ()
-	pl.stats.arms.maxhp = pl.stats.arms.maxhp + 25
+	pl.stats.arms.maxhp = pl.stats.arms.maxhp - 25
 	pl.stats.body.maxhp = pl.stats.body.maxhp - 20
 	pl.stats.heat.maxhp = pl.stats.heat.maxhp - 20
 end,
@@ -4114,10 +4114,10 @@ invdie = 0,
 laydie = 0,
 burydie = 0,
 onequip = function ()
-	pl.invsize = pl.invsize + 5
+	inv_resize(5)
 end,
 onunequip = function ()
-	pl.invsize = pl.invsize - 5
+	inv_resize(-5)
 end,
 }
 
@@ -5873,7 +5873,7 @@ onequip = function ()
 	pl.stats.body.maxhp = pl.stats.body.maxhp + 25
 end,
 onunequip = function ()
-	pl.stats.body.maxhp = pl.stats.body.maxhp + 25
+	pl.stats.body.maxhp = pl.stats.body.maxhp - 25
 end,
 
 light = {64,1,1,0.2},
@@ -5899,12 +5899,12 @@ end,
 onequip = function ()
 	pl.stats.water.maxhp = pl.stats.water.maxhp + 25
 	pl.stats.body.maxhp = pl.stats.body.maxhp + 25
-	pl.invsize = pl.invsize + 2
+	inv_resize(2)
 end,
 onunequip = function ()
-	pl.stats.water.maxhp = pl.stats.water.maxhp + 25
-	pl.stats.body.maxhp = pl.stats.body.maxhp + 25
-	pl.invsize = pl.invsize - 2
+	pl.stats.water.maxhp = pl.stats.water.maxhp - 25
+	pl.stats.body.maxhp = pl.stats.body.maxhp - 25
+	inv_resize(-2)
 end,
 
 light = {64,1,1,0.2},
@@ -5974,11 +5974,10 @@ onstruck = function (hp,what)
 end,
 
 onequip = function ()
-	pl.invsize = pl.invsize - 2
-	inv_overflow ()
+	inv_resize(-2)
 end,
 onunequip = function ()
-	pl.invsize = pl.invsize + 2
+	inv_resize(2)
 end,
 
 }
@@ -6498,10 +6497,10 @@ ttb = 1,
 equip = "l",
 onequip = function ()
 	textwall (msg.game[33])
-	pl.invsize = pl.invsize + 7
+	inv_resize(7)
 end,
 onunequip = function ()
-	pl.invsize = pl.invsize - 7
+	inv_resize(-7)
 end,
 }
 
@@ -6575,10 +6574,10 @@ ttb = 0,
 equip = "l",
 onequip = function ()
 	textwall (msg.game[33])
-	pl.invsize = pl.invsize + 5
+	inv_resize(5)
 end,
 onunequip = function ()
-	pl.invsize = pl.invsize - 5
+	inv_resize(-5)
 end,
 }
 
@@ -6590,10 +6589,10 @@ ttb = 0,
 equip = "t",
 onequip = function ()
 	textwall (msg.game[33])
-	pl.invsize = pl.invsize + 3
+	inv_resize(3)
 end,
 onunequip = function ()
-	pl.invsize = pl.invsize - 3
+	inv_resize(-3)
 end,
 }
 

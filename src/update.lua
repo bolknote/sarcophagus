@@ -9,6 +9,13 @@ function mobs_remove_prototypes(active_mobs)
 	return removed
 end
 
+function virtual_cursor_delta(value, direction)
+	local amount = math.abs(tonumber(value) or 1)
+	if amount == 1 then amount = amount * 1.5 end
+	return amount * 8 * direction
+end
+
+
 function love.update(d)
 
 	--love.audio.setVolume(0.1)
@@ -24,19 +31,12 @@ function love.update(d)
 
 
 	--mouse joystick move
-	local s = 8
 
 	local k,a = is_pressed ('kp6')  --right
 	if k then
 		mousemoved_last = 0
 		mousemoved = true
-		a = a or 1
-		--a = a * s
-		if math.abs(a)==1 then
-			a = a * s*1.5
-		else
-			a = a * s
-		end
+		a = virtual_cursor_delta(a, 1)
 
 		local x = love.mouse.getX( )
 		love.mouse.setX(x+a)
@@ -46,13 +46,7 @@ function love.update(d)
 	local k,a = is_pressed ('kp4') --left
 	if k then
 		mousemoved = true
-		a = a or 1
-		
-		if math.abs(a)==1 then
-			a = a * s*1.5
-		else
-			a = a * s
-		end
+		a = virtual_cursor_delta(a, -1)
 
 		local x = love.mouse.getX( )
 		love.mouse.setX(x+a)
@@ -62,13 +56,7 @@ function love.update(d)
 	local k,a = is_pressed ('kp8')  --up
 	if k then
 		mousemoved = true
-		a = a or 1
-		
-		if math.abs(a)==1 then
-			a = a * s*1.5
-		else
-			a = a * s
-		end
+		a = virtual_cursor_delta(a, -1)
 
 		local x = love.mouse.getY( )
 		love.mouse.setY(x+a)
@@ -78,13 +66,7 @@ function love.update(d)
 	local k,a = is_pressed ('kp2')  --down
 	if k then
 		mousemoved = true
-		a = a or 1
-		
-		if math.abs(a)==1 then
-			a = a * s*1.5
-		else
-			a = a * s
-		end
+		a = virtual_cursor_delta(a, 1)
 
 		local x = love.mouse.getY( )
 		love.mouse.setY(x+a)
@@ -926,34 +908,7 @@ proj_update ()
 
 -- inventory ttl
 if game.moved then
-
-	for k,v in pairs(pl.inv) do
-		local d = game.time - v.c
-		--v.t = math.floor (v.t - d * item[v.i].tti)
-		v.t =  (v.t - d * item[v.i].tti)
-
-		
-		v.c = game.time
-
-		if v.t<=0 then
-			
-			local i
-			if item[v.i].oninvdie then 
-				i = item[v.i].oninvdie() 
-			end
-
-			if i==nil then
-				if item[v.i].invdie and item[v.i].invdie~=0 then
-					textwall (msg.game[23],false,{[1] = item[v.i].name, [2] = item[item[v.i].invdie].name})
-					pl.inv[k] = item_make (item[v.i].invdie)
-				else
-					textwall (msg.game[24],false,{[1] = item[v.i].name})
-					inv_remove (k)
-				end
-			end
-		end
-	end
-
+	inv_tick_ttl()
 end
 
 	

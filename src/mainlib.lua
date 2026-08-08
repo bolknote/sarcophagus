@@ -1410,6 +1410,33 @@ function itemstat (i,stat)
 
 end
 
+function tool_damage_per_second(tool)
+	if type(tool) ~= "table" then return 0 end
+
+	local minimum = tonumber(tool.dmgmin)
+	local maximum = tonumber(tool.dmgmax)
+	if minimum == nil and maximum == nil then return 0 end
+
+	minimum = minimum or maximum
+	maximum = maximum or minimum
+	local speed = tonumber(tool.digspeed) or 1
+	if speed <= 0 then speed = 1 end
+
+	return ((minimum + maximum) / 2) / speed
+end
+
+
+function next_numeric_id(values)
+	local maximum = 0
+	for key in pairs(values or {}) do
+		if type(key) == "number" and key > maximum and key == math.floor(key) then
+			maximum = key
+		end
+	end
+	return maximum + 1
+end
+
+
 function inv_itemstat (slot,stat)
 
 	local item = pl.inv[slot]
@@ -1538,12 +1565,73 @@ function item_score_sort (k1,k2)
 end
 
 
-function inv_overflow ()
-	for i = pl.invsize+1, pl.invsize*10 do
-		if pl.inv[i] then
-			inv_ground_add (pl.tx, pl.ty, inv_remove(i))
+function inv_tick_ttl ()
+	local entries = {}
+	for _, value in pairs(pl.inv or {}) do
+		entries[#entries + 1] = value
+	end
+
+	for _, value in ipairs(entries) do
+		local slot
+		for key, current in pairs(pl.inv or {}) do
+			if current == value then
+				slot = key
+				break
+			end
+		end
+
+		local definition = value and item[value.i]
+		if slot and definition then
+			local elapsed = game.time - (value.c or game.time)
+			value.t = (value.t or definition.ttl or 0) - elapsed * (definition.tti or 0)
+			value.c = game.time
+
+			if value.t <= 0 then
+				local handled
+				if definition.oninvdie then
+					handled = definition.oninvdie()
+				end
+
+				if handled == nil then
+					if definition.invdie and definition.invdie ~= 0 then
+						textwall(msg.game[23], false, {
+							[1] = definition.name,
+							[2] = item[definition.invdie].name,
+						})
+						pl.inv[slot] = item_make(definition.invdie)
+					else
+						textwall(msg.game[24], false, { [1] = definition.name })
+						inv_remove(slot)
+					end
+				end
+			end
 		end
 	end
+end
+
+
+function inv_overflow ()
+	local slots = {}
+	for slot in pairs(pl.inv or {}) do
+		if type(slot) == "number" and slot > pl.invsize then
+			slots[#slots + 1] = slot
+		end
+	end
+	table.sort(slots)
+
+	for _, slot in ipairs(slots) do
+		local dropped = inv_remove(slot, { noc = true })
+		if dropped then inv_ground_add(pl.tx, pl.ty, dropped) end
+	end
+	if #slots > 0 then inv_compact() end
+	return #slots
+end
+
+
+function inv_resize(delta)
+	pl.invsize = math.max(0, (pl.invsize or 0) + delta)
+	if delta < 0 then inv_overflow() end
+	return pl.invsize
 end
 
 function inv_show ()
@@ -1580,22 +1668,20 @@ end
 function inv_compact ()
 
 
-	local sel = 0
+	local selected = pl.inv[pl.invselect]
 	local newinv = {}
 
-	if pl.inv[pl.invselect] then
-		sel = pl.inv[pl.invselect].i
-	end
-
 	for i=1,pl.invsize do
-		table.insert (newinv, tabledeepcopy (pl.inv[i]))
+		if pl.inv[i] then
+			newinv[#newinv + 1] = pl.inv[i]
+		end
 	end
 
 	table.sort (newinv,item_score_sort)
 
 	for i=1,pl.invsize do
-		pl.inv[i] = tabledeepcopy (newinv[i])
-		if pl.inv[i] and pl.inv[i].i and pl.inv[i].i==sel then
+		pl.inv[i] = newinv[i]
+		if pl.inv[i] == selected then
 			pl.invselect = i
 		end
 	end
@@ -2364,6 +2450,9 @@ function game_migrate ()
 		pl.disaster[name].cnt = pl.disaster[name].cnt or 0
 	end
 
+	-- Older builds could leave items above invsize after a bag or temporary
+	-- capacity buff was removed. Recover those hidden items onto the ground.
+	inv_overflow()
 	inv_compact ()
 	achi_ini ()
 	pl.stats.faith = pl.stats.faith or {hp = 0, maxhp = 100, lvl = 0, pc = 0, d = 0}

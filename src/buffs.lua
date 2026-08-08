@@ -83,7 +83,7 @@ function buff_tick ()
 
 			if v.ttl<game.time then
 				
-					local onttl = buff[k].on_ttl
+					local onttl = buff[k].on_ttl or buff[k].on_remove
 
 					if onttl then
 						onttl (k)
@@ -93,7 +93,12 @@ function buff_tick ()
 						textwall (msg.game[19],false,{[1] = msg.buff[k].name, [2] = msg.buff[k].desc})
 					end
 
-					pl.buffs[k]=nil
+					-- on_ttl may deliberately refresh the same entry (diarrhoea does
+					-- this while the player is hydrated). Only remove it if it is
+					-- still the expired object and its deadline was not advanced.
+					if pl.buffs[k] == v and v.ttl < game.time then
+						pl.buffs[k]=nil
+					end
 
 				break
 			end
@@ -238,7 +243,9 @@ buff[8] = --dark vision
 	on_start = function ( ... )
 		game.ambient = 0.24
 	end,
-	on_remove = nil,
+	on_remove = function ( ... )
+		game.ambient = nil
+	end,
 	on_ttl = function ( ... )
 		game.ambient = nil
 	end,
@@ -425,6 +432,7 @@ buff[18] = --submerged
 	on_ttl = function ()
 		pl.slowed = pl.slowed + 0.1
 		pl.jumpyslow = pl.jumpyslow + 1.5
+		sound_stop ('splash')
 	end,
 }
 
@@ -504,6 +512,9 @@ buff[22] = --warpaint
 		pl.adddamage = (pl.adddamage or 0) + 1
 		stat_spend ('filth',20)
 	end,
+	on_remove = function ()
+		pl.adddamage = (pl.adddamage or 0) - 1
+	end,
 
 	on_ttl = function ()
 		pl.adddamage = (pl.adddamage or 0) - 1
@@ -566,13 +577,13 @@ buff[25] = --hoarding
 	on_tick = function ( ... )
 	end,
 	on_start = function ()
-		pl.invsize = pl.invsize + 10
+		inv_resize(10)
 	end,
 	on_remove = function ()
-		pl.invsize = pl.invsize - 10
+		inv_resize(-10)
 	end,
 	on_ttl = function (...)
-		pl.invsize = pl.invsize - 10
+		inv_resize(-10)
 	end,
 	sound = 39
 
@@ -619,4 +630,3 @@ buff[27] = --bad food
 	cnt = 1
 
 }
-
