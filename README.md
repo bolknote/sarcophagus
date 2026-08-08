@@ -110,6 +110,20 @@ love /absolute/path/to/Sarcophagus
 
 During modernization, the verified target runtime is LÖVE 11.5 with its bundled LuaJIT. A separate Lua installation is not required.
 
+Run the automated compatibility checks:
+
+```sh
+./scripts/test.sh
+```
+
+Build a release-mode `.love` archive with a pre-generated sprite atlas:
+
+```sh
+./scripts/build-love.sh
+```
+
+The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the isolated runtime under `.tools/` by default; set `LOVE_BIN` to use another LÖVE 11.5 executable.
+
 ## Project layout
 
 | Path | Purpose |
@@ -240,6 +254,20 @@ love /абсолютный/путь/к/Sarcophagus
 ```
 
 Целевой и уже проверенный рантайм модернизированной версии — LÖVE 11.5 со встроенным LuaJIT. Отдельно устанавливать Lua не требуется.
+
+Для запуска автоматических проверок совместимости:
+
+```sh
+./scripts/test.sh
+```
+
+Для сборки release-архива `.love` с заранее подготовленным атласом спрайтов:
+
+```sh
+./scripts/build-love.sh
+```
+
+Результат сохраняется в `dist/Sarcophagus.love`. По умолчанию оба сценария используют изолированный runtime из `.tools/`; другой исполняемый файл LÖVE 11.5 можно указать через `LOVE_BIN`.
 
 ## Структура проекта
 
