@@ -54,6 +54,16 @@ end
 
 --A aB bC cD dE eF fG gH hI iJ jK kL lM mN nO oP pQ qR rS sT tU uV vW wX xY yZ z
 
+	function diet_tags_text (diet)
+		local labels = {}
+		local localized = msg.gui.diet.tags or {}
+		for _, tag in ipairs(diet or {}) do
+			labels[#labels + 1] = "#"..(localized[tag] or tag)
+		end
+		if #labels == 0 then return "" end
+		return " {#d87644ff}("..table.concat(labels, ", ")..")"
+	end
+
 	function diet_info (sel,wm)
 
 		wm = wm or 1
@@ -74,11 +84,7 @@ end
 			sqd = "= {#63c74dff}"..string.rep ("■",sq).."{#ffffffff} "
 		end
 
-		local tags = ""
-		if item[sel.i].diet then
-			tags = table.concat(item[sel.i].diet, ",")
-			tags = " {#d87644ff}(#"..tags..")"
-		end
+		local tags = diet_tags_text(item[sel.i].diet)
 
 		local multitxt = ''
 
@@ -1078,4 +1084,3 @@ function draw_cols()
 		love.graphics.rectangle ('line', v.x-vi.x,v.y - vi.y, v.w-v.x, v.h - v.y)
 	end
 end
-

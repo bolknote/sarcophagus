@@ -707,6 +707,11 @@ local function validate_display()
 		local expected_smash_tag = language == "ru" and "#дробление" or "#smash"
 		assert(craft_tool_tag("smash") == expected_smash_tag,
 			language .. " crafting tool tag is invalid")
+		local expected_diet_tags = language == "ru"
+			and " {#d87644ff}(#экзотика, #заморозка, #сахар)"
+			or " {#d87644ff}(#exotic, #freezable, #sugar)"
+		assert(diet_tags_text({ "exotic", "freezable", "sugar" }) == expected_diet_tags,
+			language .. " dietary tags are not localized")
 		local top = telltime(0) .. " †0"
 		local location = message(msg.ui.location, {[1] = 0, [2] = 0})
 		local bottom = msg.gui[38] .. "0]──[" .. location .. "]"
