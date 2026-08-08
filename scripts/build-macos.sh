@@ -5,6 +5,7 @@ set -euo pipefail
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 version="$(tr -d '[:space:]' < "$project_root/version.txt")"
+macos_arch="${MACOS_ARCH:-universal}"
 love_archive_override="${LOVE_ARCHIVE:-}"
 love_archive="${love_archive_override:-$project_root/dist/Sarcophagus.love}"
 love_app="${LOVE_APP:-$project_root/.tools/love-11.5/runtime/love.app}"
@@ -15,15 +16,23 @@ icon_source="$project_root/packaging/macos/Sarcophagus.icns"
 build_directory="$project_root/build/native/macos"
 application="$build_directory/Sarcophagus.app"
 distribution_directory="$project_root/dist"
-package="$distribution_directory/Sarcophagus-macos-universal-$version.zip"
+package="$distribution_directory/Sarcophagus-macos-$macos_arch-$version.zip"
 plist_buddy="/usr/libexec/PlistBuddy"
+
+case "$macos_arch" in
+    universal | arm64 | x86_64) ;;
+    *)
+        echo "MACOS_ARCH must be universal, arm64, or x86_64: $macos_arch" >&2
+        exit 1
+        ;;
+esac
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "The macOS package must be built on macOS." >&2
     exit 1
 fi
 
-for tool in codesign ditto plutil spctl unzip xcrun zip; do
+for tool in codesign ditto lipo plutil spctl unzip xcrun zip; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Required macOS tool is missing: $tool" >&2
         exit 1
@@ -65,7 +74,11 @@ mkdir -p "$build_directory" "$distribution_directory"
 find "$build_directory" -mindepth 1 -delete
 rm -f "$package"
 
-ditto "$love_app" "$application"
+if [[ "$macos_arch" == "universal" ]]; then
+    ditto "$love_app" "$application"
+else
+    ditto --arch "$macos_arch" "$love_app" "$application"
+fi
 cp "$love_archive" "$application/Contents/Resources/Sarcophagus.love"
 if ! cmp -s "$love_archive" "$application/Contents/Resources/Sarcophagus.love"; then
     echo "Embedded .love archive failed its checksum verification." >&2
@@ -77,6 +90,19 @@ rm -f \
     "$application/Contents/Resources/GameIcon.icns" \
     "$application/Contents/Resources/OS X AppIcon.icns"
 cp "$icon_source" "$application/Contents/Resources/Sarcophagus.icns"
+
+# The official LÖVE SDK bundle contains C/C++ headers for framework consumers.
+# A packaged game only loads the framework binaries, so shipping those headers
+# wastes several megabytes without providing any runtime functionality.
+while IFS= read -r headers_directory; do
+    find "$headers_directory" -mindepth 1 -delete
+    rmdir "$headers_directory"
+done < <(find "$application/Contents/Frameworks" -type d -name Headers -prune)
+find "$application/Contents/Frameworks" -type l -name Headers -delete
+if find "$application/Contents/Frameworks" -name Headers -print -quit | grep -q .; then
+    echo "Packaged macOS app still contains framework headers." >&2
+    exit 1
+fi
 
 info_plist="$application/Contents/Info.plist"
 "$plist_buddy" -c "Set :CFBundleExecutable Sarcophagus" "$info_plist"
@@ -164,6 +190,23 @@ if unzip -Z1 "$package" | grep -Eq '(^__MACOSX/|(^|/)\._)'; then
     exit 1
 fi
 codesign --verify --deep --strict "$verification_directory/Sarcophagus.app"
+if find "$verification_directory/Sarcophagus.app/Contents/Frameworks" \
+    -name Headers -print -quit | grep -q .; then
+    echo "Packaged macOS ZIP still contains framework headers." >&2
+    exit 1
+fi
+if [[ "$macos_arch" != "universal" ]]; then
+    while IFS= read -r candidate; do
+        if architectures="$(lipo -archs "$candidate" 2>/dev/null)" && \
+            [[ "$architectures" != "$macos_arch" ]]; then
+            echo "Unexpected architectures in $candidate: $architectures" >&2
+            exit 1
+        fi
+    done < <(find \
+        "$verification_directory/Sarcophagus.app/Contents/MacOS" \
+        "$verification_directory/Sarcophagus.app/Contents/Frameworks" \
+        -type f)
+fi
 cmp -s \
     "$love_archive" \
     "$verification_directory/Sarcophagus.app/Contents/Resources/Sarcophagus.love"
@@ -190,3 +233,5 @@ find "$verification_directory" -mindepth 1 -delete
 rmdir "$verification_directory"
 
 shasum -a 256 "$package"
+package_bytes="$(stat -f '%z' "$package")"
+echo "Package size: $package_bytes bytes ($macos_arch)"

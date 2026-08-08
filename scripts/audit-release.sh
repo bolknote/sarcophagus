@@ -6,6 +6,7 @@ script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 manifest="$script_directory/release-manifest.txt"
 archive="${1:-$project_root/dist/Sarcophagus.love}"
+max_archive_bytes="${MAX_LOVE_ARCHIVE_BYTES:-12582912}"
 expected_files="$(mktemp)"
 archive_files="$(mktemp)"
 
@@ -25,6 +26,11 @@ if [[ ! -f "$manifest" ]]; then
     exit 1
 fi
 
+if [[ ! "$max_archive_bytes" =~ ^[0-9]+$ ]] || [[ "$max_archive_bytes" == "0" ]]; then
+    echo "MAX_LOVE_ARCHIVE_BYTES must be a positive integer: $max_archive_bytes" >&2
+    exit 1
+fi
+
 {
     LC_ALL=C sort -u "$manifest"
     printf '%s\n' quad.png quad.table release_config.lua
@@ -40,4 +46,9 @@ fi
 
 file_count="$(wc -l < "$archive_files" | tr -d ' ')"
 archive_bytes="$(stat -f '%z' "$archive" 2>/dev/null || stat -c '%s' "$archive")"
-echo "SARCOPHAGUS_RELEASE_AUDIT_OK files=$file_count bytes=$archive_bytes"
+if (( archive_bytes > max_archive_bytes )); then
+    echo "Release archive is too large: $archive_bytes bytes (limit: $max_archive_bytes)." >&2
+    echo "Review large assets or override MAX_LOVE_ARCHIVE_BYTES intentionally." >&2
+    exit 1
+fi
+echo "SARCOPHAGUS_RELEASE_AUDIT_OK files=$file_count bytes=$archive_bytes limit=$max_archive_bytes"

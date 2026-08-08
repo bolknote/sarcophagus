@@ -216,41 +216,53 @@ def lua_key(component: object) -> str:
     return "[" + json.dumps(str(component), ensure_ascii=False) + "]"
 
 
-def lua_path(path: list[object]) -> str:
-    return "msg" + "".join(lua_key(component) for component in path)
+def build_locale_tree(
+    entries: list[dict[str, object]], translations: dict[str, str]
+) -> dict[object, object]:
+    root: dict[object, object] = {}
+    for entry in entries:
+        path = entry["path"]
+        assert isinstance(path, list) and path
+        node = root
+        for component in path[:-1]:
+            child = node.setdefault(component, {})
+            if not isinstance(child, dict):
+                raise RuntimeError(f"locale path collides with a string: {path!r}")
+            node = child
+
+        leaf = path[-1]
+        if leaf in node:
+            raise RuntimeError(f"duplicate locale path: {path!r}")
+        node[leaf] = translations[path_id(path)]
+    return root
+
+
+def render_table(table: dict[object, object], depth: int = 0) -> list[str]:
+    indentation = "\t" * depth
+    child_indentation = "\t" * (depth + 1)
+    lines = ["{"]
+    for key, value in table.items():
+        prefix = f"{child_indentation}{lua_key(key)} = "
+        if isinstance(value, dict):
+            nested = render_table(value, depth + 1)
+            lines.append(prefix + nested[0])
+            lines.extend(nested[1:-1])
+            lines.append(nested[-1] + ",")
+        else:
+            assert isinstance(value, str)
+            lines.append(prefix + json.dumps(value, ensure_ascii=False) + ",")
+    lines.append(indentation + "}")
+    return lines
 
 
 def render_locale(entries: list[dict[str, object]], translations: dict[str, str]) -> str:
-    parent_paths: set[str] = set()
-    parents: list[list[object]] = []
-    for entry in entries:
-        path = entry["path"]
-        assert isinstance(path, list)
-        for depth in range(1, len(path)):
-            parent = path[:depth]
-            identifier = path_id(parent)
-            if identifier not in parent_paths:
-                parent_paths.add(identifier)
-                parents.append(parent)
-
+    table_lines = render_table(build_locale_tree(entries, translations))
     lines = [
         "-- Complete Russian overlay for src/locales/en.lua.",
         "-- Machine-assisted draft with reviewed corrections from scripts/ru_editorial_overrides.py.",
-        "local msg = {}",
-        "",
+        "local msg = " + table_lines[0],
     ]
-    for parent in parents:
-        lines.append(f"{lua_path(parent)} = {{}}")
-    lines.append("")
-
-    for entry in entries:
-        path = entry["path"]
-        assert isinstance(path, list)
-        identifier = path_id(path)
-        value = translations[identifier]
-        encoded = json.dumps(value, ensure_ascii=False)
-        lines.append(f"{lua_path(path)} = {encoded}")
-
+    lines.extend(table_lines[1:])
     lines.extend(["", "return msg", ""])
     return "\n".join(lines)
 

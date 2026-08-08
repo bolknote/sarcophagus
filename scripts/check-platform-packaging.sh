@@ -174,6 +174,16 @@ for macos_archive_marker in \
         exit 1
     fi
 done
+for macos_size_marker in \
+    'macos_arch="${MACOS_ARCH:-universal}"' \
+    'ditto --arch "$macos_arch"' \
+    'type d -name Headers -prune' \
+    'Package size:'; do
+    if ! grep -Fq "$macos_size_marker" "$macos_builder"; then
+        echo "macOS builder is missing size optimization: $macos_size_marker" >&2
+        exit 1
+    fi
+done
 for macos_zip_marker in \
     'create_package' \
     '/usr/bin/zip -9 -q -r -y -X' \

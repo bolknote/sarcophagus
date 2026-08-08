@@ -200,6 +200,10 @@ The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the i
 
 The release builder serializes atlas metadata with sorted keys, normalizes file times through `SOURCE_DATE_EPOCH`, fixes ZIP entry order and strips host-specific ZIP extras. Repeated builds from the same source therefore produce the same `.love` SHA-256; the Linux workflow verifies this by building twice and comparing the archives byte for byte.
 
+The release audit also enforces a 12 MiB `.love` size budget so accidental large
+assets cannot enter every platform package unnoticed. Set
+`MAX_LOVE_ARCHIVE_BYTES` only when deliberately raising that limit.
+
 ### Native packages
 
 Build the universal Intel/Apple Silicon macOS app on macOS:
@@ -209,6 +213,15 @@ Build the universal Intel/Apple Silicon macOS app on macOS:
 ```
 
 The macOS command rebuilds `dist/Sarcophagus.love` first, so an older archive cannot silently enter a new app. Set `LOVE_ARCHIVE=/path/to/game.love` only when packaging an explicitly supplied, already audited archive. The final ZIP preserves executable modes and symlinks but excludes AppleDouble metadata (`__MACOSX/._*`); the extracted app and its code signature are verified again.
+
+The builder removes development-only framework headers from the app. For a
+smaller package intended for one CPU architecture, build either variant
+explicitly (the universal package remains the default):
+
+```sh
+MACOS_ARCH=arm64 ./scripts/build-macos.sh
+MACOS_ARCH=x86_64 ./scripts/build-macos.sh
+```
 
 Without credentials this creates an ad-hoc-signed package for local testing. A public download that opens normally under Gatekeeper must be signed with a **Developer ID Application** certificate and notarized by Apple:
 
@@ -480,6 +493,10 @@ love /абсолютный/путь/к/Sarcophagus
 
 Release-сборщик сериализует метаданные атласа с сортировкой ключей, нормализует время файлов через `SOURCE_DATE_EPOCH`, закрепляет порядок записей ZIP и удаляет host-specific ZIP extras. Поэтому повторные сборки из одинаковых исходников дают один SHA-256 `.love`; Linux workflow проверяет это двумя сборками и побайтовым сравнением архивов.
 
+Release-аудит также ограничивает размер `.love` значением 12 МиБ, чтобы во все
+платформенные пакеты незаметно не попал случайный крупный файл. Переменную
+`MAX_LOVE_ARCHIVE_BYTES` следует менять только при осознанном увеличении лимита.
+
 ### Нативные пакеты
 
 Для сборки универсального приложения macOS (Intel и Apple Silicon) на macOS:
@@ -489,6 +506,15 @@ Release-сборщик сериализует метаданные атласа 
 ```
 
 Перед этим macOS-сценарий сам пересобирает `dist/Sarcophagus.love`, поэтому старый архив не может незаметно попасть в новое приложение. Переменную `LOVE_ARCHIVE=/путь/к/game.love` следует задавать только для явно выбранного и уже проверенного готового архива. Финальный ZIP сохраняет executable-биты и симлинки, но не содержит AppleDouble-мусора `__MACOSX/._*`; распакованное приложение и его подпись проверяются повторно.
+
+Сборщик удаляет из приложения заголовочные файлы frameworks, нужные только для
+разработки. Пакет для одной архитектуры можно сделать заметно меньше; по
+умолчанию по-прежнему собирается универсальный вариант:
+
+```sh
+MACOS_ARCH=arm64 ./scripts/build-macos.sh
+MACOS_ARCH=x86_64 ./scripts/build-macos.sh
+```
 
 Без учётных данных получается пакет с локальной ad-hoc-подписью — он предназначен только для проверки на машине разработчика. Публичную загрузку, которую Gatekeeper открывает штатно, необходимо подписать сертификатом **Developer ID Application** и нотарифицировать у Apple:
 
