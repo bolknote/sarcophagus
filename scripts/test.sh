@@ -23,11 +23,21 @@ if command -v luac >/dev/null 2>&1; then
         -print0)
 fi
 
-SARCOPHAGUS_BUILD_MODE=development \
-SARCOPHAGUS_SMOKE_TEST=load:9 \
+LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
+
+/usr/bin/env -u SARCOPHAGUS_LANGUAGE \
+    SARCOPHAGUS_BUILD_MODE=development \
+    SARCOPHAGUS_SMOKE_TEST=settings \
     "$love_binary" "$project_root"
 
+for language in en ru; do
+    SARCOPHAGUS_BUILD_MODE=development \
+    SARCOPHAGUS_LANGUAGE="$language" \
+    SARCOPHAGUS_SMOKE_TEST=load:9 \
+        "$love_binary" "$project_root"
+done
+
 SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_LANGUAGE=ru \
 SARCOPHAGUS_SMOKE_TEST=mapgen \
     "$love_binary" "$project_root"
-

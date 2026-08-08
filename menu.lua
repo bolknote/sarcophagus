@@ -1,3 +1,13 @@
+local function menu_message(text, replacements)
+	for key, value in pairs(replacements or {}) do
+		local placeholder = "_" .. key .. "_"
+		text = text:gsub(placeholder, function ()
+			return tostring(value)
+		end)
+	end
+	return text
+end
+
 function love.menu_keypressed(key,scan)
 
 	
@@ -13,6 +23,12 @@ function love.menu_keypressed(key,scan)
 		love.keypressed = love.joy_keypressed
 		love.update = love.joy_update
 		love.draw =  love.joy_draw
+	end
+
+	if scan == 'f2' then
+		language_next()
+		game.menu = nil
+		return
 	end
 
 	if scan == 'h' then
@@ -193,8 +209,7 @@ function love.menu_update(d)
 		
 	end
 
-	game.menu = ""
-	game.menu = game.menu.."Pick game slot:\n\n"
+	game.menu = msg.menu.pick_slot
 
 	game.menuani.y = 173+game.savepos*14
 
@@ -211,16 +226,16 @@ function love.menu_update(d)
 	game.menu = game.menu.."{#ffffffff}\n\n"
 
 	if game.files[ game.savepos] ~= "-----------------" then
-		game.menu = game.menu.."Press {#fee761ff}W{#ffffffff},{#fee761ff}S{#ffffffff} to select, {#fee761ff}Enter{#ffffffff} to load a game or {#fee761ff}Backspace+Shift{#ffffffff} to delete."
+		game.menu = game.menu..msg.menu.load_slot
 	else
-		game.menu = game.menu.."Press {#fee761ff}W{#ffffffff},{#fee761ff}S{#ffffffff} to select, {#fee761ff}Enter{#ffffffff} to start a new game."
+		game.menu = game.menu..msg.menu.new_slot
 
 		if game.metasave.inv and #game.metasave.inv>1 then
-			game.menu = game.menu.."\nPress {#fee761ff}L{#ffffffff} to start a new game with „{#63c74dff}legacy support{#ffffffff}“."
+			game.menu = game.menu..msg.menu.legacy
 		end
 	end
 
-	game.menu = game.menu.."\nPress {#fee761ff}Q{#ffffffff} to switch worlds."
+	game.menu = game.menu..msg.menu.switch_worlds
 
 	game.menu = game.menu.."\n\n{#feae34ff}"
 
@@ -231,16 +246,20 @@ function love.menu_update(d)
 	if startgen==nil then
 	game.menu = game.menu.."\n\n\n\n\n"
 	game.menu = game.menu.."{#888888ff}───────────────────────────────────────────\n\n"
-	game.menu = game.menu.."{#ffffffff}Press {#fee761ff}H{#ffffffff} to visit homepage.".."\n"
-	game.menu = game.menu.."{#ffffffff}Press {#fee761ff}O{#ffffffff} to visit discord channel.".."\n"
-	game.menu = game.menu.."{#ffffffff}Press {#fee761ff}C{#ffffffff} to configure keys/joystick.\n(Plug joystick in before running the game).".."\n\n\n"
-	game.menu = game.menu.."{#d87644ff}A game by Dmitry Smirnov [spectator.ru]\n"
+	game.menu = game.menu..msg.menu.homepage
+	game.menu = game.menu..msg.menu.discord
+	game.menu = game.menu..msg.menu.configure
+	game.menu = game.menu..menu_message(msg.menu.language, {[1] = msg.language.name})
+	game.menu = game.menu..msg.menu.author
 	--game.menu = game.menu.."{#aaaaaaff}Version "..game_version.." (latest is "..server_version..")\n"
 	
 	if server_version~=game_version and server_version~="" then
-		game.menu = game.menu.."{#aaaaaaff}Version "..game_version.." {#fee761ff}\n\n» "..server_version.." is available! «\n"
+		game.menu = game.menu..menu_message(msg.menu.update, {
+			[1] = game_version,
+			[2] = server_version,
+		})
 	else
-		game.menu = game.menu.."{#aaaaaaff}Version "..game_version.."\n"
+		game.menu = game.menu..menu_message(msg.menu.version, {[1] = game_version})
 	end
 	
 	else
@@ -400,7 +419,7 @@ function love.menu_draw()
 	--love.graphics.printf(text_color("{#be4a2fff}Sarcophagus\n{#5a6988ff}"), 40, 30,700)
 
 	love.graphics.setFont(font2)
-	love.graphics.printf(text_color("{#3a4466ff}— from the Greek sarx meaning “flesh”, and phagein - “to eat”{#ffffffff}"), 35, 105,700)
+	love.graphics.printf(text_color(msg.menu.etymology), 35, 105,700)
 	
 
 	love.graphics.setFont(font)
@@ -434,4 +453,3 @@ function love.menu_draw()
 
 
 end
-

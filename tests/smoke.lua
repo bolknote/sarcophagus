@@ -25,8 +25,9 @@ local function validate_loaded_game(slot)
     assert(type(mobs) == "table", "mob state is missing")
 
     finish(0, (
-        "mode=load slot=%d world_rows=%d inventory=%d mobs=%d version=%s"
+        "mode=load language=%s slot=%d world_rows=%d inventory=%d mobs=%d version=%s"
     ):format(
+		LANGUAGE,
         slot,
         table_size(world),
         table_size(pl.inv),
@@ -54,6 +55,35 @@ local function export_atlas()
     finish(0, (
         "mode=atlas quad_png_bytes=%d quad_table_bytes=%d"
     ):format(exported["quad.png"], exported["quad.table"]))
+end
+
+local function validate_settings()
+    local original_identity = love.filesystem.getIdentity()
+    local original_language = LANGUAGE
+    local test_identity = "sarcophagus-settings-smoke"
+    love.filesystem.setIdentity(test_identity)
+    love.filesystem.remove("settings.json")
+
+    local ok, result = pcall(function()
+        language_set("en", false)
+        language_next()
+        assert(LANGUAGE == "ru", "language switch did not activate Russian")
+        assert(msg.menu.pick_slot == "Выберите слот игры:\n\n", "Russian menu was not activated")
+
+        local loaded = SETTINGS_STORE.load()
+        assert(loaded.language == "ru", "settings language was not restored")
+        return loaded.language
+    end)
+
+    language_set(original_language, false)
+    love.filesystem.remove("settings.json")
+    love.filesystem.setIdentity(original_identity)
+
+    if not ok then
+        error(result)
+    end
+
+    finish(0, "mode=settings language=" .. result)
 end
 
 local function begin_map_generation_test()
@@ -122,6 +152,24 @@ function smoke.install(specification)
     local original_load = love.load
 
     love.load = function(...)
+        if mode == "locales" then
+            local ok, report = require("tests.locale_validator").validate()
+            if ok then
+                finish(0, "mode=locales " .. report)
+            else
+                finish(1, "mode=locales " .. report)
+            end
+            return
+        end
+
+        if mode == "settings" then
+            local ok, err = pcall(validate_settings)
+            if not ok then
+                finish(1, "mode=settings " .. tostring(err))
+            end
+            return
+        end
+
         original_load(...)
 
         if mode == "mapgen" then

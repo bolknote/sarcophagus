@@ -23,6 +23,8 @@ if [[ ! -x "$love_binary" ]]; then
     exit 1
 fi
 
+LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
+
 mkdir -p "$generated_directory" "$staging_directory" "$distribution_directory"
 find "$generated_directory" -mindepth 1 -delete
 find "$staging_directory" -mindepth 1 -delete
@@ -49,7 +51,7 @@ rsync -a \
     --exclude '/moving_editor.lua' \
     --exclude '/lurker.lua' \
     --exclude '/lume.lua' \
-    --exclude '/msg_ru.lua' \
+    --exclude '/locales/ru_legacy.lua' \
     --exclude '/texture.lua' \
     --exclude '/sarcophagous.sublime-project' \
     --exclude '/sarcophagous.sublime-workspace' \
@@ -83,7 +85,7 @@ make_archive "$release_archive"
 rm -f "$smoke_archive"
 
 if /usr/bin/unzip -Z1 "$release_archive" | \
-    grep -E '(^|/)(gr|tests|docs|scripts|\.git)(/|$)|(^|/)(9\.sav|lurker\.lua|moving_editor\.lua)$' >/dev/null; then
+    grep -E '(^|/)(gr|tests|docs|scripts|\.git)(/|$)|(^|/)(9\.sav|lurker\.lua|moving_editor\.lua|ru_legacy\.lua)$' >/dev/null; then
     echo "Release archive contains development-only files" >&2
     exit 1
 fi

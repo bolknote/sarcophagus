@@ -1,4 +1,4 @@
-msg = {}
+local msg = {}
 
 msg.game = {
 [1] = '{#3e8948ff}Game saved',
@@ -161,3 +161,5 @@ msg.stone[52] = { name = 'Hi-tech stuff', }
 msg.stone[53] = { name = 'Mob spawner', }
 msg.stone[54] = { name = 'Base brick', }
 msg.stone[55] = { name = 'Fire', }
+
+return msg

@@ -110,10 +110,27 @@ love /absolute/path/to/Sarcophagus
 
 During modernization, the verified target runtime is LÖVE 11.5 with its bundled LuaJIT. A separate Lua installation is not required.
 
+## Language
+
+English is the complete fallback locale. Russian is being translated incrementally; untranslated text remains available in English instead of breaking the game.
+
+- Press `F2` on the start screen to switch languages.
+- Choose **Language** in the in-game `Esc` menu to switch while playing.
+- The choice is stored in `settings.json`, separately from the nine save slots.
+- On first launch, the game uses a supported operating-system language and otherwise falls back to English.
+
+For a deterministic development launch, set `SARCOPHAGUS_LANGUAGE=en` or `SARCOPHAGUS_LANGUAGE=ru`.
+
 Run the automated compatibility checks:
 
 ```sh
 ./scripts/test.sh
+```
+
+Validate the localization overlay separately:
+
+```sh
+./scripts/check-locales.sh
 ```
 
 Build a release-mode `.love` archive with a pre-generated sprite atlas:
@@ -134,8 +151,12 @@ The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the i
 | `stones.lua` | Blocks, plants and structures |
 | `craft.lua` | Crafting system and recipes |
 | `mobs_ai.lua` | Creatures and AI |
-| `msg.lua` | Original English game text |
-| `msg_ru.lua` | Incomplete legacy Russian translation |
+| `msg.lua` | Localization bootstrap and language switching |
+| `i18n.lua` | Deep merge and English fallback |
+| `settings.lua` | Language settings independent of save slots |
+| `locales/en.lua` | Complete English text |
+| `locales/ru.lua` | Active incremental Russian translation |
+| `locales/ru_legacy.lua` | Preserved old Russian draft; excluded from releases |
 | `gr/` | Source sprite images |
 | `sound/` | Sound and music assets |
 | `maps/` | Map chunks used by world generation |
@@ -255,10 +276,27 @@ love /абсолютный/путь/к/Sarcophagus
 
 Целевой и уже проверенный рантайм модернизированной версии — LÖVE 11.5 со встроенным LuaJIT. Отдельно устанавливать Lua не требуется.
 
+## Язык
+
+Английская локаль полная и используется как fallback. Русский перевод добавляется постепенно: пока строка не переведена, игра безопасно показывает её по-английски.
+
+- На стартовом экране язык переключается клавишей `F2`.
+- Во время игры язык можно сменить через пункт **Язык** в меню `Esc`.
+- Выбор хранится в `settings.json` отдельно от девяти игровых слотов.
+- При первом запуске используется поддерживаемый язык операционной системы, иначе — английский.
+
+Для детерминированного запуска при разработке можно задать `SARCOPHAGUS_LANGUAGE=en` или `SARCOPHAGUS_LANGUAGE=ru`.
+
 Для запуска автоматических проверок совместимости:
 
 ```sh
 ./scripts/test.sh
+```
+
+Для отдельной проверки структуры локализаций:
+
+```sh
+./scripts/check-locales.sh
 ```
 
 Для сборки release-архива `.love` с заранее подготовленным атласом спрайтов:
@@ -279,8 +317,12 @@ love /абсолютный/путь/к/Sarcophagus
 | `stones.lua` | Блоки, растения и сооружения |
 | `craft.lua` | Крафт и рецепты |
 | `mobs_ai.lua` | Существа и искусственный интеллект |
-| `msg.lua` | Исходные английские тексты |
-| `msg_ru.lua` | Незавершённый старый русский перевод |
+| `msg.lua` | Инициализация локализации и переключение языка |
+| `i18n.lua` | Рекурсивное объединение и английский fallback |
+| `settings.lua` | Настройка языка независимо от игровых слотов |
+| `locales/en.lua` | Полный английский текст |
+| `locales/ru.lua` | Активный пополняемый русский перевод |
+| `locales/ru_legacy.lua` | Сохранённый старый черновик; не входит в релиз |
 | `gr/` | Исходные изображения спрайтов |
 | `sound/` | Звуки и музыка |
 | `maps/` | Фрагменты карты для генератора мира |

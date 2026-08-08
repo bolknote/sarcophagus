@@ -80,6 +80,13 @@ function esc_menu ()
 		end
 		},
 
+		[12] = {
+		type = 'language',
+		f = function ()
+			language_next()
+		end
+		},
+
 	
 	}
 
@@ -152,9 +159,17 @@ function esc_menu_draw ()
 			
 			end
 
+			if escmenu[i].type == 'language' then
+				str = str.."    "
+			end
+
 		end
 
-		str = str..v
+		if escmenu[i] and escmenu[i].type == 'language' then
+			str = str..message(v, {[1] = msg.language.name})
+		else
+			str = str..v
+		end
 		if v == "" then str = str.."{#262b44ff}───────────────────────" end
 
 	
