@@ -357,9 +357,47 @@ end
 function read_screenshot(n)
 	if love.filesystem.getInfo(n .. ".png") then
 		screenshot = love.graphics.newImage(n .. ".png")
+		-- Save previews are resized by a non-integer factor in the menu. Linear
+		-- sampling keeps Retina text and one-pixel UI lines intact when reduced.
+		screenshot:setFilter("linear", "linear")
 	else
 		screenshot = nil
 	end
+end
+
+function save_preview_layout(
+	image_width,
+	image_height,
+	area_x,
+	area_y,
+	area_width,
+	area_height,
+	dpi_scale
+)
+	if image_width <= 0 or image_height <= 0
+		or area_width <= 0 or area_height <= 0 then
+		return nil
+	end
+
+	dpi_scale = math.max(1, dpi_scale or 1)
+	local fit_scale = math.min(
+		area_width / image_width,
+		area_height / image_height
+	)
+	-- A PNG loaded from disk has dpiscale=1 even when captureScreenshot wrote
+	-- Retina backing pixels. Never enlarge one source pixel beyond one output
+	-- pixel; old low-resolution save previews remain smaller instead of blurry.
+	local scale = math.min(fit_scale, 1 / dpi_scale)
+	local width = image_width * scale
+	local height = image_height * scale
+
+	return {
+		x = area_x + (area_width - width) / 2,
+		y = area_y + (area_height - height) / 2,
+		width = width,
+		height = height,
+		scale = scale,
+	}
 end
 
 local function initialize_menu()
@@ -434,7 +472,28 @@ end
 
 function love.menu_draw()
 	if screenshot and not startgen then
-		love.graphics.draw(screenshot, 700, 0)
+		local preview_x = 700
+		local image_width, image_height = screenshot:getPixelDimensions()
+		local preview = save_preview_layout(
+			image_width,
+			image_height,
+			preview_x,
+			0,
+			screen.width - preview_x,
+			screen.height,
+			love.graphics.getDPIScale()
+		)
+		if preview then
+			love.graphics.setColor(1, 1, 1, 1)
+			love.graphics.draw(
+				screenshot,
+				math.floor(preview.x),
+				math.floor(preview.y),
+				0,
+				preview.scale,
+				preview.scale
+			)
+		end
 	end
 
 	love.graphics.setColor(0, 0, 0, 0.9)

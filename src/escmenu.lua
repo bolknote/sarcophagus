@@ -197,7 +197,13 @@ end
 
 
 
+function normalize_esc_menu_key(key, scancode)
+	return normalize_gameplay_key(scancode or key, false)
+end
+
+
 function esc_menu_keypress (key,s)
+	s = normalize_esc_menu_key(key, s)
 	
 	local max = #msg.escmenu
 

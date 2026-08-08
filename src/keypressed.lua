@@ -360,6 +360,20 @@ end
 
 
 
+local arrow_movement = {
+	up = "w",
+	down = "s",
+	left = "a",
+	right = "d",
+}
+
+function normalize_gameplay_key(key, developer_arrow)
+	if arrow_movement[key] and not developer_arrow then
+		return arrow_movement[key]
+	end
+	return key
+end
+
 function love.keypressed(key,s)
 
 	--print (s)
@@ -369,21 +383,13 @@ function love.keypressed(key,s)
 	
 	if pl.isdead then return end
 
-	key = s
+	key = s or key
 
-	local arrow_movement = {
-		up = "w",
-		down = "s",
-		left = "a",
-		right = "d",
-	}
 	local developer_arrow = IS_DEVELOPMENT and game.dbg and game.dbg[1] and (
 		love.keyboard.isScancodeDown("lctrl")
 		or love.keyboard.isScancodeDown("rctrl")
 	)
-	if arrow_movement[key] and not developer_arrow then
-		key = arrow_movement[key]
-	end
+	key = normalize_gameplay_key(key, developer_arrow)
 
 	if key == ']' or key == '=' then
 

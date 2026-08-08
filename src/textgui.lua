@@ -270,8 +270,12 @@ end
 
 
 function mystify (txt)
-	txt = string.gsub (txt,'[^ ]','?')
-	return txt
+	local hidden = {}
+	for _, codepoint in utf8.codes(txt) do
+		local character = utf8.char(codepoint)
+		hidden[#hidden + 1] = character == " " and " " or "?"
+	end
+	return table.concat(hidden)
 end
 
 
@@ -1074,6 +1078,5 @@ function draw_cols()
 		love.graphics.rectangle ('line', v.x-vi.x,v.y - vi.y, v.w-v.x, v.h - v.y)
 	end
 end
-
 
 

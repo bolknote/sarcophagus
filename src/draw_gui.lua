@@ -18,6 +18,35 @@ function status_border(top_text, bottom_prefix, body_rows)
 	return border, frame_width
 end
 
+local function longest_visible_line(text)
+	local plain = text:gsub("{#%x+}", "")
+	local longest = 0
+
+	for line in (plain .. "\n"):gmatch("(.-)\n") do
+		longest = math.max(longest, utf8.len(line))
+	end
+
+	return longest
+end
+
+function ground_card_border(top, text, body_rows)
+	top = top:gsub("\n$", "")
+	local top_width = utf8.len(top)
+	-- The card text starts seven cells after its left border. Keep one empty
+	-- cell between the longest visible line and the right border.
+	local frame_width = math.max(top_width, longest_visible_line(text) + 9)
+	local top_without_corner, corner_count = top:gsub("┐$", "")
+	assert(corner_count == 1, "ground card top must end with a right corner")
+
+	local border = top_without_corner
+		.. string.rep("─", frame_width - top_width)
+		.. "┐\n"
+		.. string.rep("│" .. string.rep(" ", frame_width - 2) .. "│\n", body_rows)
+		.. "└" .. string.rep("─", frame_width - 2) .. "┘\n"
+
+	return border, frame_width
+end
+
 function draw_gui ()
 
 -- GUI
@@ -598,16 +627,14 @@ end
 
 
 
-		local border = border..
-				"│                                │\n"..
-		string.rep("│                                │\n",cnt)..
-				"└────────────────────────────────┘\n"
+		local ground_frame_width
+		border, ground_frame_width = ground_card_border(border, str, cnt + 1)
 
 			--love.graphics.setColor (0.05,0.03,0.05, 0.5)
 			love.graphics.setColor (0,0,0,0.9)
 			local hf = gicnt+5
 			
-			love.graphics.rectangle("fill", gx, gy, w*36, h*(4+cnt))
+			love.graphics.rectangle("fill", gx, gy, w*(ground_frame_width+2), h*(4+cnt))
 			love.graphics.setColor (1,1,1,1)
 
 
@@ -619,8 +646,13 @@ end
 
 
 
-			love.graphics.printf(border,gx+w*1,gy+h*0.5,400)
-			love.graphics.printf(text_color (str),gx+w*8,gy+27,400)
+			love.graphics.printf(border,gx+w*1,gy+h*0.5,w*(ground_frame_width+1))
+			love.graphics.printf(
+				text_color(str),
+				gx+w*8,
+				gy+27,
+				w*(ground_frame_width-8)
+			)
 
 	
 		gy = gy + h*(cnt+4)

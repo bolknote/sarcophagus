@@ -119,16 +119,6 @@ sounds[10] =
 	volume = 0.25,
 }
 
--- "weird sand-dunes noise NL 140810_0359.flac" by klankbeeld,
--- https://freesound.org/people/klankbeeld/sounds/249634/ (CC BY 4.0).
-sounds[11] =
-{
-	s = love.audio.newSource("assets/sounds/cave2.ogg",'stream'),
-	loop = 1,
-	autoplay = 1,
-	volume = 0.5,
-}
-
 sounds[12] =
 {
 	s = love.audio.newSource("assets/sounds/spider.ogg",'static'),
@@ -500,11 +490,8 @@ sounds[45] =
 }
 
 function sound_ambient_id ()
-	if game.ambient_sound~=10 and game.ambient_sound~=11 then
-		game.ambient_sound = love.math.random(10,11)
-	end
-
-	return game.ambient_sound
+	game.ambient_sound = 10
+	return 10
 end
 
 function sound_killall ()

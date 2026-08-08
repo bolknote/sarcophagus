@@ -84,7 +84,6 @@ assets/sounds/bounce.ogg
 assets/sounds/bow.ogg
 assets/sounds/bubble.ogg
 assets/sounds/cave.ogg
-assets/sounds/cave2.ogg
 assets/sounds/cello.ogg
 assets/sounds/chicken.ogg
 assets/sounds/click.ogg

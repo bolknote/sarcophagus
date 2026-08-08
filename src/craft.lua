@@ -5293,6 +5293,15 @@ end
 
 
 
+function craft_tool_tag(tool)
+	local localized = msg.gui and msg.gui.item and msg.gui.item[tool]
+	if localized then
+		return (localized:gsub(":%s*$", ""))
+	end
+	return "#"..tool
+end
+
+
 function str_recipie (i)
 	
 	local s_ok =   		"{#e8b796ff}"
@@ -5467,18 +5476,18 @@ function str_recipie (i)
 				if v==1 then
 				
 					if toolfound then
-						str = str.."#"..k
+						str = str..craft_tool_tag(k)
 					else
-						str = str..s_miss.."#"..k..s_n
+						str = str..s_miss..craft_tool_tag(k)..s_n
 						cando = nil
 					end
 
 				else
 
 					if toolfound then
-						str = str.."#"..k..":"..v
+						str = str..craft_tool_tag(k)..":"..v
 					else
-						str = str..s_miss.."#"..k..":"..v..s_n
+						str = str..s_miss..craft_tool_tag(k)..":"..v..s_n
 						cando = nil
 					end
 			

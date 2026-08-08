@@ -22,9 +22,12 @@ local function validate_loaded_game(slot)
     assert(type(pl.inv) == "table", "player inventory is missing")
     assert(type(game) == "table", "game state is missing")
     assert(type(vi) == "table", "camera state is missing")
-    assert(type(mobs) == "table", "mob state is missing")
+	assert(type(mobs) == "table", "mob state is missing")
 
-    local rendered, render_error = pcall(draw_gui)
+	-- The normal draw callback initializes animation-frame globals before it
+	-- delegates to draw_gui; this direct HUD smoke test must do the same.
+	ba1_2 = ba1_2 or 1
+	local rendered, render_error = pcall(draw_gui)
     assert(rendered, "localized HUD render failed: " .. tostring(render_error))
 
     return (
@@ -125,6 +128,13 @@ local function validate_settings()
             "Russian save timestamp format is invalid"
         )
         assert(utf8.len(draw_tool_pad("тест")) == 13, "UTF-8 UI padding is invalid")
+        assert(msg.gui.item.dig == "#копание: ", "Russian tool tags were not activated")
+        for _, key in ipairs({ "dig", "cut", "chop", "smash", "pierce" }) do
+            assert(
+                utf8.len(msg.gui.item[key] .. "5") <= 13,
+                "Russian tool tag is too wide for the item panel: " .. key
+            )
+        end
 
         local loaded = SETTINGS_STORE.load()
         assert(loaded.language == "ru", "settings language was not restored")
@@ -167,10 +177,74 @@ local function validate_display()
 	):format(atlas_width, atlas_height))
 	assert(quad:getDPIScale() == 1, "Retina changed atlas DPI scale")
 	assert(DEFAULT_AMBIENT_LIGHT == 0.10, "default cave visibility changed")
+	assert(normalize_gameplay_key("up", false) == "w",
+		"up arrow is not a gameplay/crafting alternative to W")
+	assert(normalize_gameplay_key("down", false) == "s",
+		"down arrow is not a gameplay/crafting alternative to S")
+	assert(normalize_gameplay_key("up", true) == "up",
+		"Ctrl+arrow no longer reaches development controls")
+	assert(normalize_esc_menu_key("up", "up") == "w",
+		"up arrow is not an Esc-menu alternative to W")
+	assert(normalize_esc_menu_key("down", "down") == "s",
+		"down arrow is not an Esc-menu alternative to S")
+	assert(normalize_esc_menu_key("left", "left") == "a",
+		"left arrow is not an Esc-menu alternative to A")
+	assert(normalize_esc_menu_key("right", "right") == "d",
+		"right arrow is not an Esc-menu alternative to D")
+	assert(mystify("Raw clay") == "??? ????",
+		"ASCII undiscovered-item masking changed")
+	assert(mystify("Сырая глина") == "????? ?????",
+		"Russian undiscovered-item masking is not UTF-8-safe")
+	local original_ambient_sound = game.ambient_sound
+	game.ambient_sound = 11
+	assert(sound_ambient_id() == 10 and game.ambient_sound == 10,
+		"removed cave ambience can still be selected")
+	game.ambient_sound = original_ambient_sound
+	local original_escmenu_position = game.escmenu
+	local original_sound_add = sound_add
+	sound_add = function() end
+	game.escmenu = 4
+	esc_menu_keypress("up", "up")
+	assert(game.escmenu == 2, "up arrow did not move the Esc-menu selection")
+	esc_menu_keypress("down", "down")
+	assert(game.escmenu == 4, "down arrow did not move the Esc-menu selection")
+	game.escmenu = original_escmenu_position
+	sound_add = original_sound_add
+
+	local preview = assert(save_preview_layout(
+		3024,
+		1898,
+		700,
+		0,
+		580,
+		720,
+		2
+	), "Retina save preview layout is missing")
+	assert(preview.width <= 580 and preview.height <= 720,
+		"Retina save preview crosses the menu column")
+	assert(preview.scale * 2 <= 1,
+		"Retina save preview enlarges physical pixels")
+	assert(math.abs(preview.width / preview.height - 3024 / 1898) < 0.001,
+		"Retina save preview changed aspect ratio")
+
+	local legacy_preview = assert(save_preview_layout(
+		640,
+		480,
+		700,
+		0,
+		580,
+		720,
+		2
+	), "legacy save preview layout is missing")
+	assert(legacy_preview.scale == 0.5,
+		"legacy save preview is being upscaled on Retina")
 
 	local original_language = LANGUAGE
 	for _, language in ipairs({"en", "ru"}) do
 		language_set(language, false)
+		local expected_smash_tag = language == "ru" and "#дробление" or "#smash"
+		assert(craft_tool_tag("smash") == expected_smash_tag,
+			language .. " crafting tool tag is invalid")
 		local top = telltime(0) .. " †0"
 		local location = message(msg.ui.location, {[1] = 0, [2] = 0})
 		local bottom = msg.gui[38] .. "0]──[" .. location .. "]"
@@ -183,6 +257,26 @@ local function validate_display()
 			):format(language, row_count, utf8.len(row), frame_width))
 		end
 		assert(row_count == 10, language .. " HUD border row count is invalid")
+
+		local card_text = "{#c0cbdcff}" .. msg.stone[2].name
+			.. "\n{#fee761ff}O]{#ffffffff} " .. msg.gui[24]
+		local card_border, card_width = ground_card_border(
+			"┌────────────────────────────────┐\n",
+			card_text,
+			3
+		)
+		local card_rows = 0
+		for row in card_border:gmatch("([^\n]+)") do
+			card_rows = card_rows + 1
+			assert(utf8.len(row) == card_width, (
+				"%s ground card row %d is %d cells instead of %d"
+			):format(language, card_rows, utf8.len(row), card_width))
+		end
+		assert(card_rows == 5, language .. " ground card row count is invalid")
+		assert(
+			utf8.len(msg.stone[2].name) <= card_width - 9,
+			language .. " ground card title crosses its right border"
+		)
 	end
 	language_set(original_language, false)
 

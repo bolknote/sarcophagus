@@ -332,7 +332,7 @@ msg.craft =
 {
 	[1] = " {#124e89ff}recipes containing {#e8b796ff}_1_{#ffffffff}:\n\n{#8b9bb4ff}  Product ........................[ Reagents (tools) crafting time ]\n\n",
 	[2] = " {#124e89ff}using ground and inventory items:\n\n{#8b9bb4ff}  Product ........................[ Reagents (tools) crafting time ]\n\n",
-	[3] = "\n\n{#ffffffff}{#fee761ff}W]{#ffffffff},{#fee761ff}S]{#ffffffff} to select, {#fee761ff}Enter]{#ffffffff} to craft, {#fee761ff}C]{#ffffffff} to cancel",
+	[3] = "\n\n{#ffffffff}{#fee761ff}W/S{#ffffffff} or {#fee761ff}↑/↓{#ffffffff} to select, {#fee761ff}Enter{#ffffffff} to craft, {#fee761ff}C{#ffffffff} to cancel",
 	requires = " (requires: ",
 
 }

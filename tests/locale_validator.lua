@@ -2,7 +2,8 @@ local validator = {}
 
 local color_pattern = "{#%x+}"
 local format_pattern = "%%[-+#0]*%d*%.?%d*[cdeEfgGiouxXqs]"
-local gameplay_markers = { "#dig", "#cut", "#chop", "#smash", "#pierce", "≈" }
+local literal_markers = { "≈" }
+local english_hashtag_pattern = "#[A-Za-z][A-Za-z0-9_]*"
 
 local function sorted_matches(value, pattern)
 	local matches = {}
@@ -58,10 +59,18 @@ local function validate_string(base, translation, path, errors, warnings)
 		errors[#errors + 1] = path .. ": escaped percent count differs"
 	end
 
-	for _, marker in ipairs(gameplay_markers) do
+	for _, marker in ipairs(literal_markers) do
 		if count_plain(base, marker) ~= count_plain(translation, marker) then
-			errors[#errors + 1] = path .. ": gameplay marker differs: " .. marker
+			errors[#errors + 1] = path .. ": literal marker differs: " .. marker
 		end
+	end
+
+	-- Hashtags are visible gameplay terminology, not runtime markup. English
+	-- identifiers such as #dig must therefore be localized in Russian strings;
+	-- color tags have already been removed before this check.
+	local visible_translation = translation:gsub(color_pattern, "")
+	for hashtag in visible_translation:gmatch(english_hashtag_pattern) do
+		errors[#errors + 1] = path .. ": unlocalized English hashtag: " .. hashtag
 	end
 
 	if count_plain(base, "\n") ~= count_plain(translation, "\n") then
