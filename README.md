@@ -144,6 +144,8 @@ Build a release-mode `.love` archive with a pre-generated sprite atlas:
 
 The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the isolated runtime under `.tools/` by default; set `LOVE_BIN` to use another LÖVE 11.5 executable.
 
+The release builder serializes atlas metadata with sorted keys, normalizes file times through `SOURCE_DATE_EPOCH`, fixes ZIP entry order and strips host-specific ZIP extras. Repeated builds from the same source therefore produce the same `.love` SHA-256; the Linux workflow verifies this by building twice and comparing the archives byte for byte.
+
 ### Native packages
 
 Build the universal Intel/Apple Silicon macOS app on macOS:
@@ -170,6 +172,31 @@ powershell.exe -NoProfile -File scripts\build-windows.ps1
 
 The script downloads the pinned official LÖVE 11.5 runtime, embeds a system-DPI-aware manifest before fusing the game, verifies both the manifest and embedded `.love`, includes the required DLLs and LÖVE license, and creates a ZIP under `dist/`. Users of that package should not need the old Compatibility → High DPI override or `run.bat`.
 
+After `dist/Sarcophagus.love` has been built, create the Linux x86_64 AppImage on an x86_64 Linux host:
+
+```sh
+./scripts/build-linux-appimage.sh
+```
+
+The script downloads the official LÖVE 11.5 AppImage and pinned AppImage tooling, rejects every binary whose SHA-256 differs from the recorded value, fuses the game into the native runner, installs the project desktop entry and icon, then extracts the result again to verify its contents and embedded `.love`. The output is `dist/Sarcophagus-linux-x86_64-0.10.591.AppImage`.
+
+Make a downloaded build executable and launch it directly:
+
+```sh
+chmod +x Sarcophagus-linux-x86_64-0.10.591.AppImage
+./Sarcophagus-linux-x86_64-0.10.591.AppImage
+```
+
+The `Linux AppImage` GitHub Actions workflow runs the complete test suite with the same pinned LÖVE runtime, builds the `.love`, creates the AppImage and publishes it together with a SHA-256 file as a workflow artifact. The packaging procedure follows the [official LÖVE distribution guidance](https://love2d.org/wiki/Game_Distribution) and the [AppImage AppDir specification](https://docs.appimage.org/reference/appdir.html).
+
+All native packages use the same pixel-art source icon at `packaging/icon.png`. The committed macOS Retina `.icns` and multi-size Windows `.ico` can be regenerated on macOS with ImageMagick and `iconutil`:
+
+```sh
+./scripts/generate-platform-icons.sh
+```
+
+Normal package builds use the committed derived icons and do not require those icon-generation tools.
+
 ## Project layout
 
 | Path | Purpose |
@@ -184,6 +211,7 @@ The script downloads the pinned official LÖVE 11.5 runtime, embeds a system-DPI
 | `assets/sounds/` | Runtime sound assets |
 | `assets/sprites/` | Development sprite sources; replaced by the atlas in releases |
 | `archive/` | Legacy code and assets excluded from releases |
+| `packaging/` | Shared icon and platform-specific package metadata |
 | `scripts/` | Tests, exact release manifest, audit and build scripts |
 | `tests/fixtures/9.sav` | Backward-compatibility save fixture |
 | `docs/localization-glossary.md` | Russian terminology and translation style |
@@ -337,6 +365,8 @@ love /абсолютный/путь/к/Sarcophagus
 
 Результат сохраняется в `dist/Sarcophagus.love`. По умолчанию оба сценария используют изолированный runtime из `.tools/`; другой исполняемый файл LÖVE 11.5 можно указать через `LOVE_BIN`.
 
+Release-сборщик сериализует метаданные атласа с сортировкой ключей, нормализует время файлов через `SOURCE_DATE_EPOCH`, закрепляет порядок записей ZIP и удаляет host-specific ZIP extras. Поэтому повторные сборки из одинаковых исходников дают один SHA-256 `.love`; Linux workflow проверяет это двумя сборками и побайтовым сравнением архивов.
+
 ### Нативные пакеты
 
 Для сборки универсального приложения macOS (Intel и Apple Silicon) на macOS:
@@ -363,6 +393,31 @@ powershell.exe -NoProfile -File scripts\build-windows.ps1
 
 Сценарий загружает закреплённый официальный runtime LÖVE 11.5, до встраивания игры добавляет системный DPI-aware manifest, проверяет manifest и вложенный `.love`, прикладывает необходимые DLL и лицензию LÖVE, затем создаёт ZIP в `dist/`. Пользователю такого пакета не должны требоваться прежняя настройка Compatibility → High DPI и `run.bat`.
 
+После сборки `dist/Sarcophagus.love` Linux x86_64 AppImage создаётся на Linux-машине с архитектурой x86_64:
+
+```sh
+./scripts/build-linux-appimage.sh
+```
+
+Сценарий загружает официальный AppImage LÖVE 11.5 и закреплённые инструменты AppImage, отклоняет любой бинарник с несовпадающей SHA-256, встраивает игру в нативный раннер, устанавливает desktop-файл и иконку проекта, а затем повторно извлекает результат и проверяет его состав и вложенный `.love`. Результат сохраняется как `dist/Sarcophagus-linux-x86_64-0.10.591.AppImage`.
+
+Загруженному пакету нужно дать право на запуск:
+
+```sh
+chmod +x Sarcophagus-linux-x86_64-0.10.591.AppImage
+./Sarcophagus-linux-x86_64-0.10.591.AppImage
+```
+
+Workflow `Linux AppImage` в GitHub Actions запускает полный набор тестов с тем же закреплённым LÖVE, собирает `.love` и AppImage и сохраняет AppImage вместе с файлом SHA-256 как артефакт workflow. Схема упаковки следует [официальной инструкции LÖVE](https://love2d.org/wiki/Game_Distribution) и [спецификации AppDir](https://docs.appimage.org/reference/appdir.html).
+
+Все нативные пакеты используют общий пиксельный исходник `packaging/icon.png`. Закреплённые в репозитории Retina-иконку `.icns` для macOS и многоразмерную `.ico` для Windows можно заново получить на macOS при помощи ImageMagick и `iconutil`:
+
+```sh
+./scripts/generate-platform-icons.sh
+```
+
+Обычная сборка пакетов использует уже готовые производные иконки и не требует этих инструментов.
+
 ## Структура проекта
 
 | Путь | Назначение |
@@ -377,6 +432,7 @@ powershell.exe -NoProfile -File scripts\build-windows.ps1
 | `assets/sounds/` | Звуки, используемые игрой |
 | `assets/sprites/` | Исходники спрайтов для разработки; в релизе заменяются атласом |
 | `archive/` | Старый код и ассеты, исключённые из релиза |
+| `packaging/` | Общая иконка и платформенные метаданные пакетов |
 | `scripts/` | Тесты, точный манифест, аудит и сборка релиза |
 | `tests/fixtures/9.sav` | Контрольный сейв для обратной совместимости |
 | `docs/localization-glossary.md` | Терминология и стиль русского перевода |

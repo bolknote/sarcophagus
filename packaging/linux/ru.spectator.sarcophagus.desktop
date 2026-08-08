@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Sarcophagus
+Comment=A demanding pixel-art sandbox survival game
+Exec=Sarcophagus
+Icon=ru.spectator.sarcophagus
+Terminal=false
+Categories=Game;AdventureGame;
+StartupWMClass=Sarcophagus

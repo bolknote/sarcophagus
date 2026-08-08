@@ -2603,10 +2603,14 @@ function game_autosave (name)
 
 end
 
-function table_save (name,a)
+function table_save (name,a,deterministic)
 	local BlobWriter = require('src.BlobWriter')
 	blob = BlobWriter()
-	blob:write(a)
+	if deterministic then
+		blob:writeDeterministic(a)
+	else
+		blob:write(a)
+	end
 	local save = blob:tostring()
 	love.filesystem.write (name, save)
 end
@@ -2833,7 +2837,7 @@ function ini_quad ()
 
 		end
 
-		table_save ('quad.table',quadlist)
+		table_save ('quad.table',quadlist,true)
 
 		love.graphics.setCanvas()
 		local atlas_data = quad:newImageData()

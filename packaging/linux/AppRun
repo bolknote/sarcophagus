@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -eu
+
+if [ -n "${APPDIR:-}" ]; then
+    application_directory="$APPDIR"
+else
+    application_directory="$(dirname "$(readlink -f "$0")")"
+fi
+
+export LD_LIBRARY_PATH="$application_directory/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$application_directory/share:$application_directory/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+if [ -z "${LUA_PATH:-}" ]; then
+    LUA_PATH=";"
+fi
+if [ -z "${LUA_CPATH:-}" ]; then
+    LUA_CPATH=";"
+fi
+export LUA_PATH="$application_directory/share/luajit-2.1/?.lua;$application_directory/share/lua/5.1/?.lua;$LUA_PATH"
+export LUA_CPATH="$application_directory/lib/lua/5.1/?.so;$LUA_CPATH"
+
+exec "$application_directory/bin/Sarcophagus" "$@"

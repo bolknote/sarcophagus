@@ -16,6 +16,7 @@ $loveVersion = "11.5"
 $loveRuntimeUrl = "https://github.com/love2d/love/releases/download/11.5/love-11.5-win64.zip"
 $loveRuntimeSha256 = "ba6e56be2685e53c817749c4a5007f51137136fe5a3ab64920508babc2e74369"
 $manifestSource = Join-Path $projectRoot "packaging/windows/Sarcophagus.exe.manifest"
+$iconSource = Join-Path $projectRoot "packaging/windows/Sarcophagus.ico"
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The Windows package must be built on Windows (PowerShell 5.1 or newer)."
@@ -40,6 +41,9 @@ if (-not (Test-Path -LiteralPath $LoveFile -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $manifestSource -PathType Leaf)) {
     throw "Windows application manifest not found: $manifestSource"
+}
+if (-not (Test-Path -LiteralPath $iconSource -PathType Leaf)) {
+    throw "Windows application icon not found: $iconSource`nRegenerate platform icons with scripts/generate-platform-icons.sh."
 }
 
 function Get-LowercaseSha256([string]$Path) {
@@ -100,7 +104,10 @@ using System.Text;
 
 public static class NativeManifestResource
 {
+    private const int ResourceTypeIcon = 3;
+    private const int ResourceTypeGroupIcon = 14;
     private const int ResourceTypeManifest = 24;
+    private const int ApplicationIconId = 1;
     private const int ApplicationManifestId = 1;
     private const uint LoadLibraryAsDataFile = 0x00000002;
     private const uint LoadLibraryAsImageResource = 0x00000020;
@@ -178,7 +185,21 @@ public static class NativeManifestResource
         return new Win32Exception(Marshal.GetLastWin32Error(), operation);
     }
 
-    private static List<ushort> GetManifestLanguages(string path)
+    private sealed class IconImage
+    {
+        public byte Width;
+        public byte Height;
+        public byte ColorCount;
+        public byte Reserved;
+        public ushort Planes;
+        public ushort BitCount;
+        public byte[] Data;
+    }
+
+    private static List<ushort> GetResourceLanguages(
+        string path,
+        int resourceType,
+        int resourceId)
     {
         IntPtr module = LoadLibraryEx(
             path,
@@ -203,15 +224,15 @@ public static class NativeManifestResource
         {
             IntPtr manifest = FindResource(
                 module,
-                IntegerResource(ApplicationManifestId),
-                IntegerResource(ResourceTypeManifest));
+                IntegerResource(resourceId),
+                IntegerResource(resourceType));
             if (manifest == IntPtr.Zero)
                 return languages;
 
             bool found = EnumResourceLanguages(
                 module,
-                IntegerResource(ResourceTypeManifest),
-                IntegerResource(ApplicationManifestId),
+                IntegerResource(resourceType),
+                IntegerResource(resourceId),
                 callback,
                 IntPtr.Zero);
             if (!found)
@@ -225,11 +246,280 @@ public static class NativeManifestResource
         return languages;
     }
 
+    private static List<IconImage> ReadIconImages(string iconPath)
+    {
+        byte[] icon = File.ReadAllBytes(iconPath);
+        var images = new List<IconImage>();
+        using (var stream = new MemoryStream(icon, false))
+        using (var reader = new BinaryReader(stream))
+        {
+            if (stream.Length < 6 || reader.ReadUInt16() != 0 || reader.ReadUInt16() != 1)
+                throw new InvalidDataException("Invalid ICO header: " + iconPath);
+
+            ushort count = reader.ReadUInt16();
+            if (count == 0 || stream.Length < 6 + count * 16)
+                throw new InvalidDataException("Invalid ICO directory: " + iconPath);
+
+            for (int index = 0; index < count; index++)
+            {
+                var image = new IconImage();
+                image.Width = reader.ReadByte();
+                image.Height = reader.ReadByte();
+                image.ColorCount = reader.ReadByte();
+                image.Reserved = reader.ReadByte();
+                image.Planes = reader.ReadUInt16();
+                image.BitCount = reader.ReadUInt16();
+                uint dataSize = reader.ReadUInt32();
+                uint dataOffset = reader.ReadUInt32();
+
+                if (dataSize == 0 || dataSize > Int32.MaxValue ||
+                    dataOffset > Int32.MaxValue ||
+                    (ulong)dataOffset + dataSize > (ulong)icon.LongLength)
+                {
+                    throw new InvalidDataException("Invalid ICO image range: " + iconPath);
+                }
+
+                image.Data = new byte[(int)dataSize];
+                Buffer.BlockCopy(icon, (int)dataOffset, image.Data, 0, image.Data.Length);
+                images.Add(image);
+            }
+        }
+        return images;
+    }
+
+    private static byte[] BuildGroupIcon(List<IconImage> images)
+    {
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write((ushort)0);
+            writer.Write((ushort)1);
+            writer.Write((ushort)images.Count);
+            for (int index = 0; index < images.Count; index++)
+            {
+                IconImage image = images[index];
+                writer.Write(image.Width);
+                writer.Write(image.Height);
+                writer.Write(image.ColorCount);
+                writer.Write(image.Reserved);
+                writer.Write(image.Planes);
+                writer.Write(image.BitCount);
+                writer.Write((uint)image.Data.Length);
+                writer.Write((ushort)(index + 1));
+            }
+            return stream.ToArray();
+        }
+    }
+
+    private static void UpdateResourceBytes(
+        IntPtr update,
+        int resourceType,
+        int resourceId,
+        byte[] bytes,
+        string operation)
+    {
+        GCHandle pinnedBytes = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        try
+        {
+            if (!UpdateResource(
+                update,
+                IntegerResource(resourceType),
+                IntegerResource(resourceId),
+                0,
+                pinnedBytes.AddrOfPinnedObject(),
+                (uint)bytes.Length))
+            {
+                throw LastError(operation);
+            }
+        }
+        finally
+        {
+            pinnedBytes.Free();
+        }
+    }
+
+    private static byte[] ReadResourceBytes(
+        IntPtr module,
+        int resourceType,
+        int resourceId)
+    {
+        IntPtr resource = FindResource(
+            module,
+            IntegerResource(resourceId),
+            IntegerResource(resourceType));
+        if (resource == IntPtr.Zero)
+            throw LastError("FindResource failed");
+
+        uint size = SizeofResource(module, resource);
+        IntPtr loaded = LoadResource(module, resource);
+        IntPtr data = LockResource(loaded);
+        if (loaded == IntPtr.Zero || data == IntPtr.Zero || size == 0)
+            throw LastError("Loading the resource failed");
+
+        byte[] bytes = new byte[size];
+        Marshal.Copy(data, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    private static bool BytesEqual(byte[] left, byte[] right)
+    {
+        if (left.Length != right.Length)
+            return false;
+        for (int index = 0; index < left.Length; index++)
+        {
+            if (left[index] != right[index])
+                return false;
+        }
+        return true;
+    }
+
+    public static void ReplaceIcon(string executablePath, string iconPath)
+    {
+        string executable = Path.GetFullPath(executablePath);
+        List<IconImage> images = ReadIconImages(iconPath);
+        var iconLanguages = new List<List<ushort>>();
+        for (int index = 0; index < images.Count; index++)
+        {
+            iconLanguages.Add(GetResourceLanguages(
+                executable,
+                ResourceTypeIcon,
+                index + 1));
+        }
+        List<ushort> groupLanguages = GetResourceLanguages(
+            executable,
+            ResourceTypeGroupIcon,
+            ApplicationIconId);
+
+        IntPtr update = BeginUpdateResource(executable, false);
+        if (update == IntPtr.Zero)
+            throw LastError("BeginUpdateResource failed");
+
+        bool completed = false;
+        try
+        {
+            for (int index = 0; index < iconLanguages.Count; index++)
+            {
+                foreach (ushort language in iconLanguages[index])
+                {
+                    if (!UpdateResource(
+                        update,
+                        IntegerResource(ResourceTypeIcon),
+                        IntegerResource(index + 1),
+                        language,
+                        IntPtr.Zero,
+                        0))
+                    {
+                        throw LastError("Deleting an old icon image failed");
+                    }
+                }
+            }
+            foreach (ushort language in groupLanguages)
+            {
+                if (!UpdateResource(
+                    update,
+                    IntegerResource(ResourceTypeGroupIcon),
+                    IntegerResource(ApplicationIconId),
+                    language,
+                    IntPtr.Zero,
+                    0))
+                {
+                    throw LastError("Deleting the old icon group failed");
+                }
+            }
+
+            for (int index = 0; index < images.Count; index++)
+            {
+                UpdateResourceBytes(
+                    update,
+                    ResourceTypeIcon,
+                    index + 1,
+                    images[index].Data,
+                    "Embedding an icon image failed");
+            }
+            UpdateResourceBytes(
+                update,
+                ResourceTypeGroupIcon,
+                ApplicationIconId,
+                BuildGroupIcon(images),
+                "Embedding the icon group failed");
+
+            bool saved = EndUpdateResource(update, false);
+            update = IntPtr.Zero;
+            if (!saved)
+                throw LastError("EndUpdateResource failed");
+            completed = true;
+        }
+        finally
+        {
+            if (!completed && update != IntPtr.Zero)
+                EndUpdateResource(update, true);
+        }
+    }
+
+    public static bool IconMatches(string executablePath, string iconPath)
+    {
+        List<IconImage> expectedImages = ReadIconImages(iconPath);
+        IntPtr module = LoadLibraryEx(
+            Path.GetFullPath(executablePath),
+            IntPtr.Zero,
+            LoadLibraryAsDataFile | LoadLibraryAsImageResource);
+        if (module == IntPtr.Zero)
+            throw LastError("LoadLibraryEx failed");
+
+        try
+        {
+            byte[] group = ReadResourceBytes(
+                module,
+                ResourceTypeGroupIcon,
+                ApplicationIconId);
+            using (var stream = new MemoryStream(group, false))
+            using (var reader = new BinaryReader(stream))
+            {
+                if (stream.Length < 6 || reader.ReadUInt16() != 0 || reader.ReadUInt16() != 1)
+                    return false;
+                ushort count = reader.ReadUInt16();
+                if (count != expectedImages.Count || stream.Length != 6 + count * 14)
+                    return false;
+
+                for (int index = 0; index < count; index++)
+                {
+                    IconImage expected = expectedImages[index];
+                    if (reader.ReadByte() != expected.Width ||
+                        reader.ReadByte() != expected.Height ||
+                        reader.ReadByte() != expected.ColorCount ||
+                        reader.ReadByte() != expected.Reserved ||
+                        reader.ReadUInt16() != expected.Planes ||
+                        reader.ReadUInt16() != expected.BitCount ||
+                        reader.ReadUInt32() != expected.Data.Length)
+                    {
+                        return false;
+                    }
+                    ushort resourceId = reader.ReadUInt16();
+                    if (resourceId != index + 1 ||
+                        !BytesEqual(
+                            ReadResourceBytes(module, ResourceTypeIcon, resourceId),
+                            expected.Data))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            FreeLibrary(module);
+        }
+    }
+
     public static void Replace(string executablePath, string manifestPath)
     {
         string executable = Path.GetFullPath(executablePath);
         byte[] manifest = File.ReadAllBytes(manifestPath);
-        List<ushort> languages = GetManifestLanguages(executable);
+        List<ushort> languages = GetResourceLanguages(
+            executable,
+            ResourceTypeManifest,
+            ApplicationManifestId);
         IntPtr update = BeginUpdateResource(executable, false);
         if (update == IntPtr.Zero)
             throw LastError("BeginUpdateResource failed");
@@ -369,10 +659,14 @@ $manifestText = (Get-Content -LiteralPath $manifestSource -Raw).Replace(
     [Text.UTF8Encoding]::new($false))
 
 [NativeManifestResource]::Replace($runner, $generatedManifest)
+[NativeManifestResource]::ReplaceIcon($runner, $iconSource)
 $embeddedManifest = [NativeManifestResource]::Read($runner)
 if ($embeddedManifest -notmatch '<dpiAware[^>]*>true</dpiAware>' -or
     $embeddedManifest -notmatch '<dpiAwareness[^>]*>system</dpiAwareness>') {
     throw "The DPI-aware application manifest was not embedded correctly."
+}
+if (-not [NativeManifestResource]::IconMatches($runner, $iconSource)) {
+    throw "The Windows application icon was not embedded correctly."
 }
 
 $outputExecutable = Join-Path $packageDirectory "Sarcophagus.exe"
@@ -381,6 +675,9 @@ Join-BinaryFiles @($runner, $LoveFile) $outputExecutable
 
 if ([NativeManifestResource]::Read($outputExecutable) -ne $embeddedManifest) {
     throw "The embedded manifest changed while fusing the game."
+}
+if (-not [NativeManifestResource]::IconMatches($outputExecutable, $iconSource)) {
+    throw "The embedded icon changed while fusing the game."
 }
 if ((Get-TailSha256 $outputExecutable $runnerLength) -ne (Get-LowercaseSha256 $LoveFile)) {
     throw "The embedded .love archive failed its checksum verification."

@@ -13,6 +13,25 @@ distribution_directory="$project_root/dist"
 release_archive="$distribution_directory/Sarcophagus.love"
 release_manifest="$script_directory/release-manifest.txt"
 
+if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+    source_date_epoch="$SOURCE_DATE_EPOCH"
+elif command -v git >/dev/null 2>&1 && \
+    source_date_epoch="$(git -C "$project_root" log -1 --format=%ct 2>/dev/null)" && \
+    [[ -n "$source_date_epoch" ]]; then
+    :
+else
+    source_date_epoch="$(stat -f '%m' "$project_root/version.txt" 2>/dev/null || stat -c '%Y' "$project_root/version.txt")"
+fi
+if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]]; then
+    echo "SOURCE_DATE_EPOCH must be a non-negative integer: $source_date_epoch" >&2
+    exit 1
+fi
+if normalized_timestamp="$(date -u -r "$source_date_epoch" '+%Y%m%d%H%M.%S' 2>/dev/null)"; then
+    :
+else
+    normalized_timestamp="$(date -u -d "@$source_date_epoch" '+%Y%m%d%H%M.%S')"
+fi
+
 if [[ ! -f "$project_root/main.lua" || ! -f "$project_root/version.txt" ]]; then
     echo "Project root validation failed: $project_root" >&2
     exit 1
@@ -61,9 +80,10 @@ cp "$generated_directory/quad.table" "$staging_directory/quad.table"
 make_archive() {
     local target="$1"
     rm -f "$target"
+    find "$staging_directory" -exec touch -h -t "$normalized_timestamp" {} +
     (
         cd "$staging_directory"
-        /usr/bin/zip -9 -q -r "$target" .
+        find . -type f -print | LC_ALL=C sort | /usr/bin/zip -9 -X -q "$target" -@
     )
 }
 

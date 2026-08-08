@@ -249,6 +249,14 @@ local function export_atlas()
     for _, name in ipairs({ "quad.png", "quad.table" }) do
         local data, read_error = love.filesystem.read(name)
         assert(data, "cannot read generated " .. name .. ": " .. tostring(read_error))
+		if name == "quad.table" then
+			local BlobWriter = require("src.BlobWriter")
+			local deterministic = BlobWriter()
+				:writeDeterministic(quadlist)
+				:tostring()
+			assert(data == deterministic,
+				"quad.table was not written with deterministic key ordering")
+		end
 
         local target = assert(io.open(output_directory .. "/" .. name, "wb"))
         assert(target:write(data))
@@ -716,6 +724,25 @@ local function validate_display()
 	ani_setstatus = original_ani_setstatus
 	mob_upgrade = original_mob_upgrade
 
+	local original_skull_mob_create = mob_create
+	local original_skull_textwall = textwall
+	local awakened_skull
+	local awakened_skull_message
+	mob_create = function(x, y, id)
+		awakened_skull = { x = x, y = y, id = id }
+	end
+	textwall = function(message_text)
+		awakened_skull_message = message_text
+	end
+	item[12].ongrounddie(7, 8)
+	assert(awakened_skull and awakened_skull.x == 7
+		and awakened_skull.y == 8 and awakened_skull.id == 12,
+		"expired ground skull did not awaken as a skull mob")
+	assert(awakened_skull_message == msg.item[12].txt[1],
+		"awakened ground skull did not report its localized message")
+	mob_create = original_skull_mob_create
+	textwall = original_skull_textwall
+
 	local original_writemap = writemap
 	local original_maptile = maptile
 	local original_textwall = textwall
@@ -891,6 +918,9 @@ local function validate_display()
 			language .. " seaweed requirement is not localized"
 		)
 		if language == "ru" then
+			assert(msg.item[12].txt[1] ==
+				"Лежащий на земле череп пробуждается.",
+				"awakened ground skull message has a misleading translation")
 			assert(msg.item[281].name == "Памятка об огне и плавке",
 				"fire tutorial item is still presented as a burning fire")
 			assert(msg.item[193].info ==

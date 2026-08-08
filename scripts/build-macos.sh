@@ -10,6 +10,7 @@ love_app="${LOVE_APP:-$project_root/.tools/love-11.5/runtime/love.app}"
 signing_identity="${MACOS_SIGNING_IDENTITY:--}"
 notary_profile="${MACOS_NOTARY_PROFILE:-}"
 entitlements="$project_root/packaging/macos/entitlements.plist"
+icon_source="$project_root/packaging/macos/Sarcophagus.icns"
 build_directory="$project_root/build/native/macos"
 application="$build_directory/Sarcophagus.app"
 distribution_directory="$project_root/dist"
@@ -41,6 +42,11 @@ if [[ ! -f "$entitlements" ]]; then
     echo "Entitlements file not found: $entitlements" >&2
     exit 1
 fi
+if [[ ! -f "$icon_source" ]]; then
+    echo "macOS application icon not found: $icon_source" >&2
+    echo "Regenerate platform icons with scripts/generate-platform-icons.sh." >&2
+    exit 1
+fi
 if [[ -n "$notary_profile" && "$signing_identity" == "-" ]]; then
     echo "MACOS_NOTARY_PROFILE requires a Developer ID identity in MACOS_SIGNING_IDENTITY." >&2
     exit 1
@@ -64,6 +70,7 @@ fi
 mv "$application/Contents/MacOS/love" "$application/Contents/MacOS/Sarcophagus"
 chmod +x "$application/Contents/MacOS/Sarcophagus"
 rm -f "$application/Contents/Resources/GameIcon.icns"
+cp "$icon_source" "$application/Contents/Resources/Sarcophagus.icns"
 
 info_plist="$application/Contents/Info.plist"
 "$plist_buddy" -c "Set :CFBundleExecutable Sarcophagus" "$info_plist"
@@ -71,6 +78,8 @@ info_plist="$application/Contents/Info.plist"
 "$plist_buddy" -c "Set :CFBundleName Sarcophagus" "$info_plist"
 "$plist_buddy" -c "Set :CFBundleShortVersionString $version" "$info_plist"
 "$plist_buddy" -c "Set :NSHumanReadableCopyright © Dmitry Smirnov" "$info_plist"
+"$plist_buddy" -c "Add :CFBundleIconFile string Sarcophagus.icns" "$info_plist" 2>/dev/null || \
+    "$plist_buddy" -c "Set :CFBundleIconFile Sarcophagus.icns" "$info_plist"
 "$plist_buddy" -c "Delete :CFBundleDocumentTypes" "$info_plist" 2>/dev/null || true
 "$plist_buddy" -c "Delete :UTExportedTypeDeclarations" "$info_plist" 2>/dev/null || true
 "$plist_buddy" -c "Add :CFBundleDisplayName string Sarcophagus" "$info_plist" 2>/dev/null || \
@@ -140,6 +149,14 @@ codesign --verify --deep --strict "$verification_directory/Sarcophagus.app"
 cmp -s \
     "$love_archive" \
     "$verification_directory/Sarcophagus.app/Contents/Resources/Sarcophagus.love"
+cmp -s \
+    "$icon_source" \
+    "$verification_directory/Sarcophagus.app/Contents/Resources/Sarcophagus.icns"
+verified_icon="$($plist_buddy -c 'Print :CFBundleIconFile' "$verification_directory/Sarcophagus.app/Contents/Info.plist")"
+if [[ "$verified_icon" != "Sarcophagus.icns" ]]; then
+    echo "Packaged macOS app references an unexpected icon: $verified_icon" >&2
+    exit 1
+fi
 find "$verification_directory" -mindepth 1 -delete
 rmdir "$verification_directory"
 

@@ -9,6 +9,18 @@ do
     write = function(self, value)
       return self:_writeTagged(value)
     end,
+    writeDeterministic = function(self, value)
+      local previous = self._deterministic
+      self._deterministic = true
+      local success, result = pcall(function()
+        return self:_writeTagged(value)
+      end)
+      self._deterministic = previous
+      if not success then
+        error(result, 0)
+      end
+      return result
+    end,
     number = function(self, value)
       self._union.f64 = value
       return self:u32(self._union.u32[0]):u32(self._union.u32[1])
@@ -277,8 +289,40 @@ do
         error("Cycle detected; can't serialize table")
       end
       stack[t] = true
-      for key, value in pairs(t) do
-        self:_writeTaggedPair(key, value, stack)
+      if self._deterministic then
+        local keys = { }
+        for key, value in pairs(t) do
+          if type(value) ~= 'function' then
+            table.insert(keys, key)
+          end
+        end
+        local typeOrder = {
+          number = 1,
+          string = 2,
+          boolean = 3
+        }
+        table.sort(keys, function(left, right)
+          local leftType, rightType = type(left), type(right)
+          local leftOrder, rightOrder = typeOrder[leftType], typeOrder[rightType]
+          if not leftOrder or not rightOrder then
+            error("Deterministic serialization does not support table keys of type '" .. tostring(not leftOrder and leftType or rightType) .. "'")
+          end
+          if leftOrder ~= rightOrder then
+            return leftOrder < rightOrder
+          end
+          if leftType == 'boolean' then
+            return left == false and right == true
+          end
+          return left < right
+        end)
+        for _index_0 = 1, #keys do
+          local key = keys[_index_0]
+          self:_writeTaggedPair(key, t[key], stack)
+        end
+      else
+        for key, value in pairs(t) do
+          self:_writeTaggedPair(key, value, stack)
+        end
       end
       stack[t] = nil
       return self:u8(_tags.stop)

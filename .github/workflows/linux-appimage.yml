@@ -1,0 +1,64 @@
+name: Linux AppImage
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-appimage:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes rsync unzip xauth xvfb zip
+
+      - name: Prepare the pinned LÖVE 11.5 runtime
+        run: |
+          mkdir -p .tools/love-11.5/linux-runtime
+          curl -fL --retry 3 \
+            --output .tools/love-11.5/love-11.5-x86_64.AppImage \
+            https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.AppImage
+          echo '65a673406431eff7167a15a032bf7a2e4ba50108e091eb7b176465831f9b5e00  .tools/love-11.5/love-11.5-x86_64.AppImage' | sha256sum --check
+          chmod +x .tools/love-11.5/love-11.5-x86_64.AppImage
+          cd .tools/love-11.5/linux-runtime
+          ../love-11.5-x86_64.AppImage --appimage-extract >/dev/null
+
+      - name: Run tests and build the release archive
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          SDL_AUDIODRIVER: dummy
+        run: |
+          love_bin="$GITHUB_WORKSPACE/.tools/love-11.5/linux-runtime/squashfs-root/AppRun"
+          xvfb-run --auto-servernum env LOVE_BIN="$love_bin" ./scripts/test.sh
+          xvfb-run --auto-servernum env LOVE_BIN="$love_bin" ./scripts/build-love.sh
+          cp dist/Sarcophagus.love /tmp/Sarcophagus-first.love
+          xvfb-run --auto-servernum env LOVE_BIN="$love_bin" ./scripts/build-love.sh
+          cmp /tmp/Sarcophagus-first.love dist/Sarcophagus.love
+          echo 'Reproducible .love archive verified.'
+
+      - name: Build and verify the AppImage
+        run: ./scripts/build-linux-appimage.sh
+
+      - name: Record checksum
+        run: sha256sum dist/Sarcophagus-linux-x86_64-*.AppImage > dist/Sarcophagus-linux-x86_64.sha256
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Sarcophagus-linux-x86_64
+          path: |
+            dist/Sarcophagus-linux-x86_64-*.AppImage
+            dist/Sarcophagus-linux-x86_64.sha256
+          if-no-files-found: error
