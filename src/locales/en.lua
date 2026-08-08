@@ -126,6 +126,15 @@ msg.language = {
 	name = "English",
 }
 
+msg.datetime = {
+	save = "_1_ _3_ _2_ _5_:_6_:_7_ _4_",
+	weekdays = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" },
+	months = {
+		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+	},
+}
+
 msg.menu = {
 	pick_slot = "Pick game slot:\n\n",
 	load_slot = "Press {#fee761ff}W/S{#ffffffff} or {#fee761ff}↑/↓{#ffffffff} to select, {#fee761ff}Enter{#ffffffff} to load a game or {#fee761ff}Backspace+Shift{#ffffffff} to delete.",

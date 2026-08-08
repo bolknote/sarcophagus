@@ -6,6 +6,8 @@
 /build/
 /dist/
 /*.love
+__pycache__/
+*.py[cod]
 
 # Runtime-generated atlas and developer helpers
 /quad.png
@@ -19,4 +21,3 @@
 /log.txt
 /[1-9].png
 /[1-8].sav
-

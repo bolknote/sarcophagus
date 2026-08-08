@@ -61,6 +61,24 @@ function i18n.next_language(language)
     return languages[1]
 end
 
+function i18n.format_datetime(messages, timestamp)
+    local date = os.date("*t", timestamp)
+    local localized = assert(messages.datetime, "datetime locale is missing")
+    local replacements = {
+        localized.weekdays[date.wday],
+        date.day,
+        localized.months[date.month],
+        date.year,
+        string.format("%02d", date.hour),
+        string.format("%02d", date.min),
+        string.format("%02d", date.sec),
+    }
+
+    return (localized.save:gsub("_(%d+)_", function(index)
+        return tostring(replacements[tonumber(index)])
+    end))
+end
+
 function i18n.apply_content_names(messages, items, stones, runtime_font)
     local text = runtime_font and love.graphics.newText(runtime_font, "") or nil
 

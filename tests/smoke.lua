@@ -111,10 +111,19 @@ local function validate_settings()
     local ok, result = pcall(function()
         language_set("en", false)
         assert(telltime(0) == "Week 00, Day 00, 00:00", "English time format is invalid")
+        local timestamp = os.time({ year = 2026, month = 8, day = 8, hour = 16, min = 23, sec = 29 })
+        assert(
+            I18N.format_datetime(msg, timestamp) == "Sat Aug 8 16:23:29 2026",
+            "English save timestamp format is invalid"
+        )
         language_next()
         assert(LANGUAGE == "ru", "language switch did not activate Russian")
         assert(msg.menu.pick_slot == "Выберите слот игры:\n\n", "Russian menu was not activated")
         assert(telltime(0) == "Неделя 00, день 00, 00:00", "Russian time format is invalid")
+        assert(
+            I18N.format_datetime(msg, timestamp) == "сб, 8 авг. 2026, 16:23:29",
+            "Russian save timestamp format is invalid"
+        )
         assert(utf8.len(draw_tool_pad("тест")) == 13, "UTF-8 UI padding is invalid")
 
         local loaded = SETTINGS_STORE.load()
@@ -358,6 +367,15 @@ end
 function smoke.install(specification)
     local mode, value = specification:match("^([^:]+):?(.*)$")
     local original_load = love.load
+
+	-- Smoke tests drive the game directly and never expect real input.  Ignore
+	-- events from the temporary LÖVE windows so typing elsewhere cannot reach
+	-- partially initialized gameplay callbacks while a test is quitting.
+	love.keypressed = function() end
+	love.keyreleased = function() end
+	love.mousepressed = function() end
+	love.mousereleased = function() end
+	love.wheelmoved = function() end
 
     love.load = function(...)
         if mode == "locales" then

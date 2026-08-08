@@ -112,7 +112,7 @@ During modernization, the verified target runtime is LÖVE 11.5 with its bundled
 
 ## Language
 
-English is the complete fallback locale. Russian is being translated incrementally; untranslated text remains available in English instead of breaking the game.
+English and Russian are complete locales with matching key coverage. English remains the safe fallback if a future Russian entry is temporarily missing; the locale validator now rejects incomplete committed translations.
 
 - Press `F2` on the start screen to switch languages.
 - Choose **Language** in the in-game `Esc` menu to switch while playing.
@@ -133,6 +133,8 @@ Validate the localization overlay separately:
 ./scripts/check-locales.sh
 ./scripts/check-ui-strings.sh
 ```
+
+After adding English strings, rebuild the complete static Russian locale with `./scripts/complete-russian-localization.py`. Context-sensitive, human-reviewed wording is kept in `scripts/ru_editorial_overrides.py`; the game itself never contacts a translation service.
 
 Build a release-mode `.love` archive with a pre-generated sprite atlas:
 
@@ -277,7 +279,7 @@ love /абсолютный/путь/к/Sarcophagus
 
 ## Язык
 
-Английская локаль полная и используется как fallback. Русский перевод добавляется постепенно: пока строка не переведена, игра безопасно показывает её по-английски.
+Английская и русская локали полны и имеют одинаковое покрытие ключей. Английский остаётся безопасным fallback на время разработки, однако проверка локалей теперь не допускает коммит неполного русского перевода.
 
 - На стартовом экране язык переключается клавишей `F2`.
 - Во время игры язык можно сменить через пункт **Язык** в меню `Esc`.
@@ -298,6 +300,8 @@ love /абсолютный/путь/к/Sarcophagus
 ./scripts/check-locales.sh
 ./scripts/check-ui-strings.sh
 ```
+
+После добавления английских строк полная статическая русская локаль пересобирается командой `./scripts/complete-russian-localization.py`. Контекстные редакторские варианты закреплены в `scripts/ru_editorial_overrides.py`; сама игра никогда не обращается к сервису перевода.
 
 Для сборки release-архива `.love` с заранее подготовленным атласом спрайтов:
 

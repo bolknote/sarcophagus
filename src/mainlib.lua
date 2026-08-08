@@ -2329,7 +2329,7 @@ function savefiles ()
 		if info==nil then
 			str = str..i.."] -----------------"
 		else
-			str = str..i.."] "..os.date("%c", info.modtime)
+			str = str..i.."] "..I18N.format_datetime(msg, info.modtime)
 		end
 	end
 	return str
@@ -2653,4 +2653,3 @@ function spiral_spin (maxstep)
 
 
 end
-

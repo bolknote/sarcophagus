@@ -97,6 +97,11 @@ function validator.validate()
 	local base_strings = count_strings(english)
 	local translated_strings = count_strings(russian)
 	local coverage = base_strings > 0 and translated_strings / base_strings * 100 or 0
+	if translated_strings ~= base_strings then
+		errors[#errors + 1] = (
+			"Russian locale is incomplete: %d of %d strings"
+		):format(translated_strings, base_strings)
+	end
 	local summary = (
 		"translated=%d base=%d coverage=%.1f%% warnings=%d"
 	):format(translated_strings, base_strings, coverage, #warnings)

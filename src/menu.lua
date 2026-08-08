@@ -8,6 +8,19 @@ local function menu_message(text, replacements)
 	return text
 end
 
+local function localized_save_files()
+	local files = {}
+	for i = 1, 9 do
+		local info = love.filesystem.getInfo(i .. ".sav")
+		if info then
+			files[i] = I18N.format_datetime(msg, info.modtime)
+		else
+			files[i] = "-----------------"
+		end
+	end
+	return files
+end
+
 local generation_started_at = 0
 local generation_progress = 0
 local generation_stage = 1
@@ -250,6 +263,7 @@ function love.menu_keypressed(key, scan)
 
 	if scan == "f2" then
 		language_next()
+		game.files = localized_save_files()
 		return
 	end
 
@@ -353,15 +367,7 @@ local function initialize_menu()
 	game.savepos = game.savepos or game.metasave.gamepos or 1
 	read_screenshot(game.savepos)
 
-	game.files = {}
-	for i = 1, 9 do
-		local info = love.filesystem.getInfo(i .. ".sav")
-		if info then
-			game.files[i] = os.date("%c", info.modtime)
-		else
-			game.files[i] = "-----------------"
-		end
-	end
+	game.files = localized_save_files()
 
 	game.menuani = {x = 90, y = 110}
 	ani_new(game.menuani, "marsh")
