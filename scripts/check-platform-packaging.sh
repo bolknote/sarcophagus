@@ -174,6 +174,15 @@ for macos_archive_marker in \
         exit 1
     fi
 done
+for macos_zip_marker in \
+    'create_package' \
+    '/usr/bin/zip -9 -q -r -y -X' \
+    'Packaged macOS ZIP contains AppleDouble metadata'; do
+    if ! grep -Fq "$macos_zip_marker" "$macos_builder"; then
+        echo "macOS builder does not reject metadata junk: $macos_zip_marker" >&2
+        exit 1
+    fi
+done
 for windows_icon_marker in \
     'packaging/windows/Sarcophagus.ico' \
     'ReplaceIcon' \

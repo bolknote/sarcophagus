@@ -15,6 +15,56 @@ function virtual_cursor_delta(value, direction)
 	return amount * 8 * direction
 end
 
+local AUTOSAVE_INTERVAL = 60 * 10
+local AUTOSAVE_RETRY_INTERVAL = 30
+local AUTOSAVE_MOUSE_IDLE = 3
+
+function autosave_update(now, mouse_idle)
+	now = tonumber(now) or tonumber(game.dt) or 0
+	mouse_idle = tonumber(mouse_idle) or tonumber(mousemoved_last) or 0
+
+	-- A fade temporarily makes taking the save preview unsafe. Keep the queued
+	-- save, but do not enqueue it again (and flood the text log) every frame.
+	if game.autosave then
+		if game.fadein ~= nil or game.fadeout ~= nil then
+			return "deferred"
+		end
+
+		-- The queued flag is runtime-only. Clear it before serialization so an
+		-- autosaved game does not immediately save itself again when loaded.
+		game.autosave = nil
+		world = tablecheck(world)
+		local saved = game_save(game.savepos)
+		if saved then
+			game.lastsave = now + AUTOSAVE_INTERVAL
+			return "saved"
+		end
+
+		-- A transient filesystem failure should be retried soon without trying
+		-- (and showing an error) on every rendered frame.
+		game.lastsave = now + AUTOSAVE_RETRY_INTERVAL
+		return "failed"
+	end
+
+	-- Fresh games used to fall back to 100 seconds here even though every
+	-- subsequent interval is ten minutes. Establish the first deadline from
+	-- the same clock and interval as all later autosaves.
+	if game.lastsave == nil then
+		game.lastsave = now + AUTOSAVE_INTERVAL
+		return "scheduled"
+	end
+
+	if game.idle
+		and mouse_idle > AUTOSAVE_MOUSE_IDLE
+		and game.nosave == nil
+		and game.lastsave < now
+	then
+		game.autosave = true
+		textwall(msg.game[3], true)
+		return "queued"
+	end
+end
+
 
 function love.update(d)
 
@@ -179,21 +229,7 @@ function love.update(d)
 	--print ((game.time/time.h).." "..math.log (game.time/time.h))
 	--dump (game.showroom)
 
-	if game.autosave and game.fadein==nil and game.fadeout==nil then
-		world = tablecheck (world)
-		game_save (game.savepos)
-		game.autosave = nil
-		game.lastsave = game.dt + 60*10 --10 mins
-	end
-
-	--print (game.lastsave.." "..game.dt)
-
-	if game.idle and mousemoved_last>3 and game.nosave==nil then
-		if (game.lastsave or 100) < game.dt then
-			game.autosave = true
-			textwall (msg.game[3],true)
-		end
-	end
+	autosave_update(game.dt, mousemoved_last)
 
 	-- player position changed
 	game.moved = false

@@ -146,6 +146,7 @@ msg.menu = {
 	configure = "{#ffffffff}Press {#fee761ff}C{#ffffffff} to configure keys/joystick.\n(Plug joystick in before running the game).\n",
 	language = "{#ffffffff}Press {#fee761ff}F2{#ffffffff} to change language. Current: {#63c74dff}_1_{#ffffffff}.\n\n",
 	author = "{#d87644ff}A game by Dmitry Smirnov [spectator.ru]\n",
+	modification = "{#8b9bb4ff}Modified by Evgeny Stepanishchev [bolknote.ru]\n",
 	version = "{#aaaaaaff}Version _1_\n",
 	update = "{#aaaaaaff}Version _1_ {#fee761ff}\n\n» _2_ is available! «\n",
 	etymology = "{#3a4466ff}— from the Greek sarx meaning “flesh”, and phagein - “to eat”{#ffffffff}",

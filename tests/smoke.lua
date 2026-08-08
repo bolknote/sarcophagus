@@ -230,6 +230,120 @@ local function validate_persistence()
 	finish(0, result)
 end
 
+local function validate_autosave()
+	local original_identity = love.filesystem.getIdentity()
+	local original_capture_screenshot = love.graphics.captureScreenshot
+	local original_textwall = textwall
+	local original_game_save = game_save
+	local test_identity = "sarcophagus-autosave-smoke"
+	local messages = {}
+
+	love.filesystem.setIdentity(test_identity)
+	game_delete_save(1)
+	game_delete_save(2)
+	love.filesystem.remove("info.save")
+	love.filesystem.remove("info.save.bak")
+
+	local ok, result = pcall(function()
+		local fixture, fixture_error = love.filesystem.read("tests/fixtures/9.sav")
+		assert(fixture, "cannot read autosave fixture: " .. tostring(fixture_error))
+		assert(love.filesystem.write("1.sav", fixture), "cannot stage autosave fixture")
+		assert(game_load(1), "autosave fixture did not load")
+
+		love.graphics.captureScreenshot = function() end
+		textwall = function(message)
+			messages[#messages + 1] = message
+		end
+
+		game.savepos = 1
+		game.dt = 0
+		game.lastsave = nil
+		game.idle = true
+		game.nosave = nil
+		game.fadein = nil
+		game.fadeout = nil
+		local before_save = assert(love.filesystem.read("1.sav"))
+		assert(autosave_update(game.dt, 4) == "scheduled"
+			and game.lastsave == 600,
+			"fresh game did not schedule its first autosave for ten minutes")
+		game.dt = 601
+
+		assert(autosave_update(game.dt, 4) == "queued",
+			"elapsed autosave timer did not queue a save")
+		assert(game.autosave == true, "queued autosave flag is missing")
+		assert(love.filesystem.read("1.sav") == before_save,
+			"autosave wrote before the queued frame")
+		assert(messages[#messages] == msg.game[3],
+			"autosave queue message is missing or not localized")
+
+		game.fadein = 0.5
+		local message_count = #messages
+		assert(autosave_update(game.dt, 4) == "deferred",
+			"autosave was not deferred during a fade")
+		assert(game.autosave == true and #messages == message_count,
+			"deferred autosave was lost or repeated its queue message")
+
+		game.fadein = nil
+		assert(autosave_update(game.dt, 4) == "saved",
+			"queued autosave was not written after the fade")
+		assert(game.autosave == nil and game.lastsave == 1201,
+			"successful autosave did not schedule the next ten-minute interval")
+		assert(love.filesystem.getInfo("1.sav.bak"),
+			"autosave did not preserve the previous save as a backup")
+		assert(love.filesystem.read("1.sav") ~= before_save,
+			"autosave did not replace the staged save")
+		assert(game_load(1), "autosaved game could not be loaded again")
+		assert(game.autosave == nil,
+			"autosave queue flag leaked into the saved game")
+
+		game_delete_save(2)
+		game.savepos = 2
+		game.dt = 2000
+		game.lastsave = 1000
+		game.autosave = nil
+		game.idle = true
+		game.nosave = true
+		assert(autosave_update(game.dt, 4) == nil,
+			"No autosave setting did not suppress the timer")
+		assert(not love.filesystem.getInfo("2.sav") and game.autosave == nil,
+			"No autosave setting still created a save")
+
+		game.nosave = nil
+		game.lastsave = 1000
+		assert(autosave_update(game.dt, 2) == nil,
+			"active mouse input did not postpone autosave")
+
+		game.autosave = true
+		game.dt = 3000
+		game.fadein = nil
+		game.fadeout = nil
+		game_save = function()
+			return false
+		end
+		assert(autosave_update(game.dt, 4) == "failed",
+			"failed autosave was reported as successful")
+		assert(game.autosave == nil and game.lastsave == 3030,
+			"failed autosave did not schedule a bounded retry")
+		game_save = original_game_save
+
+		return "mode=autosave timer=600 deferred=true backup=true reload=true disabled=true retry=30"
+	end)
+
+	love.graphics.captureScreenshot = original_capture_screenshot
+	textwall = original_textwall
+	game_save = original_game_save
+	game_delete_save(1)
+	game_delete_save(2)
+	love.filesystem.remove("info.save")
+	love.filesystem.remove("info.save.bak")
+	love.filesystem.setIdentity(original_identity)
+
+	if not ok then
+		error(result)
+	end
+	finish(0, result)
+end
+
 local function export_atlas()
     local output_directory = os.getenv("SARCOPHAGUS_ATLAS_OUTPUT")
     assert(output_directory and output_directory ~= "", "SARCOPHAGUS_ATLAS_OUTPUT is required")
@@ -1091,6 +1205,67 @@ local function validate_display()
     ))
 end
 
+local function validate_display_modes()
+	local original_width, original_height, original_flags = love.window.getMode()
+	local original_fullscreen_setting = game.fullscreen
+	local original_double_setting = game.gr2x
+
+	local ok, result = pcall(function()
+		game.fullscreen = false
+		screen_full()
+		local width, height, flags = love.window.getMode()
+		assert(not flags.fullscreen, "windowed mode did not activate")
+		assert(width > 0 and height > 0, "windowed mode has invalid dimensions")
+
+		game.gr2x = false
+		screen_res()
+		local normal_x, normal_y = screen.x, screen.y
+		assert(normal_x == math.floor(width / 32) + 3,
+			"normal-size horizontal viewport is invalid")
+		assert(normal_y == math.floor(height / 32) + 3,
+			"normal-size vertical viewport is invalid")
+
+		game.gr2x = true
+		screen_res()
+		assert(screen.x == math.ceil(normal_x / 2)
+			and screen.y == math.ceil(normal_y / 2),
+			"double-size mode does not halve the logical viewport")
+
+		game.fullscreen = true
+		screen_full()
+		local fullscreen_width, fullscreen_height, fullscreen_flags = love.window.getMode()
+		assert(fullscreen_flags.fullscreen, "fullscreen mode did not activate")
+		assert(fullscreen_width > 0 and fullscreen_height > 0,
+			"fullscreen mode has invalid dimensions")
+
+		game.fullscreen = false
+		screen_full()
+		local _, _, restored_window_flags = love.window.getMode()
+		assert(not restored_window_flags.fullscreen,
+			"windowed mode did not return after fullscreen")
+
+		return ("mode=display-modes window=%dx%d fullscreen=%dx%d double=true"):format(
+			width,
+			height,
+			fullscreen_width,
+			fullscreen_height
+		)
+	end)
+
+	-- Restore the mode in which the smoke-test process was launched before it
+	-- exits, so desktop fullscreen never leaks into a failed test run.
+	game.fullscreen = original_flags.fullscreen or false
+	game.gr2x = original_double_setting
+	love.window.setMode(original_width, original_height, original_flags)
+	screen_res()
+	game.fullscreen = original_fullscreen_setting
+
+	if not ok then
+		error(result)
+	end
+	finish(0, result)
+end
+
 local function begin_map_generation_test()
     local info_channel = love.thread.getChannel("geninfo")
 	local data_channel = love.thread.getChannel("gendata")
@@ -1317,6 +1492,22 @@ function smoke.install(specification)
 			local ok, err = pcall(validate_persistence)
 			if not ok then
 				finish(1, "mode=persistence " .. tostring(err))
+			end
+			return
+		end
+
+		if mode == "autosave" then
+			local ok, err = pcall(validate_autosave)
+			if not ok then
+				finish(1, "mode=autosave " .. tostring(err))
+			end
+			return
+		end
+
+		if mode == "display-modes" then
+			local ok, err = pcall(validate_display_modes)
+			if not ok then
+				finish(1, "mode=display-modes " .. tostring(err))
 			end
 			return
 		end

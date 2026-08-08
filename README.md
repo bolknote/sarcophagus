@@ -129,6 +129,10 @@ Run the automated compatibility checks:
 ./scripts/test.sh
 ```
 
+The suite also performs an actual windowed → fullscreen → windowed transition,
+checks double-size rendering, and exercises the complete ten-minute autosave
+path (queue, fade deferral, backup, reload, disable option, and failed-save retry).
+
 Validate the localization overlay separately:
 
 ```sh
@@ -156,7 +160,7 @@ Build the universal Intel/Apple Silicon macOS app on macOS:
 ./scripts/build-macos.sh
 ```
 
-The macOS command rebuilds `dist/Sarcophagus.love` first, so an older archive cannot silently enter a new app. Set `LOVE_ARCHIVE=/path/to/game.love` only when packaging an explicitly supplied, already audited archive.
+The macOS command rebuilds `dist/Sarcophagus.love` first, so an older archive cannot silently enter a new app. Set `LOVE_ARCHIVE=/path/to/game.love` only when packaging an explicitly supplied, already audited archive. The final ZIP preserves executable modes and symlinks but excludes AppleDouble metadata (`__MACOSX/._*`); the extracted app and its code signature are verified again.
 
 Without credentials this creates an ad-hoc-signed package for local testing. A public download that opens normally under Gatekeeper must be signed with a **Developer ID Application** certificate and notarized by Apple:
 
@@ -228,6 +232,7 @@ LÖVE stores user data under the `sarcophagus` identity. The game supports nine 
 ## Credits and links
 
 - Original game and design: **Dmitry Smirnov / acerbial**
+- Modernized version: **Evgeny Stepanishchev** ([bolknote.ru](https://bolknote.ru/))
 - [Official Sarcophagus page and downloads](https://acerbial.itch.io/sarcophagus)
 - [LÖVE framework](https://love2d.org/)
 
@@ -354,6 +359,10 @@ love /абсолютный/путь/к/Sarcophagus
 ./scripts/test.sh
 ```
 
+Набор тестов также реально переключает окно → полный экран → окно, проверяет
+двойной масштаб и весь путь десятиминутного autosave: постановку в очередь,
+ожидание fade, backup, повторную загрузку, отключение и retry после ошибки записи.
+
 Для отдельной проверки структуры локализаций:
 
 ```sh
@@ -381,7 +390,7 @@ Release-сборщик сериализует метаданные атласа 
 ./scripts/build-macos.sh
 ```
 
-Перед этим macOS-сценарий сам пересобирает `dist/Sarcophagus.love`, поэтому старый архив не может незаметно попасть в новое приложение. Переменную `LOVE_ARCHIVE=/путь/к/game.love` следует задавать только для явно выбранного и уже проверенного готового архива.
+Перед этим macOS-сценарий сам пересобирает `dist/Sarcophagus.love`, поэтому старый архив не может незаметно попасть в новое приложение. Переменную `LOVE_ARCHIVE=/путь/к/game.love` следует задавать только для явно выбранного и уже проверенного готового архива. Финальный ZIP сохраняет executable-биты и симлинки, но не содержит AppleDouble-мусора `__MACOSX/._*`; распакованное приложение и его подпись проверяются повторно.
 
 Без учётных данных получается пакет с локальной ad-hoc-подписью — он предназначен только для проверки на машине разработчика. Публичную загрузку, которую Gatekeeper открывает штатно, необходимо подписать сертификатом **Developer ID Application** и нотарифицировать у Apple:
 
@@ -453,6 +462,7 @@ LÖVE хранит пользовательские данные под иден
 ## Авторство и ссылки
 
 - Оригинальная игра и дизайн: **Дмитрий Смирнов / acerbial**
+- Модернизированная версия: **Евгений Степанищев** ([bolknote.ru](https://bolknote.ru/))
 - [Официальная страница Sarcophagus и загрузки](https://acerbial.itch.io/sarcophagus)
 - [Игровой фреймворк LÖVE](https://love2d.org/)
 

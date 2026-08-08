@@ -504,6 +504,7 @@ function love.menu_update(d)
 	game.menu = game.menu .. msg.menu.discord
 	game.menu = game.menu .. msg.menu.configure
 	game.menu = game.menu .. msg.menu.author
+	game.menu = game.menu .. msg.menu.modification
 
 	if server_version ~= game_version and server_version ~= "" then
 		game.menu = game.menu .. menu_message(msg.menu.update, {

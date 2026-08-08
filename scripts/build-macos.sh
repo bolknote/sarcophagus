@@ -23,7 +23,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-for tool in codesign ditto plutil spctl xcrun; do
+for tool in codesign ditto plutil spctl unzip xcrun zip; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Required macOS tool is missing: $tool" >&2
         exit 1
@@ -131,14 +131,21 @@ for entitlement in \
     fi
 done
 
-ditto -c -k --sequesterRsrc --keepParent "$application" "$package"
+create_package() {
+    rm -f "$package"
+    (
+        cd "$build_directory"
+        /usr/bin/zip -9 -q -r -y -X "$package" "$(basename "$application")"
+    )
+}
+
+create_package
 
 if [[ -n "$notary_profile" ]]; then
     xcrun notarytool submit "$package" --keychain-profile "$notary_profile" --wait
     xcrun stapler staple "$application"
     xcrun stapler validate "$application"
-    rm -f "$package"
-    ditto -c -k --sequesterRsrc --keepParent "$application" "$package"
+    create_package
     spctl --assess --type execute --verbose=4 "$application"
     echo "Built Developer ID-signed and notarized package: $package"
 elif [[ "$signing_identity" == "-" ]]; then
@@ -152,6 +159,10 @@ fi
 verification_directory="$build_directory/verification"
 mkdir -p "$verification_directory"
 ditto -x -k "$package" "$verification_directory"
+if unzip -Z1 "$package" | grep -Eq '(^__MACOSX/|(^|/)\._)'; then
+    echo "Packaged macOS ZIP contains AppleDouble metadata." >&2
+    exit 1
+fi
 codesign --verify --deep --strict "$verification_directory/Sarcophagus.app"
 cmp -s \
     "$love_archive" \

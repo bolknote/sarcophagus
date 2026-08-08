@@ -31,6 +31,10 @@ SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=display \
     "$love_binary" "$project_root"
 
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_SMOKE_TEST=display-modes \
+    "$love_binary" "$project_root"
+
 /usr/bin/env -u SARCOPHAGUS_LANGUAGE \
     SARCOPHAGUS_BUILD_MODE=development \
     SARCOPHAGUS_SMOKE_TEST=settings \
@@ -46,6 +50,11 @@ done
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_LANGUAGE=ru \
 SARCOPHAGUS_SMOKE_TEST=persistence \
+    "$love_binary" "$project_root"
+
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_LANGUAGE=ru \
+SARCOPHAGUS_SMOKE_TEST=autosave \
     "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
