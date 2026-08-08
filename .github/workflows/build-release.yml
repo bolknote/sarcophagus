@@ -1,0 +1,297 @@
+name: Build and release
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build-love:
+    name: Test and build .love
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          expected_tag="v$(tr -d '[:space:]' < version.txt)"
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match version.txt ($expected_tag)." >&2
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes rsync unzip xauth xvfb zip
+
+      - name: Prepare the pinned LÖVE 11.5 runtime
+        run: |
+          mkdir -p .tools/love-11.5/linux-runtime
+          curl -fL --retry 3 \
+            --output .tools/love-11.5/love-11.5-x86_64.AppImage \
+            https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.AppImage
+          echo '65a673406431eff7167a15a032bf7a2e4ba50108e091eb7b176465831f9b5e00  .tools/love-11.5/love-11.5-x86_64.AppImage' | sha256sum --check
+          chmod +x .tools/love-11.5/love-11.5-x86_64.AppImage
+          cd .tools/love-11.5/linux-runtime
+          ../love-11.5-x86_64.AppImage --appimage-extract >/dev/null
+
+      - name: Run tests and build a reproducible archive
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          SDL_AUDIODRIVER: dummy
+        run: |
+          love_bin="$GITHUB_WORKSPACE/.tools/love-11.5/linux-runtime/squashfs-root/AppRun"
+          xvfb-run --auto-servernum env LOVE_BIN="$love_bin" ./scripts/test.sh
+          xvfb-run --auto-servernum env LOVE_BIN="$love_bin" ./scripts/build-love.sh
+          cp dist/Sarcophagus.love "$RUNNER_TEMP/Sarcophagus-first.love"
+          xvfb-run --auto-servernum env LOVE_BIN="$love_bin" ./scripts/build-love.sh
+          cmp "$RUNNER_TEMP/Sarcophagus-first.love" dist/Sarcophagus.love
+          (cd dist && sha256sum Sarcophagus.love > Sarcophagus.love.sha256)
+          echo 'Reproducible .love archive verified.'
+
+      - name: Upload .love archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Sarcophagus-love
+          path: |
+            dist/Sarcophagus.love
+            dist/Sarcophagus.love.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: Build and smoke-test Windows x64
+    needs: build-love
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download .love archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: Sarcophagus-love
+          path: dist
+
+      - name: Build Windows package
+        shell: pwsh
+        run: ./scripts/build-windows.ps1
+
+      - name: Smoke-test packaged executable and record checksum
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath version.txt -Raw).Trim()
+          $packageDirectory = Join-Path $PWD "dist/Sarcophagus-windows-x64-$version"
+          $executable = Join-Path $packageDirectory "Sarcophagus.exe"
+          $launchLog = Join-Path $env:RUNNER_TEMP "sarcophagus-windows.log"
+          $process = Start-Process -FilePath $executable -PassThru -RedirectStandardOutput $launchLog -RedirectStandardError "$launchLog.err"
+          Start-Sleep -Seconds 8
+          if ($process.HasExited) {
+            Get-Content -LiteralPath $launchLog, "$launchLog.err" -ErrorAction SilentlyContinue
+            throw "The packaged Windows game exited during its startup smoke test (code $($process.ExitCode))."
+          }
+          Stop-Process -Id $process.Id -Force
+          $package = Get-Item -LiteralPath "dist/Sarcophagus-windows-x64-$version.zip"
+          $hash = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($package.Name)" | Set-Content -LiteralPath "$($package.FullName).sha256" -Encoding ascii
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Sarcophagus-windows-x64
+          path: |
+            dist/Sarcophagus-windows-x64-*.zip
+            dist/Sarcophagus-windows-x64-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  build-macos:
+    name: Build and smoke-test macOS universal
+    needs: build-love
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download .love archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: Sarcophagus-love
+          path: dist
+
+      - name: Prepare the pinned LÖVE 11.5 runtime
+        shell: bash
+        run: |
+          mkdir -p .tools/love-11.5/runtime
+          curl -fL --retry 3 \
+            --output .tools/love-11.5/love-11.5-macos.zip \
+            https://github.com/love2d/love/releases/download/11.5/love-11.5-macos.zip
+          echo '6795bb3a1656af6a2fdfe741e150787b481886d3a280327a261a3fdded586913  .tools/love-11.5/love-11.5-macos.zip' | shasum -a 256 --check
+          ditto -x -k .tools/love-11.5/love-11.5-macos.zip .tools/love-11.5/runtime
+
+      - name: Build macOS package
+        env:
+          LOVE_ARCHIVE: ${{ github.workspace }}/dist/Sarcophagus.love
+          LOVE_APP: ${{ github.workspace }}/.tools/love-11.5/runtime/love.app
+          MACOS_ARCH: universal
+        run: ./scripts/build-macos.sh
+
+      - name: Smoke-test packaged app and record checksum
+        shell: bash
+        run: |
+          executable="$GITHUB_WORKSPACE/build/native/macos/Sarcophagus.app/Contents/MacOS/Sarcophagus"
+          launch_log="$RUNNER_TEMP/sarcophagus-macos.log"
+          "$executable" >"$launch_log" 2>&1 &
+          game_pid=$!
+          sleep 8
+          if ! kill -0 "$game_pid" 2>/dev/null; then
+            wait "$game_pid" || true
+            cat "$launch_log"
+            echo 'The packaged macOS game exited during its startup smoke test.' >&2
+            exit 1
+          fi
+          kill -TERM "$game_pid"
+          wait "$game_pid" || true
+          version="$(tr -d '[:space:]' < version.txt)"
+          package="Sarcophagus-macos-universal-$version.zip"
+          (cd dist && shasum -a 256 "$package" > "$package.sha256")
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Sarcophagus-macos-universal
+          path: |
+            dist/Sarcophagus-macos-universal-*.zip
+            dist/Sarcophagus-macos-universal-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  build-linux:
+    name: Build and smoke-test Linux x86_64
+    needs: build-love
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download .love archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: Sarcophagus-love
+          path: dist
+
+      - name: Install smoke-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xauth xvfb
+
+      - name: Build Linux AppImage
+        run: ./scripts/build-linux-appimage.sh
+
+      - name: Smoke-test AppImage and record checksum
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          SDL_AUDIODRIVER: dummy
+        run: |
+          version="$(tr -d '[:space:]' < version.txt)"
+          package="dist/Sarcophagus-linux-x86_64-$version.AppImage"
+          set +e
+          timeout 8s xvfb-run --auto-servernum env APPIMAGE_EXTRACT_AND_RUN=1 "$package" >"$RUNNER_TEMP/sarcophagus-linux.log" 2>&1
+          launch_status=$?
+          set -e
+          if [[ "$launch_status" != "124" ]]; then
+            cat "$RUNNER_TEMP/sarcophagus-linux.log"
+            echo "The packaged Linux game did not remain active during its startup smoke test (code $launch_status)." >&2
+            exit 1
+          fi
+          (cd dist && sha256sum "$(basename "$package")" > "$(basename "$package").sha256")
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Sarcophagus-linux-x86_64
+          path: |
+            dist/Sarcophagus-linux-x86_64-*.AppImage
+            dist/Sarcophagus-linux-x86_64-*.AppImage.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-love
+      - build-windows
+      - build-macos
+      - build-linux
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: Sarcophagus-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify checksums
+        working-directory: release-assets
+        run: |
+          for checksum in *.sha256; do
+            sha256sum --check "$checksum"
+          done
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Sarcophagus $version is the modernized bilingual release of Dmitry Smirnov's sandbox survival game.
+
+          Downloads are provided for Windows x64, macOS (universal Intel/Apple Silicon), Linux x86_64, and as a standalone LÖVE archive. SHA-256 files accompany every package.
+
+          The macOS archive is ad-hoc signed because this repository has no Apple Developer ID credentials. Gatekeeper may therefore require manual approval for the downloaded app.
+          EOF
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Sarcophagus $version" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --verify-tag \
+              --title "Sarcophagus $version" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest \
+              --repo "$GITHUB_REPOSITORY"
+          fi

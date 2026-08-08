@@ -124,6 +124,8 @@ Keyboard, mouse and gamepads are supported by the original game.
 The original version `0.10.591` is available for Windows, macOS and Linux from the [official itch.io page](https://acerbial.itch.io/sarcophagus). The itch.io page describes the original project as in development.
 
 The current modernized version in this repository is `0.11.0`.
+Ready-to-run packages are published on the
+[GitHub Releases page](https://github.com/bolknote/sarcophagus/releases).
 
 ### Original development log
 
@@ -135,7 +137,7 @@ The [official devlog](https://acerbial.itch.io/sarcophagus/devlog) documents sev
 
 The imported `0.10.591` source contains 41 achievement definitions, so it includes work completed after those devlog entries.
 
-This repository is a source snapshot currently being modernized. The work includes:
+This repository contains the completed modernized version, including:
 
 - compatibility with LÖVE 11.5;
 - reproducible Windows, macOS and Linux builds;
@@ -143,7 +145,8 @@ This repository is a source snapshot currently being modernized. The work includ
 - backward-compatible save loading;
 - automated smoke tests and release checks.
 
-See [plan.md](plan.md) for the detailed roadmap.
+See [plan.md](plan.md) for the completed modernization roadmap and the remaining
+non-code release checks.
 
 ## Running from source
 
@@ -198,7 +201,7 @@ Build a release-mode `.love` archive with a pre-generated sprite atlas:
 
 The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the isolated runtime under `.tools/` by default; set `LOVE_BIN` to use another LÖVE 11.5 executable.
 
-The release builder serializes atlas metadata with sorted keys, normalizes file times through `SOURCE_DATE_EPOCH`, fixes ZIP entry order and strips host-specific ZIP extras. Repeated builds from the same source therefore produce the same `.love` SHA-256; the Linux workflow verifies this by building twice and comparing the archives byte for byte.
+The release builder serializes atlas metadata with sorted keys, normalizes file times through `SOURCE_DATE_EPOCH`, fixes ZIP entry order and strips host-specific ZIP extras. Repeated builds from the same source therefore produce the same `.love` SHA-256; GitHub Actions verifies this by building twice and comparing the archives byte for byte.
 
 The release audit also enforces a 12 MiB `.love` size budget so accidental large
 assets cannot enter every platform package unnoticed. Set
@@ -256,7 +259,14 @@ chmod +x Sarcophagus-linux-x86_64-0.11.0.AppImage
 ./Sarcophagus-linux-x86_64-0.11.0.AppImage
 ```
 
-The `Linux AppImage` GitHub Actions workflow runs the complete test suite with the same pinned LÖVE runtime, builds the `.love`, creates the AppImage and publishes it together with a SHA-256 file as a workflow artifact. The packaging procedure follows the [official LÖVE distribution guidance](https://love2d.org/wiki/Game_Distribution) and the [AppImage AppDir specification](https://docs.appimage.org/reference/appdir.html).
+The `Build and release` GitHub Actions workflow runs the complete test suite,
+builds one audited `.love`, then creates and startup-smoke-tests native packages
+on Windows, macOS and Linux runners. Each package and the standalone `.love`
+receive a SHA-256 file. A tag matching `v$(cat version.txt)` publishes those
+artifacts as a GitHub Release; ordinary pushes keep them as workflow artifacts.
+The packaging procedure follows the
+[official LÖVE distribution guidance](https://love2d.org/wiki/Game_Distribution)
+and the [AppImage AppDir specification](https://docs.appimage.org/reference/appdir.html).
 
 All native packages use the same pixel-art source icon at `packaging/icon.png`. The committed macOS Retina `.icns` and multi-size Windows `.ico` can be regenerated on macOS with ImageMagick and `iconutil`:
 
@@ -417,6 +427,8 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 Оригинальная версия `0.10.591` доступна для Windows, macOS и Linux на [официальной странице itch.io](https://acerbial.itch.io/sarcophagus). На itch.io исходный проект по-прежнему обозначен как находящийся в разработке.
 
 Текущая модернизированная версия в этом репозитории — `0.11.0`.
+Готовые пакеты публикуются на
+[странице GitHub Releases](https://github.com/bolknote/sarcophagus/releases).
 
 ### Оригинальный журнал разработки
 
@@ -428,7 +440,7 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 
 В импортированных исходниках `0.10.591` уже определено 41 достижение, то есть они содержат более поздние изменения, не описанные этими записями.
 
-Этот репозиторий представляет собой снимок исходников, который сейчас модернизируется. В план входят:
+Этот репозиторий содержит завершённую модернизированную версию, в которую входят:
 
 - совместимость с LÖVE 11.5;
 - воспроизводимые сборки для Windows, macOS и Linux;
@@ -436,7 +448,8 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 - сохранение совместимости со старыми сейвами;
 - автоматические smoke-тесты и проверки релиза.
 
-Подробная последовательность работ находится в [plan.md](plan.md).
+Завершённая последовательность модернизации и оставшиеся внекодовые проверки
+описаны в [plan.md](plan.md).
 
 ## Запуск из исходников
 
@@ -491,7 +504,7 @@ love /абсолютный/путь/к/Sarcophagus
 
 Результат сохраняется в `dist/Sarcophagus.love`. По умолчанию оба сценария используют изолированный runtime из `.tools/`; другой исполняемый файл LÖVE 11.5 можно указать через `LOVE_BIN`.
 
-Release-сборщик сериализует метаданные атласа с сортировкой ключей, нормализует время файлов через `SOURCE_DATE_EPOCH`, закрепляет порядок записей ZIP и удаляет host-specific ZIP extras. Поэтому повторные сборки из одинаковых исходников дают один SHA-256 `.love`; Linux workflow проверяет это двумя сборками и побайтовым сравнением архивов.
+Release-сборщик сериализует метаданные атласа с сортировкой ключей, нормализует время файлов через `SOURCE_DATE_EPOCH`, закрепляет порядок записей ZIP и удаляет host-specific ZIP extras. Поэтому повторные сборки из одинаковых исходников дают один SHA-256 `.love`; GitHub Actions проверяет это двумя сборками и побайтовым сравнением архивов.
 
 Release-аудит также ограничивает размер `.love` значением 12 МиБ, чтобы во все
 платформенные пакеты незаметно не попал случайный крупный файл. Переменную
@@ -549,7 +562,14 @@ chmod +x Sarcophagus-linux-x86_64-0.11.0.AppImage
 ./Sarcophagus-linux-x86_64-0.11.0.AppImage
 ```
 
-Workflow `Linux AppImage` в GitHub Actions запускает полный набор тестов с тем же закреплённым LÖVE, собирает `.love` и AppImage и сохраняет AppImage вместе с файлом SHA-256 как артефакт workflow. Схема упаковки следует [официальной инструкции LÖVE](https://love2d.org/wiki/Game_Distribution) и [спецификации AppDir](https://docs.appimage.org/reference/appdir.html).
+Workflow `Build and release` в GitHub Actions запускает полный набор тестов,
+собирает один проверенный `.love`, а затем создаёт и проверяет запуск нативных
+пакетов на Windows-, macOS- и Linux-runner. Для каждого пакета и отдельного
+`.love` записывается SHA-256. Тег, совпадающий с `v$(cat version.txt)`, публикует
+эти файлы в GitHub Release; при обычном push они остаются артефактами workflow.
+Схема упаковки следует
+[официальной инструкции LÖVE](https://love2d.org/wiki/Game_Distribution) и
+[спецификации AppDir](https://docs.appimage.org/reference/appdir.html).
 
 Все нативные пакеты используют общий пиксельный исходник `packaging/icon.png`. Закреплённые в репозитории Retina-иконку `.icns` для macOS и многоразмерную `.ico` для Windows можно заново получить на macOS при помощи ImageMagick и `iconutil`:
 

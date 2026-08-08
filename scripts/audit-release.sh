@@ -45,7 +45,7 @@ if ! diff -u "$expected_files" "$archive_files"; then
 fi
 
 file_count="$(wc -l < "$archive_files" | tr -d ' ')"
-archive_bytes="$(stat -f '%z' "$archive" 2>/dev/null || stat -c '%s' "$archive")"
+archive_bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
 if (( archive_bytes > max_archive_bytes )); then
     echo "Release archive is too large: $archive_bytes bytes (limit: $max_archive_bytes)." >&2
     echo "Review large assets or override MAX_LOVE_ARCHIVE_BYTES intentionally." >&2

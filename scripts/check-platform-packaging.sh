@@ -11,7 +11,7 @@ macos_builder="$script_directory/build-macos.sh"
 linux_builder="$script_directory/build-linux-appimage.sh"
 linux_apprun="$project_root/packaging/linux/AppRun"
 linux_desktop="$project_root/packaging/linux/ru.spectator.sarcophagus.desktop"
-linux_workflow="$project_root/.github/workflows/linux-appimage.yml"
+release_workflow="$project_root/.github/workflows/build-release.yml"
 shared_icon="$project_root/packaging/icon.png"
 macos_icon="$project_root/packaging/macos/Sarcophagus.icns"
 windows_icon="$project_root/packaging/windows/Sarcophagus.ico"
@@ -25,7 +25,7 @@ for required_file in \
     "$linux_builder" \
     "$linux_apprun" \
     "$linux_desktop" \
-    "$linux_workflow" \
+    "$release_workflow" \
     "$shared_icon" \
     "$macos_icon" \
     "$windows_icon" \
@@ -118,7 +118,7 @@ for linux_runtime_pin in \
     '1cc49bcf1e2ccd593c379adb17c9f85a36d619088296504de95b1d06215aebbf' \
     '--runtime-file' \
     'scripts/build-linux-appimage.sh'; do
-    if ! grep -Fq -- "$linux_runtime_pin" "$linux_builder" "$linux_workflow"; then
+    if ! grep -Fq -- "$linux_runtime_pin" "$linux_builder" "$release_workflow"; then
         echo "Linux packaging is missing its pinned input: $linux_runtime_pin" >&2
         exit 1
     fi
@@ -133,10 +133,32 @@ if ! grep -Fq 'share/luajit-2.1/?.lua' "$linux_apprun" || \
     echo "Linux AppRun does not preserve the official LuaJIT module search path." >&2
     exit 1
 fi
-if grep -Eq 'uses:[[:space:]]+[^@[:space:]]+@v[0-9]+' "$linux_workflow"; then
-    echo "Linux workflow actions must be pinned to immutable commit hashes." >&2
+if grep -Eq 'uses:[[:space:]]+[^@[:space:]]+@v[0-9]+' "$release_workflow"; then
+    echo "Release workflow actions must be pinned to immutable commit hashes." >&2
     exit 1
 fi
+
+for workflow_marker in \
+    'tags:' \
+    'expected_tag="v$(tr -d' \
+    'build-windows:' \
+    'runs-on: windows-2022' \
+    'build-macos:' \
+    'runs-on: macos-14' \
+    '6795bb3a1656af6a2fdfe741e150787b481886d3a280327a261a3fdded586913' \
+    'build-linux:' \
+    'Sarcophagus-linux-x86_64' \
+    'Smoke-test packaged executable' \
+    'Smoke-test packaged app' \
+    'Smoke-test AppImage' \
+    'publish-release:' \
+    'contents: write' \
+    'gh release create'; do
+    if ! grep -Fq -- "$workflow_marker" "$release_workflow"; then
+        echo "Release workflow is missing: $workflow_marker" >&2
+        exit 1
+    fi
+done
 
 icon_header() {
     od -An -tx1 -N4 "$1" | tr -d '[:space:]'

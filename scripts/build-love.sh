@@ -20,7 +20,12 @@ elif command -v git >/dev/null 2>&1 && \
     [[ -n "$source_date_epoch" ]]; then
     :
 else
-    source_date_epoch="$(stat -f '%m' "$project_root/version.txt" 2>/dev/null || stat -c '%Y' "$project_root/version.txt")"
+    if source_date_epoch="$(stat -f '%m' "$project_root/version.txt" 2>/dev/null)" &&
+        [[ "$source_date_epoch" =~ ^[0-9]+$ ]]; then
+        :
+    else
+        source_date_epoch="$(stat -c '%Y' "$project_root/version.txt")"
+    fi
 fi
 if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]]; then
     echo "SOURCE_DATE_EPOCH must be a non-negative integer: $source_date_epoch" >&2
