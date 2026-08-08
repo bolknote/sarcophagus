@@ -1,0 +1,830 @@
+function love.draw()
+	
+
+
+	ba10_2 = ((math.floor((game.dt or 0)*10))%2)+1
+	ba10_3 = ((math.floor((game.dt or 0)*10))%3)+1
+
+	ba1_2 = ((math.floor((game.dt or 0)*0.8))%2)+1
+	
+	
+	love.graphics.setCanvas(water_canvas)
+	love.graphics.clear ()
+
+	love.graphics.setCanvas(block_canvas)
+	love.graphics.clear ()
+
+	
+	if game.gr2x then
+		love.graphics.setCanvas({gr2x, stencil=true})
+		love.graphics.clear ()
+	else
+		love.graphics.setCanvas()
+	end
+
+
+ 
+	--transform = love.math.newTransform(0, 0, 0, 1, 1, 0, 0, 0.1, 0.1)
+	--love.graphics.applyTransform(transform)
+    
+
+	game_cursor = spt.cursor
+	love.graphics.setShader(shader)
+	
+	shader:send("ci",1)
+	
+	local n = 0
+	local p = 0
+	for k,light in pairs(lights) do
+		if light.x then
+
+			if light.x>0 and light.y>0 and light.x<screen.width and light.y<screen.height then
+
+				n = n + 1
+				local name = "lights[" .. n .."]"
+				shader:send(name .. ".position", {light.x, light.y})
+				shader:send(name .. ".diffuse", light.l)
+				shader:send(name .. ".power", light.p)
+				p = p + light.p
+				
+			end
+
+		end
+	end
+
+	--print (n)
+
+	shader:send("am", (game.ambient or (math.min (0.04, p*0.00006))))
+	--print (p*0.00006)
+	
+	--local factor = math.abs(math.cos(game.dt))
+	local factor = math.abs(math.cos(love.math.random (0,1)))
+	shader:send("t", factor)
+
+	--print (factor)
+	shader2:send("t", math.floor(game.dt*8)%17)
+--	shader2:send("t2", factor)
+
+	
+	shader:send("num_lights", n+1)
+
+--love.graphics.setShader(shader2)
+--local factor = math.floor (love.math.random (1,4))
+--shader2:send("t", factor)
+
+
+
+
+
+local x = 0
+local y = 1
+
+love.graphics.setColor (0.10,0.10,0.10,1)
+
+
+local a = (math.sin (game.dt*1))*3*(vi.cammoving or 0)
+local b = (math.sin (game.dt*1))*3*(vi.cammoving or 0)
+
+
+--background
+for ix=-1,screen.x/2 do
+for iy=-1,screen.y/2 do
+
+		local bx = vi.xtile % 4
+		local by = vi.ytile % 4
+		--love.graphics.draw (quad, spt.back,256*ix-vi.xoffset/2-bx*16,256*iy-vi.yoffset/2-by*16,0,2,2)
+		--love.graphics.draw (quad, spt.back,128*ix-vi.xoffset/2-bx*16,128*iy-vi.yoffset/2-by*16,0,2,2)
+		love.graphics.draw (quad, spt.back2, a+64*ix-vi.xoffset/2-bx*16, b+64*iy-vi.yoffset/2-by*16,0,1,1)
+	
+end
+end
+
+p = math.min (p,600)
+p = p / 4000
+--love.graphics.setColor (0.15,0.15,0.15,1)
+love.graphics.setColor (p,p,p,1)
+
+
+--background
+for ix=-1,screen.x/2 do
+for iy=-1,screen.y/2 do
+
+		local bx = vi.xtile % 8
+		local by = vi.ytile % 8
+		--love.graphics.draw (quad, spt.back,256*ix-vi.xoffset/2-bx*16,256*iy-vi.yoffset/2-by*16,0,2,2)
+		--love.graphics.draw (quad, spt.back,128*ix-vi.xoffset/2-bx*16,128*iy-vi.yoffset/2-by*16,0,2,2)
+		love.graphics.draw (quad, spt.back,64*ix-vi.xoffset/2-bx*16,64*iy-vi.yoffset/2-by*16,0,1,1)
+	
+end
+end
+
+
+shader:send("ci",0)
+
+
+	love.graphics.stencil(stencil_block, "replace", 1)
+    love.graphics.setStencilTest("less",1)
+
+
+love.graphics.setColor (0,0,0,1)
+
+-- first layer
+for iy=-2,screen.y do
+for ix=-1,screen.x do
+
+		x = vi.xtile+ix+1
+		y = vi.ytile+iy+1
+
+		if world[y] and world[y][x] then
+
+			local wb = world[y][x]
+
+			if wb.b and wb.b~=0 then
+
+				local yadd
+
+				if wb.f then
+					yadd = wb.f
+				else
+					yadd = 0
+				end
+
+				if stone[wb.b].br then
+
+					love.graphics.rectangle("fill",32*ix-vi.xoffset-2,32*iy-vi.yoffset+yadd-2, 36, 36)
+
+				end
+						
+			end
+
+		end
+end
+end
+
+
+love.graphics.setStencilTest()
+
+love.graphics.setColor (1,1,1,1)
+
+
+if game.start.ani_status ~= 'walk' and game.fadeout==nil and game.fadein==nil then
+	coord_true2screen (game.start)
+	ani_draw (game.start, dt)
+end
+
+--if altshow or game.altitem or love.mouse.isDown(3) then
+	game.alttexts = {}
+--end
+				
+
+
+	for i,mob in pairs(mobs) do
+
+		if mob.x and mob.z==nil then
+			ani_draw (mob, dt)
+		end
+
+	end
+
+	--local haswater = readmap (pl.xt,pl.yt,'w')
+
+	if gr[pl.state].z or haswater then
+		if game.start.ani_status == 'born' and game.start.ani_frame<12 then
+
+		else
+			if gr[pl.state]['spr'][math.floor (currentFrame)] then
+				love.graphics.draw (quad, gr[pl.state]['spr'][math.floor (currentFrame)], math.floor(pl.x), math.floor(pl.y), 0, 2*pl.flip, 2, 15, 16)
+			end
+		end
+	end
+
+
+	--love.graphics.stencil(stencil_block, "replace", 1)
+    --love.graphics.setStencilTest("less",1)
+
+
+
+
+
+	-- first layer
+	for iy=-2,screen.y do
+	for ix=-1,screen.x do
+
+			x = vi.xtile+ix+1
+			y = vi.ytile+iy+1
+
+			if world[y] and world[y][x] then
+
+				local wb = world[y][x]
+
+				if wb.b then
+
+					local yadd
+
+					if wb.f then
+						yadd = wb.f
+					else
+						yadd = 0
+					end
+
+					if (not game.dbg[2] and pl.buffs[4]==nil) and wb.n==255 and wb.g and wb.g>0 then
+
+						local c = wb.g or 0
+						c = 1 - c * 0.09
+				
+						love.graphics.setColor (c,c,c,1)
+						love.graphics.draw (quad, stone[1].spr,32*ix-vi.xoffset,32*iy-vi.yoffset+yadd,0,2,2)
+						
+						love.graphics.setColor (1,1,1,1)
+						
+					
+					else
+						
+
+
+						local invo
+
+						if wb.i and wb.n~=255 then
+
+							if altshow or game.altitem or love.mouse.isDown(3) then
+								local a = alt_add (32*ix-vi.xoffset, 32*iy-vi.yoffset, wb.i, x)
+								if a then table.insert (game.alttexts,a) end
+							else
+
+							end
+
+							--game.altitem==nil
+
+							if altshow ~= true then
+
+								if mouse_t and x==mouse_t.x and y==mouse_t.y then
+
+									local gi = game.altitem
+									game.altitem=nil
+
+									local a = alt_add (32*ix-vi.xoffset, 32*iy-vi.yoffset, wb.i, y)
+									if a then table.insert (game.alttexts,a) end
+
+									game.altitem=gi
+
+
+								end
+
+							end
+
+							local op = #wb.i*0.05+0.5
+							love.graphics.setColor (1,1,1,op)
+
+							if wb.b==0 then
+								love.graphics.draw (quad, spt.inv,32*ix-vi.xoffset,32*iy-vi.yoffset,0,2,2)
+								--alttext (32*ix-vi.xoffset,32*iy-vi.yoffset)
+								
+							else
+								--stone[wb.b]==nil or 
+
+								if stone[wb.b] and stone[wb.b].noinv==nil and (stone[wb.b].col==nil or stone[wb.b].col==0) then
+									love.graphics.draw (quad, spt.inv,32*ix-vi.xoffset,32*iy-vi.yoffset,0,2,2)
+								else
+									if stone[wb.b].noinv==nil then
+										invo = true
+									end
+								end
+							end
+
+							love.graphics.setColor (1,1,1,1)
+
+						end
+
+
+						if wb.problem and wb.problem~=5 and is_pressed('lalt') then
+							love.graphics.setColor (1,1,1,0.3+math.abs(math.sin(game.dt*7)))
+						end
+
+						if type (wb.b)~='number' then
+							--oldprint (dumpvar (wb.b))
+						end
+
+						if wb.b>0 and stone[wb.b].zindex and wb.de==nil then
+							love.graphics.setCanvas({block_canvas})
+						end
+
+						if wb.b>0 then
+							if stone[wb.b].ondraw then
+								stone[wb.b].ondraw (32*ix-vi.xoffset,32*iy-vi.yoffset+yadd,x,y)
+							else
+								love.graphics.draw (quad, stone[wb.b].spr,32*ix-vi.xoffset,32*iy-vi.yoffset+yadd,0,2,2)
+							end
+						end
+
+
+						if wb.b>0 and stone[wb.b].zindex then
+							if game.gr2x then
+								love.graphics.setCanvas({gr2x, stencil=true})
+							else
+								love.graphics.setCanvas()
+							end
+						end
+
+						love.graphics.setColor (1,1,1,1)
+
+						if invo then
+							love.graphics.draw (quad, spt.invg,32*ix-vi.xoffset+8,32*iy-vi.yoffset+9,0,1,1)
+						end
+
+						if wb.wt and wb.wt>0 then
+							local op = wb.wt/300
+							love.graphics.setColor (1,1,1,op)
+							love.graphics.draw (quad, spt.water,32*ix-vi.xoffset+10,32*iy-vi.yoffset+8,0,1,1)
+							love.graphics.setColor (1,1,1,1)
+						end
+
+						
+						--game.showroom = 100
+						if wb.room and game.showroom then
+							game.showroom = game.showroom - dt*50
+							--love.graphics.setColor (1,1,1,1)
+							local de = world[y][x].room*100
+							love.graphics.setColor (0.96, 0.45, 0.48, game.showroom*0.02)
+							love.graphics.draw (quad, spt.room,32*ix-vi.xoffset,32*iy-vi.yoffset,0,1,1)
+							love.graphics.setColor (1,1,1,1)
+							if game.showroom<0 then game.showroom=nil end
+						end
+
+
+						-- temperature
+						if wb.de and wb.de>0 then
+
+							local de = world[y][x].de
+							local de = math.log (de/2+1)
+
+							de = de / 10
+
+							writemap (x,y,de,'log')
+
+							-- print (de.." "..dl)
+							--de = de / 120
+
+							
+							--if de>0.5 then de = 0.5 end
+							love.graphics.setColor (1,0.5-de/2,0,de)
+							
+							--love.graphics.setColor (1,1,1,de)
+							--and wb.b==0
+							if wb.de>cf.deadfire then
+								love.graphics.draw (quad, spt.smoke_d,32*ix-vi.xoffset,32*iy-vi.yoffset,0,1,1)
+							else
+								love.graphics.draw (quad, spt.smoke,32*ix-vi.xoffset,32*iy-vi.yoffset,0,1,1)
+							end
+
+							love.graphics.setColor (1,1,1,1)
+
+
+							-- cooking progress
+							if wb.tneed then
+								draw_cooking (x,y, wb.tneed, wb.done)
+							end
+
+						end
+
+					end
+
+					--love.graphics.print((ix+1).."-"..(iy+1), 32*ix, 32*iy)
+
+				end
+
+				--water
+				if (wb.w and wb.n~=255) or draw_water then
+
+						--love.graphics.setStencilTest()
+						love.graphics.setCanvas(water_canvas)
+						love.graphics.setShader(shader2)
+
+						local dr = (wb.dr or draw_water_dr or 0) * 0.005
+						draw_water_dr = wb.dr
+
+						love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.5+dr*0.1)
+
+						local h = 16
+
+						local w = 14-math.floor ((wb.w or draw_water)/10000*16)
+						if w>16 then w = 16 end
+						if w<0 then w = 0 end
+						
+						if draw_water == nil and maptile (x-1,y,'col')==1 then
+							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.7+dr*0.1)
+							love.graphics.rectangle("fill",h*ix-math.ceil(vi.xoffset/2)-h/2,h*iy-math.ceil(vi.yoffset/2)+w, h/2, h-w)
+							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.5+dr*0.1)
+						end
+
+						--if pl.xt == x-1 then
+
+						if draw_water ~= nil and wb.w==nil and maptile (x,y,'col')==1 then
+							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.7+dr*0.1)
+							love.graphics.rectangle("fill",h*ix-math.ceil(vi.xoffset/2),h*iy-math.ceil(vi.yoffset/2)+w, h/2, h-w)
+							love.graphics.setColor (0.3+dr*0.7,0.5+dr,1-dr*0.7,0.5+dr*0.1)
+						end
+
+						--end
+						
+						if wb.w~=nil and (maptile (x,y+1,'col')==1 or (readmap (x,y+1,'w') or 0) > 9900) then
+							draw_water = wb.w
+							love.graphics.rectangle("fill",h*ix-math.ceil(vi.xoffset/2),h*iy-math.ceil(vi.yoffset/2)+w, h, h-w)
+						end
+
+						--love.graphics.draw (quad, spt.fish,h*ix-math.ceil(vi.xoffset/2),h*iy-math.ceil(vi.yoffset/2)+w,0,0.5,0.5)
+
+
+						love.graphics.setColor (255,255,255,100)
+						love.graphics.setShader(shader)
+
+						if game.gr2x then
+							love.graphics.setCanvas({gr2x, stencil=true})
+						else
+							love.graphics.setCanvas()
+						end
+						
+						--love.graphics.setStencilTest("less",1)
+
+				end
+
+				if wb.fish then
+				 	love.graphics.setColor (1,1,1,0.75)
+				 	love.graphics.draw (quad, spt.fish,32*ix-vi.xoffset,32*iy-vi.yoffset,0,1,1)
+				 	love.graphics.setColor (1,1,1,1)
+				end
+
+				if wb.w == nil then
+						--love.graphics.setStencilTest("less",1)
+						draw_water = nil
+						draw_water_dr = nil
+				end
+
+				
+			end
+		
+
+		
+		end
+	end
+
+	--love.graphics.setStencilTest()
+	love.graphics.setColor (255,255,255,100)
+
+	love.graphics.draw (block_canvas, 0,0,0,1,1)
+
+
+	if pl.iscarry and pl.iscarry.b>0 then
+
+		local ya = 0
+		local xa = 0
+
+			--love.graphics.printf(pl.state,100,100,10000)
+
+
+			if gr[pl.state].stoneadd and gr[pl.state].stoneadd[currentFrame] then
+				xa = gr[pl.state].stoneadd[currentFrame][1]*pl.flip
+				ya = gr[pl.state].stoneadd[currentFrame][2]
+			end 
+
+			if stone[pl.iscarry.b].br then
+				love.graphics.setColor (0,0,0,1)
+				love.graphics.rectangle("fill", math.floor(pl.x+pl.flip*10+13+xa)-32, math.floor(pl.y-3+ya)-34, 36, 36)
+				love.graphics.setColor (1,1,1,1)
+			end
+
+			love.graphics.draw (quad, stone[pl.iscarry.b].spr, math.floor(pl.x+pl.flip*10+13+xa), math.floor(pl.y-3+ya), 0, 2, 2, 15, 16)
+
+	end
+
+	if pl.digcount > 0 then
+		draw_dig_progress (pl.digxt, pl.digyt,pl.digdone)
+	end
+	
+
+	love.graphics.setColor (1,1,1,1)
+
+
+	fishing_draw ()
+
+
+
+
+	if gr[pl.state].z==nil and haswater==nil then
+		if game.start.ani_status == 'born' and game.start.ani_frame<12 then
+
+		else
+		 	if gr[pl.state]['spr'][math.floor (currentFrame)] then
+		 		love.graphics.draw (quad, gr[pl.state]['spr'][math.floor (currentFrame)], math.floor(pl.x), math.floor(pl.y), 0, 2*pl.flip, 2, 15, 16)
+		 	end
+		end
+	end
+
+
+	love.graphics.setColor ( 0.17, 0.9, 0.96, 1)
+
+	love.graphics.setLineWidth (2)
+	for k,v in pairs(lines) do
+		love.graphics.line (v)
+	end
+	love.graphics.setLineWidth (1)
+	
+
+	love.graphics.setColor (1,1,1,1)
+
+	for i,mob in pairs(mobs) do
+
+		if mob.x and mob.z==1 then
+			ani_draw (mob, dt)
+		end
+
+	end
+
+
+
+	--world ani
+	for k,v in pairs(worldani) do
+		coord_true2screen (v)
+		ani_draw (v, dt)
+	end
+	
+
+	-- projectiles
+	if proj then
+		for k,v in pairs(proj) do
+				if v.f then
+					love.graphics.draw (quad, projes[v.proj].spt, v.x, v.y, v.d, v.f*(projes[v.proj].size or 2), (projes[v.proj].size or 2), 3, 3)
+				end
+		end
+	end
+
+
+	love.graphics.draw (water_canvas, 1,1, 0, 2,2)
+	
+
+
+	love.graphics.setBlendMode("alpha")
+	love.graphics.setShader()
+	love.graphics.setColor (255,255,255,100)
+
+
+for k,v in pairs(sct) do
+--x,y,ttl,text
+		if v.font==nil then
+			love.graphics.setFont(font3)
+		end
+
+		if v.font then
+			love.graphics.setFont(font)
+		end
+
+		if v.font==2 then
+			love.graphics.setFont(font2)
+		end
+
+		love.graphics.setColor (0,0,0,1)
+		love.graphics.printf(v.text, math.floor(v.x+1), math.floor(v.y+1), 700)
+		love.graphics.printf(v.text, math.floor(v.x+1), math.floor(v.y+2), 700)
+		
+		
+		love.graphics.setColor (1,1,1,v.ttl*3)
+		love.graphics.printf(v.text, math.floor(v.x), math.floor(v.y), 700)
+		
+end
+
+	love.graphics.setFont(font)
+	
+	local r = px2tile (mouse_x,mouse_y)
+
+	tile,map = maptile (r.x,r.y,"all")
+
+	if map and map.de and map.de>1 then
+		local d = tile2px (r.x,r.y)
+		love.graphics.setFont(font2)
+		love.graphics.setColor (0,0,0,1)
+		love.graphics.printf(math.floor(map.de).."°", d.x+5, d.y+5, 700)
+		love.graphics.setColor (0.9,0.9,0.9,1)
+		love.graphics.printf(math.floor(map.de).."°", d.x+4, d.y+4, 700)
+		love.graphics.setColor (1,1,1,1)
+		love.graphics.setFont(font)
+	end
+
+	--dumpout2 = dumpvar (lights)
+	--dumpout2 = table.tostring (lights)
+	--dumpout2 = neibors (r.x,r.y)
+	--dumpout2 = game.xcheck.."-"..game.ycheck
+	--dumpout2 = dumpvar (telltime(game.time))
+	--dumpout2 = dumpvar (bubble)
+	dumpout2 = ""
+
+	
+
+	if game.dbg[2] then
+		local r2 = tile2px (r.x,r.y)
+		love.graphics.rectangle("line", r2.x, r2.y, 32, 32)
+	end
+
+
+	if pl.cob then
+		local r2 = tile2px (pl.cob[1],pl.cob[2])
+
+		love.graphics.setLineWidth (1)
+		
+		love.graphics.setColor (1,1,1,0.5)
+		love.graphics.draw (quad, stone[pl.iscarry.b].spr, r2.x, r2.y, 0, 2, 2, 0, 0)
+		
+		local l = math.cos (game.dt*10)
+		love.graphics.setColor (l,l,l,0.7)
+		love.graphics.rectangle("line", r2.x, r2.y, 32, 32)
+
+		
+		local l = math.sin (game.dt*10)
+		love.graphics.setColor (l,l,l,0.7)
+		love.graphics.rectangle("line", r2.x+1, r2.y+1, 30, 30)
+
+		love.graphics.setColor (255,255,255,100)
+	end
+
+	
+	if game.dbg[3] then
+		textbubble ('info',r.x,r.y,dumpvar (map),0,{style=3,theme=2,pad=5,w=600})
+	end
+
+
+
+
+	if altshow or game.altitem or love.mouse.isDown(3) then
+		alttext ()
+	end
+
+alttext ()
+	
+	
+	
+
+
+	love.graphics.setColor (255,255,255,100)
+	love.graphics.setFont(font)
+	if dumpout2 then
+			love.graphics.printf(dumpout2, 10, 10,700)
+			--love.graphics.printf('dumpout2', 10, 10,700)
+	end
+
+
+
+
+
+
+
+	if edit.x and edit.w then
+		love.graphics.setColor (0,1,1,1)
+		love.graphics.rectangle("line", edit.x, edit.y, edit.w, edit.h)
+	end
+
+
+
+	draw_textbubble ()
+	
+
+	
+
+
+	if game.gr2x then
+		love.graphics.setCanvas()
+		love.graphics.draw (gr2x, 0,0,0,2,2)
+		--love.graphics.draw (quad, gr2x, 500,200,0,0.5,0.5)
+	end
+
+
+
+if pl.dying==nil and game.achishow==nil then
+
+		draw_gui ()
+
+end
+
+
+if game.achishow then
+
+	draw_fullbox ()
+	local s,s2 = achi_str ()
+
+	love.graphics.printf (s,32,32,400)
+	love.graphics.printf (s2,432,32,400)
+
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+	if game.dbg[4] then
+		love.graphics.setFont(font2)
+		local s = ""
+		for k,v in pairs(allsounds) do
+			s = s..k.."\n"
+		end
+		love.graphics.printf (dumpvar (s),300,0,10000)
+	end
+
+
+
+
+	if pl.dying then
+		love.graphics.setColor (1,1,1,1-game.fade)
+		love.graphics.draw (quad, spt.wasted,math.floor ((screen.width-256)/2),math.floor (screen.height/2-100),0,1,1)
+		love.graphics.printf (
+			msg.gui[40]..pl.daylived.."\n"..msg.gui[39]..math.floor(pl.score),
+			math.floor ((screen.width-256)/2)+12,math.floor (screen.height/2-100)+72,10000)
+
+		love.graphics.setColor (1,1,1,1)
+	end
+								
+
+
+
+	if dumpout3 then
+		--love.mouse.setVisible(false)
+		-- love.mouse.setGrabbed(true)
+
+
+		--love.graphics.draw (quad, spt.throw, mouse_x - 8, mouse_y - 8,0,1,1)
+
+		--ani_draw (cursor,dt)
+
+		if game.throwcd then
+			local pc = math.ceil (game.throwcd/pl.throwcd * 5)
+			if pc>5 then pc = 5 end
+			game_cursor = spt.throwcursor[pc]
+		end
+
+		-- if pl.flip == 1 then
+		-- 	textbubble ('use',mouse_x,mouse_y,'Throw',0,{px = 1, style=2,theme=1,pad=3})
+		-- else
+		-- 	textbubble ('use',mouse_x,mouse_y,'Throw',0,{px = 1, style=1,theme=1,pad=3})
+		-- end
+
+	end
+
+	if game.attackcursor then
+		game_cursor = spt.cursora[game.attackcursor]
+	end
+
+
+	-- for i,v in ipairs(chunks) do
+
+	-- 	local c = i/#chunks
+
+
+	-- 	love.graphics.setColor (1,1,1,1)
+	-- 	love.graphics.rectangle ('line', 400+v.xr[1], 300+v.yr[2], 400+v.xr[2]-v.xr[1], 300+v.yr[2]-v.yr[1])
+
+	-- 	love.graphics.setColor (c,c,c,0.5)
+	-- 	love.graphics.printf(v.name,400+v.xr[1], 300+v.yr[2],10000)
+
+
+	-- end
+
+	esc_menu_draw ()
+
+	
+	if game.dbg[2] then
+		draw_cols ()
+	end
+
+	if game.pause or game.craft then
+		game_cursor = spt.cursor
+	end
+
+	love.mouse.setCursor (game_cursor)
+
+
+	if game.minimap then
+		love.graphics.draw (minimap_canvas, 0,0,0, 0.5,0.5)
+	end
+
+
+
+	--fps
+	local cur_time = love.timer.getTime()
+	if next_time <= cur_time then
+		next_time = cur_time
+		return
+	end
+	love.timer.sleep(next_time - cur_time)
+
+	--local stats = love.graphics.getStats()
+	--dump (stats)
+	--limits = love.graphics.getSystemLimits( )
+	--dump (limits)
+
+	
+
+end

@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Local tooling and generated distributions
+/.tools/
+/build/
+/dist/
+/*.love
+
+# Runtime-generated atlas and developer helpers
+/quad.png
+/quad.table
+/sar.sublime-completions
+/sarco.py
+
+# LÖVE user data accidentally produced in the source directory
+/info.save
+/joy.stick
+/log.txt
+/[1-9].png
+/[1-8].sav
+
