@@ -1,0 +1,273 @@
+<div align="center">
+  <img src="sacro.png" alt="Sarcophagus" width="380">
+
+  **A demanding pixel-art sandbox survival game built with Lua and LÖVE**
+
+  [Official page](https://acerbial.itch.io/sarcophagus) ·
+  [Download the original release](https://acerbial.itch.io/sarcophagus) ·
+  [Modernization plan](plan.md)
+</div>
+
+[English](#english) · [Русский](#русский)
+
+---
+
+# English
+
+## About the game
+
+Sarcophagus is a one-person sandbox/survival project by Dmitry Smirnov (`acerbial`). It draws on the story of Sisyphus and the idea that sustained work can transform both a place and its inhabitant.
+
+You begin in a sparse, allegorical cave and gradually turn it into a living garden. Survival depends on digging, building, farming and maintaining the cave ecosystem. The world may initially look empty, but the player can populate and reshape it.
+
+This is not a god game: food must be grown, inventory space is limited, and priorities constantly compete for attention. The design is intentionally demanding and old-school, rewarding experimentation, observation and learning.
+
+The name comes from Greek roots associated with flesh and eating.
+
+## Gameplay
+
+The game combines:
+
+- procedural cave generation;
+- exploration and platforming;
+- survival systems such as food, water, temperature, health and cleanliness;
+- mining, construction and falling blocks;
+- farming and ecosystem management;
+- crafting, tools and equipment;
+- creatures, combat and projectiles;
+- water, fire, light and environmental simulation;
+- fishing, disasters, quests and achievements;
+- item analysis and transformation through **The Machine**.
+
+The current source contains 368 items, 195 block types, 18 creature types, approximately 262 crafting recipes and 41 achievements.
+
+## First steps
+
+- Find Ice Shards.
+- Inspect everything: knowledge is one of the main progression systems.
+- Watch for the `≈` symbol. It marks objects that may provide information or transformations when brought to The Machine.
+- The Machine is your friend.
+
+There is deliberately no complete in-game wiki. Discovery is part of the game.
+
+## Controls
+
+| Input | Action |
+|---|---|
+| `W`, `A`, `S`, `D` | Move and jump |
+| `Shift` | Run / speed up |
+| `Space` | Dig, pick up or drop a carried block |
+| `E` / left mouse button | Attack or examine a block |
+| `R` / right mouse button | Throw or empty an item |
+| `1`–`9` | Select an inventory item |
+| `Q` | Pick up an item from the ground |
+| `Tab` | Cycle ground items |
+| `C` | Open crafting |
+| `Enter` | Use or consume the selected item |
+| `I` | Inspect the selected item |
+| `V` | Use the block at the player position |
+| `F1`–`F4` | Quest, diet, self-harm and key help |
+| `F8` / `N` | Achievements |
+
+Keyboard, mouse and gamepads are supported by the original game.
+
+## Releases
+
+The original version `0.10.591` is available for Windows, macOS and Linux from the [official itch.io page](https://acerbial.itch.io/sarcophagus). The itch.io page describes the original project as in development.
+
+### Original development log
+
+The [official devlog](https://acerbial.itch.io/sarcophagus/devlog) documents several milestones from 2019:
+
+- **30 November 2019 — version 0.10.53:** chickens, eggs, manure and related recipes were added.
+- **15 November 2019 — Butler bot:** the Butler bot became an achievement reward.
+- **12 November 2019 — version 0.10.40:** the first published achievement system contained 27 achievements. Early achievements helped introduce new players to the game, while some achievements also provided rewards and acted as an additional quest system.
+
+The local `0.10.591` source contains 41 achievement definitions, so it includes work completed after those devlog entries.
+
+This repository is a source snapshot currently being modernized. The work includes:
+
+- compatibility with LÖVE 11.5;
+- reproducible Windows, macOS and Linux builds;
+- a complete English/Russian localization system;
+- backward-compatible save loading;
+- automated smoke tests and release checks.
+
+See [plan.md](plan.md) for the detailed roadmap.
+
+## Running from source
+
+Requirements:
+
+- [LÖVE 11.5](https://love2d.org/);
+- a desktop system with graphics and audio support.
+
+Run the project directory with LÖVE:
+
+```sh
+love /absolute/path/to/Sarcophagus
+```
+
+During modernization, the verified target runtime is LÖVE 11.5 with its bundled LuaJIT. A separate Lua installation is not required.
+
+## Project layout
+
+| Path | Purpose |
+|---|---|
+| `main.lua` | Entry point and module loading |
+| `mapgen.lua` | Procedural world generation |
+| `items.lua` | Item definitions and behaviour |
+| `stones.lua` | Blocks, plants and structures |
+| `craft.lua` | Crafting system and recipes |
+| `mobs_ai.lua` | Creatures and AI |
+| `msg.lua` | Original English game text |
+| `msg_ru.lua` | Incomplete legacy Russian translation |
+| `gr/` | Source sprite images |
+| `sound/` | Sound and music assets |
+| `maps/` | Map chunks used by world generation |
+| `plan.md` | Modernization roadmap |
+
+## Save data
+
+LÖVE stores user data under the `sarcophagus` identity. The game supports nine save slots and writes a screenshot alongside each save. The bundled `9.sav` is retained as a compatibility fixture during modernization.
+
+## Credits and links
+
+- Original game and design: **Dmitry Smirnov / acerbial**
+- [Official Sarcophagus page and downloads](https://acerbial.itch.io/sarcophagus)
+- [LÖVE framework](https://love2d.org/)
+
+## License note
+
+No project-wide license is currently included in this source snapshot. Do not assume that the source code or assets may be redistributed or relicensed beyond the permissions provided by applicable law and the original distribution terms. Third-party libraries and assets may have their own licenses.
+
+---
+
+# Русский
+
+## Об игре
+
+Sarcophagus — авторский sandbox/survival-проект Дмитрия Смирнова (`acerbial`). Игра обращается к образу Сизифа и идее о том, что упорный труд способен преобразить как окружающее пространство, так и самого человека.
+
+Игрок начинает жизнь в пустоватой аллегорической пещере и постепенно превращает её в цветущий сад. Для выживания придётся копать, строить, выращивать пищу и поддерживать экосистему. Сначала мир кажется почти безжизненным, но заселить и изменить его можно собственными усилиями.
+
+Это не симулятор бога: еду необходимо выращивать, инвентарь ограничен, а разные задачи постоянно требуют внимания. Игра намеренно требовательная и старомодная — она вознаграждает наблюдательность, эксперименты и самостоятельное обучение.
+
+Название образовано от греческих корней, связанных с плотью и поеданием.
+
+## Игровые системы
+
+В игре сочетаются:
+
+- процедурная генерация пещеры;
+- исследование мира и платформинг;
+- голод, жажда, температура, здоровье и чистота;
+- добыча ресурсов, строительство и падающие блоки;
+- земледелие и управление экосистемой;
+- крафт, инструменты и экипировка;
+- существа, бой и метательные снаряды;
+- симуляция воды, огня, освещения и окружающей среды;
+- рыбалка, катастрофы, задания и достижения;
+- анализ и преобразование предметов при помощи **Машины**.
+
+В текущих исходниках определено 368 предметов, 195 типов блоков, 18 типов существ, около 262 рецептов и 41 достижение.
+
+## С чего начать
+
+- Найдите осколки льда.
+- Осматривайте всё подряд: знания являются одной из основных систем развития.
+- Обращайте внимание на знак `≈`. Он отмечает объекты, которые Машина может исследовать или преобразовать.
+- Машина — ваш друг.
+
+Полной внутриигровой энциклопедии намеренно нет: самостоятельные открытия являются частью игры.
+
+## Управление
+
+| Клавиша | Действие |
+|---|---|
+| `W`, `A`, `S`, `D` | Движение и прыжок |
+| `Shift` | Бег / ускорение |
+| `Space` | Копать, подобрать или положить переносимый блок |
+| `E` / левая кнопка мыши | Атаковать или осмотреть блок |
+| `R` / правая кнопка мыши | Бросить или опустошить предмет |
+| `1`–`9` | Выбрать предмет в инвентаре |
+| `Q` | Поднять предмет с земли |
+| `Tab` | Переключать предметы на земле |
+| `C` | Открыть крафт |
+| `Enter` | Использовать или съесть выбранный предмет |
+| `I` | Осмотреть выбранный предмет |
+| `V` | Использовать блок в позиции игрока |
+| `F1`–`F4` | Задание, рацион, самоповреждение и справка |
+| `F8` / `N` | Достижения |
+
+Оригинальная игра поддерживает клавиатуру, мышь и геймпады.
+
+## Версии и состояние проекта
+
+Оригинальная версия `0.10.591` доступна для Windows, macOS и Linux на [официальной странице itch.io](https://acerbial.itch.io/sarcophagus). На itch.io исходный проект по-прежнему обозначен как находящийся в разработке.
+
+### Оригинальный журнал разработки
+
+В [официальном devlog](https://acerbial.itch.io/sarcophagus/devlog) описаны несколько этапов разработки 2019 года:
+
+- **30 ноября 2019 — версия 0.10.53:** появились куры, яйца, помёт и связанные с ними рецепты.
+- **15 ноября 2019 — Butler bot:** робот-дворецкий был добавлен как награда за достижение.
+- **12 ноября 2019 — версия 0.10.40:** опубликована первая система из 27 достижений. Ранние достижения помогали новым игрокам освоиться, а часть достижений давала награды и дополняла систему заданий.
+
+В локальных исходниках `0.10.591` уже определено 41 достижение, то есть они содержат более поздние изменения, не описанные этими записями.
+
+Этот репозиторий представляет собой снимок исходников, который сейчас модернизируется. В план входят:
+
+- совместимость с LÖVE 11.5;
+- воспроизводимые сборки для Windows, macOS и Linux;
+- полноценная система английской и русской локализации;
+- сохранение совместимости со старыми сейвами;
+- автоматические smoke-тесты и проверки релиза.
+
+Подробная последовательность работ находится в [plan.md](plan.md).
+
+## Запуск из исходников
+
+Требования:
+
+- [LÖVE 11.5](https://love2d.org/);
+- настольная система с поддержкой графики и звука.
+
+Запустите папку проекта через LÖVE:
+
+```sh
+love /абсолютный/путь/к/Sarcophagus
+```
+
+Целевой и уже проверенный рантайм модернизированной версии — LÖVE 11.5 со встроенным LuaJIT. Отдельно устанавливать Lua не требуется.
+
+## Структура проекта
+
+| Путь | Назначение |
+|---|---|
+| `main.lua` | Точка входа и загрузка модулей |
+| `mapgen.lua` | Процедурная генерация мира |
+| `items.lua` | Предметы и их поведение |
+| `stones.lua` | Блоки, растения и сооружения |
+| `craft.lua` | Крафт и рецепты |
+| `mobs_ai.lua` | Существа и искусственный интеллект |
+| `msg.lua` | Исходные английские тексты |
+| `msg_ru.lua` | Незавершённый старый русский перевод |
+| `gr/` | Исходные изображения спрайтов |
+| `sound/` | Звуки и музыка |
+| `maps/` | Фрагменты карты для генератора мира |
+| `plan.md` | План модернизации |
+
+## Сохранения
+
+LÖVE хранит пользовательские данные под идентификатором `sarcophagus`. Игра поддерживает девять слотов и сохраняет снимок экрана рядом с каждым сейвом. Файл `9.sav` оставлен в репозитории как контрольный пример для проверки обратной совместимости.
+
+## Авторство и ссылки
+
+- Оригинальная игра и дизайн: **Дмитрий Смирнов / acerbial**
+- [Официальная страница Sarcophagus и загрузки](https://acerbial.itch.io/sarcophagus)
+- [Игровой фреймворк LÖVE](https://love2d.org/)
+
+## Примечание о лицензии
+
+В этом снимке исходников нет общей лицензии проекта. Не следует считать, что код или ресурсы разрешено распространять либо перелицензировать сверх того, что допускают закон и условия оригинального распространения. У сторонних библиотек и материалов могут быть собственные лицензии.
