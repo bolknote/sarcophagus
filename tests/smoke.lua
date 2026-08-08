@@ -67,6 +67,165 @@ local function validate_save_fixture(slot)
     finish(0, result)
 end
 
+local function validate_persistence()
+	local original_identity = love.filesystem.getIdentity()
+	local original_capture_screenshot = love.graphics.captureScreenshot
+	local original_textwall = textwall
+	local original_random = love.math.random
+	local test_identity = "sarcophagus-persistence-smoke"
+	local random_was_replaced = false
+
+	love.filesystem.setIdentity(test_identity)
+	for slot = 1, 3 do
+		game_delete_save(slot)
+	end
+	for _, filename in ipairs({
+		"info.save",
+		"info.save.bak",
+		"joy.stick",
+	}) do
+		love.filesystem.remove(filename)
+	end
+
+	local ok, result = pcall(function()
+		local fixture, fixture_error = love.filesystem.read("tests/fixtures/9.sav")
+		assert(fixture, "cannot read persistence fixture: " .. tostring(fixture_error))
+
+		local previous_world = world
+		local previous_vi = vi
+		local previous_pl = pl
+		local previous_game = game
+		local loaded, load_error = game_load(1)
+		assert(not loaded and load_error, "empty save slot was reported as loaded")
+		assert(world == previous_world and vi == previous_vi
+			and pl == previous_pl and game == previous_game,
+			"empty save slot changed active game state")
+
+		assert(love.filesystem.write("1.sav", "not a Sarcophagus save"))
+		loaded, load_error = game_load(1)
+		assert(not loaded and load_error, "damaged save was reported as loaded")
+		assert(world == previous_world and vi == previous_vi
+			and pl == previous_pl and game == previous_game,
+			"damaged save partially replaced active game state")
+		love.filesystem.remove("1.sav")
+
+		local legacy_save = love.data.compress("string", "gzip", fixture)
+		assert(love.filesystem.write("1.save", legacy_save))
+		local legacy_info, legacy_filename = game_save_slot_info(1)
+		assert(legacy_info and legacy_filename == "1.save",
+			"legacy compressed save is invisible to the slot menu")
+		assert(game_load(1), "legacy compressed save did not load")
+		assert(type(world) == "table" and next(world), "legacy save world is empty")
+
+		-- A damaged newer-format file must not hide the valid legacy fallback.
+		assert(love.filesystem.write("1.sav", "damaged current save"))
+		assert(game_load(1), "valid legacy fallback was not tried")
+		assert(game_delete_save(1), "save slot deletion reported no files")
+		assert(not love.filesystem.getInfo("1.sav")
+			and not love.filesystem.getInfo("1.save")
+			and not love.filesystem.getInfo("1.sav.bak"),
+			"save slot deletion left a format or backup behind")
+
+		-- Saving twice creates a known-good backup. If the primary file is later
+		-- damaged, loading must transparently fall back to it.
+		love.graphics.captureScreenshot = function() end
+		textwall = function() end
+		assert(game_save(2), "first game save failed")
+		assert(game_save(2), "second game save failed")
+		assert(love.filesystem.getInfo("2.sav.bak"), "save backup was not created")
+		assert(love.filesystem.write("2.sav", "damaged after saving"))
+		assert(game_load(2), "save backup did not recover a damaged primary save")
+
+		assert(love.filesystem.write("info.save", "damaged metadata"))
+		love.filesystem.remove("info.save.bak")
+		assert(game_loadinfo() == false, "damaged metadata was reported as loaded")
+		assert(type(game.metasave) == "table", "metadata fallback is not a table")
+
+		assert(love.filesystem.write("joy.stick", "damaged controller data"))
+		assert(love.joy_load() == false, "damaged controller data was reported as loaded")
+		assert(type(k2j) == "table" and type(j2k) == "table",
+			"damaged controller data did not restore default mappings")
+
+		assert(love.filesystem.write("3.png", "damaged screenshot"))
+		assert(read_screenshot(3) == false, "damaged save preview was reported as loaded")
+		assert(screenshot == nil, "damaged save preview left an image active")
+
+		-- Old saves may predate disaster bookkeeping. Migration must supply every
+		-- field used by the current simulation.
+		pl.visited = nil
+		pl.ferted = nil
+		pl.disaster = nil
+		pl.disastercd = nil
+		game_migrate()
+		assert(type(pl.visited) == "table" and type(pl.ferted) == "table",
+			"save migration did not add exploration histories")
+		for name in pairs(cf.disaster) do
+			assert(pl.disaster[name] and type(pl.disaster[name].cd) == "number",
+				"save migration did not add disaster state for " .. name)
+		end
+
+		pl.visited = {}
+		pl.ferted = {}
+		assert(far_frost_spawn(1) == nil, "far frost accepted an empty visited list")
+		assert(amoeba_spawn(1) == nil, "amoeba accepted an empty visited list")
+		assert(frost_spawn(1) == nil, "frost accepted an empty fertilized list")
+
+		-- A random skip used to return from disaster_do and silently suppress all
+		-- other due disasters. Both due entries must now advance independently.
+		local previous_disaster_config = cf.disaster
+		local previous_disaster_state = pl.disaster
+		local previous_time = game.time
+		local previous_debug = game.dbg
+		cf.disaster = {
+			frost = { ini = 0, cd = 10, chance = -1 },
+			farfrost = { ini = 0, cd = 10, chance = -1 },
+		}
+		pl.disaster = {
+			frost = { cd = 0, cnt = 0 },
+			farfrost = { cd = 0, cnt = 0 },
+		}
+		game.time = 100
+		game.dbg = {}
+		love.math.random = function()
+			return 0
+		end
+		random_was_replaced = true
+		disaster_do()
+		assert(pl.disaster.frost.cd == 110 and pl.disaster.farfrost.cd == 110,
+			"one skipped disaster suppressed another due disaster")
+		love.math.random = original_random
+		random_was_replaced = false
+		cf.disaster = previous_disaster_config
+		pl.disaster = previous_disaster_state
+		game.time = previous_time
+		game.dbg = previous_debug
+
+		return "mode=persistence atomic_load=true legacy=true backup=true corruption=true disasters=true"
+	end)
+
+	if random_was_replaced then
+		love.math.random = original_random
+	end
+	love.graphics.captureScreenshot = original_capture_screenshot
+	textwall = original_textwall
+	for slot = 1, 3 do
+		game_delete_save(slot)
+	end
+	for _, filename in ipairs({
+		"info.save",
+		"info.save.bak",
+		"joy.stick",
+	}) do
+		love.filesystem.remove(filename)
+	end
+	love.filesystem.setIdentity(original_identity)
+
+	if not ok then
+		error(result)
+	end
+	finish(0, result)
+end
+
 local function export_atlas()
     local output_directory = os.getenv("SARCOPHAGUS_ATLAS_OUTPUT")
     assert(output_directory and output_directory ~= "", "SARCOPHAGUS_ATLAS_OUTPUT is required")
@@ -200,6 +359,54 @@ local function validate_display()
 	assert(sound_ambient_id() == 10 and game.ambient_sound == 10,
 		"removed cave ambience can still be selected")
 	game.ambient_sound = original_ambient_sound
+	local center_collision = tocollide({{
+		x = 32,
+		y = 32,
+		mode = {},
+	}})
+	assert(center_collision.up == nil and center_collision.down == nil
+		and center_collision.left == nil and center_collision.right == nil,
+		"collision check returned distances for directions that were not requested")
+	local directional_collision = tocollide({{
+		x = 32,
+		y = 32,
+		mode = { up = true, down = true, left = true, right = true },
+	}})
+	for _, direction in ipairs({ "up", "down", "left", "right" }) do
+		assert(type(directional_collision[direction]) == "number",
+			"collision check lost the " .. direction .. " distance")
+	end
+	local original_projectiles = proj
+	local original_dt = dt
+	proj = {{
+		x = 32,
+		y = 32,
+		xspeed = 10,
+		yspeed = 0,
+		proj = 15,
+		bounce = { 0, 0, 0, 0 },
+	}}
+	dt = 1 / 30
+	proj_update()
+	assert(proj[1] ~= nil, "projectile update unexpectedly removed a moving projectile")
+	proj = original_projectiles
+	dt = original_dt
+
+	local animation = new_worldani("smoke-test", "assplode", {
+		test_marker = 42,
+	})
+	assert(animation.test_marker == 42,
+		"world animation options were written through an undefined object")
+	worldani["smoke-test"] = nil
+
+	local mob_list = {
+		[2] = { proto = {} },
+		[7] = { id = 1 },
+	}
+	assert(mobs_remove_prototypes(mob_list) == 1,
+		"prototype mob cleanup did not report the removed entry")
+	assert(mob_list[2] == nil and mob_list[7] ~= nil,
+		"prototype mob cleanup removed the wrong entry")
 	local original_escmenu_position = game.escmenu
 	local original_sound_add = sound_add
 	sound_add = function() end
@@ -509,6 +716,14 @@ function smoke.install(specification)
 		end
 
         original_load(...)
+
+		if mode == "persistence" then
+			local ok, err = pcall(validate_persistence)
+			if not ok then
+				finish(1, "mode=persistence " .. tostring(err))
+			end
+			return
+		end
 
 		if mode == "mapgen" then
 			begin_map_generation_test()

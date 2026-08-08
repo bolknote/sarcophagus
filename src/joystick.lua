@@ -140,18 +140,19 @@ end
 
 
 function love.joy_save ()
+	local encoded, save = pcall(function()
+		local BlobWriter = require("src.BlobWriter")
+		local blob = BlobWriter()
+		blob:write(k2j)
+			:write(j2k)
+		local serialized = blob:tostring()
+		return love.data.compress("string", "gzip", serialized)
+	end)
+	if not encoded then
+		return false, save
+	end
 
-
-	local BlobWriter = require('src.BlobWriter')
-	blob = BlobWriter()
-
-	blob:write(k2j)
-	:write(j2k)
-
-	local save = blob:tostring()
-	save = love.data.compress ('string', 'gzip', save)
-	love.filesystem.write ('joy.stick', save)
-
+	return love.filesystem.write("joy.stick", save)
 end
 
 
@@ -159,27 +160,24 @@ end
 
 
 function love.joy_load ()
-
-
-	local BlobReader = require('src.BlobReader')
-	local save = love.filesystem.read('joy.stick')
-
+	local save = love.filesystem.read("joy.stick")
 	if save then
-		save = love.data.decompress('string', 'gzip', save)
-		local blob = BlobReader(save)
-
-		if blob then
-			k2j = blob:read()
-			j2k = blob:read()
+		local decoded, mappings, reverse_mappings = pcall(function()
+			local serialized = love.data.decompress("string", "gzip", save)
+			local BlobReader = require("src.BlobReader")
+			local blob = BlobReader(serialized)
+			return blob:read(), blob:read()
+		end)
+		if decoded and type(mappings) == "table" and type(reverse_mappings) == "table" then
+			k2j = mappings
+			j2k = reverse_mappings
+			return true
 		end
-	else
-
-		j2k = j2k or {}
-		k2j = k2j or {}
-
 	end
 
-
+	k2j = {}
+	j2k = {}
+	return false
 end
 
 

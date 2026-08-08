@@ -1,3 +1,14 @@
+function mobs_remove_prototypes(active_mobs)
+	local removed = 0
+	for id, mob in pairs(active_mobs or {}) do
+		if mob.proto then
+			active_mobs[id] = nil
+			removed = removed + 1
+		end
+	end
+	return removed
+end
+
 function love.update(d)
 
 	--love.audio.setVolume(0.1)
@@ -743,15 +754,9 @@ function love.update(d)
 
 	-- mobs 
 	local mobst = 0
+	mobs_remove_prototypes(mobs)
 
 	for i,v in pairs(mobs) do	
-
-		--2remove
-		if v.proto then
-			mobs[v]=nil
-			return
-		end
-		
 
 		if v.light then
 

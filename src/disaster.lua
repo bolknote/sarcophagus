@@ -17,53 +17,47 @@ function disaster_ini ()
 end
 
 function disaster_do ()
+	for name, config in pairs(cf.disaster) do
+		pl.disaster[name] = pl.disaster[name] or {
+			cd = config.ini,
+			cnt = 0,
+		}
+		local state = pl.disaster[name]
+		state.cd = state.cd or config.ini
+		state.cnt = state.cnt or 0
 
-	--dump (pl.disaster)
-
-	for k,v in pairs(cf.disaster) do
-		if pl.disaster[k].cd<game.time then
-
-			--random skip
-			if love.math.random (0,100)>cf.disaster[k].chance then
-				pl.disaster[k].cd = game.time + cf.disaster[k].cd
-				return
-			end
-
-			if game.dbg[1] then print (k) end
-
-			local done
-
-			if k == 'frost' then
-
-				local w = math.floor (game.time/time.w)%2
-
-				if w==1 then
-
-					done = frost_spawn (math.ceil (math.log (game.time/(time.d*1))))
-					if done then
-						pl.ferted = {}
-					end
-
+		if state.cd < game.time then
+			local skipped = love.math.random(0, 100) > config.chance
+			if skipped then
+				-- Skipping one due disaster must not prevent the remaining due
+				-- disasters from being evaluated in this update.
+				state.cd = game.time + config.cd
+			else
+				if game.dbg and game.dbg[1] then
+					print(name)
 				end
 
-			end
+				local done
+				if name == "frost" then
+					local week = math.floor(game.time / time.w) % 2
+					if week == 1 then
+						done = frost_spawn(math.ceil(math.log(game.time / time.d)))
+						if done then
+							pl.ferted = {}
+						end
+					end
+				elseif name == "farfrost" then
+					done = far_frost_spawn(1)
+				elseif name == "amoeba" then
+					done = amoeba_spawn(1)
+				elseif name == "steal" then
+					done = stealer_spawn(love.math.random(5, 10))
+				end
 
-			if k == 'farfrost' then
-				done = far_frost_spawn (1)
+				if done then
+					state.cd = game.time + config.cd
+				end
 			end
-
-			if k == 'amoeba' then
-				done = amoeba_spawn (1)
-			end
-
-			if k == 'steal' then
-				done = stealer_spawn (love.math.random (5,10))
-			end
-
-			if done then
-				pl.disaster[k].cd = game.time + cf.disaster[k].cd
-			end
-
 		end
 	end
 
@@ -148,17 +142,20 @@ function far_frost_spawn (n)
 	local n = n or 5
 	local growable = {1,8,9,17,31,32,47,48,99,12,13,102}
 	local points = parse_visited (pl.visited)
+	if #points == 0 then
+		return nil
+	end
 	local cnt = 1
 	local done = nil
 
 	while n>0 do
 
 		cnt = cnt + 1
-		local pl = love.math.random (math.ceil (#points/2), #points)
+		local point_index = love.math.random (math.ceil (#points/2), #points)
 
-		if points[pl] then
-			local x = tonumber (points[pl][1])
-			local y = tonumber (points[pl][2])
+		if points[point_index] then
+			local x = tonumber (points[point_index][1])
+			local y = tonumber (points[point_index][2])
 			local h,w = get_height (x,y)
 
 			if in_array (growable, w) then
@@ -181,12 +178,15 @@ end
 function amoeba_spawn (n)
 
 	local points = parse_visited (pl.visited)
-	local pl = love.math.random (math.ceil (#points/2), #points)
+	if #points == 0 then
+		return nil
+	end
+	local point_index = love.math.random (math.ceil (#points/2), #points)
 
-	if points[pl] then
+	if points[point_index] then
 
-		local x = tonumber (points[pl][1])
-		local y = tonumber (points[pl][2])-2
+		local x = tonumber (points[point_index][1])
+		local y = tonumber (points[point_index][2])-2
 	
 		if readmap (x,y,'b')==0 then
 			mob_create (x,y,9)
@@ -203,17 +203,20 @@ function frost_spawn (n)
 	local n = n or 5
 	local growable = {1,8,9,17,31,32,99} --47, 48
 	local points = parse_visited (pl.ferted)
+	if #points == 0 then
+		return nil
+	end
 	local cnt = 1
 	local done = nil
 
 	while n>0 do
 
 		cnt = cnt + 1
-		local pl = love.math.random (1,#points)
+		local point_index = love.math.random (1,#points)
 
-		if points[pl] then
-			local x = tonumber (points[pl][1])
-			local y = tonumber (points[pl][2])
+		if points[point_index] then
+			local x = tonumber (points[point_index][1])
+			local y = tonumber (points[point_index][2])
 			local h,w = get_height (x,y)
 
 			if in_array (growable, w) then
@@ -244,9 +247,9 @@ end
 
 function parse_visited (arr,sort)
 
-	a = {}
+	local a = {}
 
-	for k,v in pairs(arr) do
+	for k,v in pairs(arr or {}) do
 		local x = string.match (k,"(%d+)_")
 		local y = string.match (k, "_(%d+)")
 		table.insert (a, {x,y,v})

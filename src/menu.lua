@@ -11,7 +11,7 @@ end
 local function localized_save_files()
 	local files = {}
 	for i = 1, 9 do
-		local info = love.filesystem.getInfo(i .. ".sav")
+		local info = game_save_slot_info(i)
 		if info then
 			files[i] = I18N.format_datetime(msg, info.modtime)
 		else
@@ -264,6 +264,7 @@ function love.menu_keypressed(key, scan)
 	if scan == "f2" then
 		language_next()
 		game.files = localized_save_files()
+		stradd = ""
 		return
 	end
 
@@ -310,7 +311,8 @@ function love.menu_keypressed(key, scan)
 
 		if game.files[game.savepos] ~= "-----------------" then
 			local selected_slot = game.savepos
-			if game_load(game.savepos) then
+			local loaded, load_error = game_load(game.savepos)
+			if loaded then
 				game.escmenu = nil
 				game.savepos = selected_slot
 				game.save = nil
@@ -321,6 +323,12 @@ function love.menu_keypressed(key, scan)
 				love.draw = love.old_draw
 				screen_full()
 				game.moved = true
+			else
+				stradd = msg.persistence.load_failed
+				if oldprint then
+					oldprint("Could not load save slot " .. tostring(selected_slot)
+						.. ": " .. tostring(load_error))
+				end
 			end
 		else
 			begin_map_generation()
@@ -329,6 +337,7 @@ function love.menu_keypressed(key, scan)
 
 	if scan == "w" then
 		sound_add("button", 4, {kill = 1})
+		stradd = ""
 		game.savepos = game.savepos - 1
 		if game.savepos < 1 then
 			game.savepos = 9
@@ -338,6 +347,7 @@ function love.menu_keypressed(key, scan)
 
 	if scan == "s" then
 		sound_add("button", 4, {kill = 1})
+		stradd = ""
 		game.savepos = game.savepos + 1
 		if game.savepos > 9 then
 			game.savepos = 1
@@ -349,20 +359,26 @@ function love.menu_keypressed(key, scan)
 		and (is_pressed("lshift") or is_pressed("rshift")) then
 		sound_add("button", 20, {kill = 1})
 		game.menu = nil
-		love.filesystem.remove(game.savepos .. ".sav")
-		love.filesystem.remove(game.savepos .. ".png")
+		stradd = ""
+		game_delete_save(game.savepos)
 	end
 end
 
 function read_screenshot(n)
 	if love.filesystem.getInfo(n .. ".png") then
-		screenshot = love.graphics.newImage(n .. ".png")
+		local loaded, image = pcall(love.graphics.newImage, n .. ".png")
+		if not loaded then
+			screenshot = nil
+			return false, image
+		end
+		screenshot = image
 		-- Save previews are resized by a non-integer factor in the menu. Linear
 		-- sampling keeps Retina text and one-pixel UI lines intact when reduced.
 		screenshot:setFilter("linear", "linear")
 	else
 		screenshot = nil
 	end
+	return screenshot ~= nil
 end
 
 function save_preview_layout(
@@ -450,7 +466,7 @@ function love.menu_update(d)
 
 	game.menu = game.menu .. msg.menu.switch_worlds .. "\n\n{#feae34ff}"
 	if stradd ~= "" then
-		game.menu = "{#feae34ff}" .. stradd
+		game.menu = game.menu .. "\n\n{#ff0044ff}" .. stradd .. "{#ffffffff}"
 	end
 
 	game.menu = game.menu .. "\n\n\n\n\n"

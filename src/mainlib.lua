@@ -62,9 +62,10 @@ function new_worldani (name, id, add)
 	add = add or {}
 
 	for k,v in pairs(add) do
-		obj[k] = add[k]
+		worldani[name][k] = v
 	end
 
+	return worldani[name]
 end
 
 
@@ -1111,6 +1112,14 @@ function col_add (id,obj,state,name,t,num)
 
 end
 
+local function nearest_collision_offset(offsets)
+	if #offsets == 0 then
+		return nil
+	end
+	return math.min(unpack(offsets)) - 1
+end
+
+
 -- collide (obviously)
 function tocollide (points, pass)
 
@@ -1123,7 +1132,7 @@ function tocollide (points, pass)
 	for i,v in ipairs(points) do
 		local x = v.x
 		local y = v.y
-		local mode = v.mode
+		local mode = v.mode or {}
 		
 
 		local r = px2tile (x,y)
@@ -1214,10 +1223,10 @@ function tocollide (points, pass)
 	
 	
 	
-	togo.up = math.min (unpack(togo.up))-1
-	togo.down = math.min (unpack(togo.down))-1
-	togo.left = math.min (unpack(togo.left))-1
-	togo.right = math.min (unpack(togo.right))-1
+	togo.up = nearest_collision_offset(togo.up)
+	togo.down = nearest_collision_offset(togo.down)
+	togo.left = nearest_collision_offset(togo.left)
+	togo.right = nearest_collision_offset(togo.right)
 
 
 		if togo.x then
@@ -2324,7 +2333,7 @@ function savefiles ()
 
 	local str = ""
 	for i=1,9 do
-		local info = love.filesystem.getInfo(i..".save")
+		local info = game_save_slot_info and game_save_slot_info(i)
 		str = str.."\n"
 		if info==nil then
 			str = str..i.."] -----------------"
@@ -2338,6 +2347,23 @@ end
 
 function game_migrate ()
 
+	pl.inv = pl.inv or {}
+	pl.invsize = pl.invsize or 9
+	pl.invselect = pl.invselect or 1
+	pl.stats = pl.stats or {}
+	pl.visited = pl.visited or {}
+	pl.ferted = pl.ferted or {}
+	pl.disastercd = pl.disastercd or 0
+	pl.disaster = pl.disaster or {}
+	for name, config in pairs(cf.disaster or {}) do
+		pl.disaster[name] = pl.disaster[name] or {
+			cd = config.ini,
+			cnt = 0,
+		}
+		pl.disaster[name].cd = pl.disaster[name].cd or config.ini
+		pl.disaster[name].cnt = pl.disaster[name].cnt or 0
+	end
+
 	inv_compact ()
 	achi_ini ()
 	pl.stats.faith = pl.stats.faith or {hp = 0, maxhp = 100, lvl = 0, pc = 0, d = 0}
@@ -2345,15 +2371,98 @@ function game_migrate ()
 end
 
 
-function game_loadinfo ()
-	local save = love.filesystem.read('info.save')
-	if save then
-		save = love.data.decompress('string', 'gzip', save)
-		save = binser.deserialize(save)
-		game.metasave = save[1]
-	else
-		game.metasave = {}
+local save_slot_formats = {
+	{ suffix = ".sav", compressed = false, priority = 1 },
+	{ suffix = ".sav.bak", compressed = false, priority = 2 },
+	{ suffix = ".save", compressed = true, priority = 3 },
+}
+
+local function save_slot_candidates(name)
+	local candidates = {}
+	for _, format in ipairs(save_slot_formats) do
+		local filename = tostring(name) .. format.suffix
+		local info = love.filesystem.getInfo(filename, "file")
+		if info then
+			candidates[#candidates + 1] = {
+				filename = filename,
+				compressed = format.compressed,
+				priority = format.priority,
+				info = info,
+			}
+		end
 	end
+
+	table.sort(candidates, function(left, right)
+		local left_time = left.info.modtime or 0
+		local right_time = right.info.modtime or 0
+		if left_time == right_time then
+			return left.priority < right.priority
+		end
+		return left_time > right_time
+	end)
+
+	return candidates
+end
+
+function game_save_slot_info(name)
+	local candidate = save_slot_candidates(name)[1]
+	if candidate then
+		return candidate.info, candidate.filename
+	end
+	return nil
+end
+
+function game_delete_save(name)
+	local removed = false
+	for _, suffix in ipairs({ ".sav", ".sav.bak", ".save", ".png" }) do
+		local filename = tostring(name) .. suffix
+		if love.filesystem.getInfo(filename) then
+			removed = love.filesystem.remove(filename) or removed
+		end
+	end
+	return removed
+end
+
+local function write_with_backup(filename, data)
+	local previous = love.filesystem.read(filename)
+	if previous then
+		local backed_up, backup_error = love.filesystem.write(filename .. ".bak", previous)
+		if not backed_up then
+			return false, backup_error or "could not write backup"
+		end
+	end
+
+	local written, write_error = love.filesystem.write(filename, data)
+	if not written then
+		return false, write_error or "could not write file"
+	end
+	return true
+end
+
+local function decode_metasave(serialized)
+	local decompressed = love.data.decompress("string", "gzip", serialized)
+	local values = binser.deserialize(decompressed)
+	if type(values) ~= "table" or type(values[1]) ~= "table" then
+		error("invalid metadata payload")
+	end
+	return values[1]
+end
+
+
+function game_loadinfo ()
+	for _, filename in ipairs({ "info.save", "info.save.bak" }) do
+		local save = love.filesystem.read(filename)
+		if save then
+			local decoded, metasave = pcall(decode_metasave, save)
+			if decoded then
+				game.metasave = metasave
+				return true
+			end
+		end
+	end
+
+	game.metasave = {}
+	return false
 
 end
 
@@ -2373,9 +2482,15 @@ function game_saveinfo ()
 	
 
 
-	local save = binser.serialize (game.metasave)
-	save = love.data.compress ('string', 'gzip', save)
-	love.filesystem.write ('info.save', save)
+	local encoded, save = pcall(function()
+		local serialized = binser.serialize(game.metasave)
+		return love.data.compress("string", "gzip", serialized)
+	end)
+	if not encoded then
+		return false, save
+	end
+
+	return write_with_backup("info.save", save)
 
 end
 
@@ -2424,92 +2539,141 @@ end
 
 
 function game_save (name)
-
-	game.lastsave = game.dt + 60*10
-	game_saveinfo ()
-
-	-- local save = binser.serialize (world, vi, pl, game, tips, disp, cf, mobs)
-	-- save = love.data.compress ('string', 'gzip', save)
-	-- love.filesystem.write (name..'.save', save)
-	-- love.filesystem.write ('9.save', save)
-
-
-		local BlobWriter = require('src.BlobWriter')
-		blob = BlobWriter()
-
-		
+	local encoded, save = pcall(function()
+		local BlobWriter = require("src.BlobWriter")
+		local blob = BlobWriter()
 		blob:write(world)
-		:write(vi)
-		:write(pl)
-		:write(game)
-		:write(tips)
-		:write(disp)
-		:write(cf)
-		:write(mobs)
+			:write(vi)
+			:write(pl)
+			:write(game)
+			:write(tips)
+			:write(disp)
+			:write(cf)
+			:write(mobs)
+		return blob:tostring()
+	end)
 
-		local save = blob:tostring()
+	if not encoded then
+		textwall(msg.persistence.save_failed, false)
+		return false, save
+	end
 
-		--save = love.data.compress ('string', 'gzip', save)
-		love.filesystem.write (name..'.sav', save)
+	local written, write_error = write_with_backup(tostring(name) .. ".sav", save)
+	if not written then
+		textwall(msg.persistence.save_failed, false)
+		return false, write_error
+	end
 
-	
-	love.graphics.captureScreenshot(name..".png")
-	textwall (msg.game[1], false)
+	game.lastsave = (game.dt or 0) + 60 * 10
+	local metadata_saved, metadata_error = game_saveinfo()
+	if not metadata_saved and oldprint then
+		oldprint("Could not save game metadata: " .. tostring(metadata_error))
+	end
 
+	love.graphics.captureScreenshot(tostring(name) .. ".png")
+	textwall(msg.game[1], false)
+	return true
 end
 
 
-function game_load (name)
-
-	-- bubble = {}
-
-	local BlobReader = require('src.BlobReader')
-	local save = love.filesystem.read(name..'.sav')
-
-	
-	if save then
-		--
-	else
-		save = love.filesystem.read(name..'.save')
-		save = love.data.decompress('string', 'gzip', save)
+local function decode_game_save(serialized, compressed)
+	if compressed then
+		serialized = love.data.decompress("string", "gzip", serialized)
 	end
 
-	if save then
-		local blob = BlobReader(save)
+	local BlobReader = require("src.BlobReader")
+	local blob = BlobReader(serialized)
+	local state = {
+		world = blob:read(),
+		vi = blob:read(),
+		pl = blob:read(),
+		game = blob:read(),
+		tips = blob:read(),
+		disp = blob:read(),
+		saved_cf = blob:read(),
+		mobs = blob:read(),
+	}
 
-		if blob then
-			world = blob:read()
-			vi = blob:read()
-			pl = blob:read()
-			game = blob:read()
-			tips = blob:read()
-			disp = blob:read()
-			ncf = blob:read()
-			mobs = blob:read()
+	for _, key in ipairs({ "world", "vi", "pl", "game", "tips", "disp", "saved_cf", "mobs" }) do
+		if type(state[key]) ~= "table" then
+			error("invalid " .. key .. " section")
+		end
+	end
+	if next(state.world) == nil then
+		error("empty world section")
+	end
+
+	return state
+end
+
+local function activate_game_save(state)
+	local previous = {
+		world = world,
+		vi = vi,
+		pl = pl,
+		game = game,
+		tips = tips,
+		disp = disp,
+		ncf = ncf,
+		mobs = mobs,
+	}
+
+	world = state.world
+	vi = state.vi
+	pl = state.pl
+	game = state.game
+	tips = state.tips
+	disp = state.disp
+	ncf = state.saved_cf
+	mobs = state.mobs
+
+	local migrated, migration_error = pcall(function()
+		game_migrate()
+		game_loadinfo()
+		game.lastsave = (game.dt or 0) + 60 * 10
+		game.craft = false
+	end)
+	if migrated then
+		return true
+	end
+
+	world = previous.world
+	vi = previous.vi
+	pl = previous.pl
+	game = previous.game
+	tips = previous.tips
+	disp = previous.disp
+	ncf = previous.ncf
+	mobs = previous.mobs
+	return false, migration_error
+end
+
+function game_load (name)
+	local errors = {}
+	local candidates = save_slot_candidates(name)
+	if #candidates == 0 then
+		return false, "save slot is empty"
+	end
+
+	for _, candidate in ipairs(candidates) do
+		local save, read_error = love.filesystem.read(candidate.filename)
+		if save then
+			local decoded, state = pcall(decode_game_save, save, candidate.compressed)
+			if decoded then
+				local activated, activation_error = activate_game_save(state)
+				if activated then
+					return true
+				end
+				errors[#errors + 1] = candidate.filename .. ": " .. tostring(activation_error)
+			else
+				errors[#errors + 1] = candidate.filename .. ": " .. tostring(state)
+			end
+		else
+			errors[#errors + 1] = candidate.filename .. ": " .. tostring(read_error)
 		end
 	end
 
-	-- local save = love.filesystem.read(name..'.save')
-	-- save = love.data.decompress('string', 'gzip', save)
-	-- save = binser.deserialize(save)
-	-- world = save[1]
-	-- vi = save[2] 
-	-- pl = save[3]
-	-- game = save[4]
-	-- tips = save[5]
-	-- disp = save[6]
-	-- ccf = save[7]
-	-- mobs = save[8]
-
-	game_migrate ()
-	game_loadinfo ()
-
-	game.lastsave = game.dt + 60*10
-	game.craft = false
-
-
-	return true
-
+	return false, table.concat(errors, "; ")
 end
 	
 

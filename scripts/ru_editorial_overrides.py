@@ -638,6 +638,8 @@ OVERRIDES: dict[tuple[object, ...], str] = {
     # Shared interface terminology and a menu phrase that require context.
     ("stats", "arms"): "силы",
     ("menu", "legacy"): "\nНажмите {#fee761ff}L{#ffffffff}, чтобы начать новую игру с «{#63c74dff}наследством{#ffffffff}».",
+    ("persistence", "load_failed"): "Сохранение повреждено и не загрузилось. Резервная копия была проверена автоматически.",
+    ("persistence", "save_failed"): "{#ff0044ff}Не удалось сохранить игру. Предыдущее сохранение не удалено.{#ffffffff}",
 
     # Save-slot timestamps must not inherit the operating system's locale.
     ("datetime", "save"): "_1_, _2_ _3_ _4_, _5_:_6_:_7_",

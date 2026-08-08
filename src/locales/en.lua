@@ -151,6 +151,11 @@ msg.menu = {
 	etymology = "{#3a4466ff}— from the Greek sarx meaning “flesh”, and phagein - “to eat”{#ffffffff}",
 }
 
+msg.persistence = {
+	load_failed = "This save is damaged and could not be loaded. A backup was tried automatically.",
+	save_failed = "{#ff0044ff}The game could not be saved. Your previous save was kept.{#ffffffff}",
+}
+
 msg.ui = {
 	time = "Week _1_, Day _2_, _3_:_4_",
 	location = "Loc: _1_:_2_",

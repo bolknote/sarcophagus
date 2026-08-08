@@ -2210,5 +2210,8 @@ msg["stone"][198]["name"] = "Сжигатель калорий"
 msg["ui"]["location"] = "Поз: _1_:_2_"
 msg["ui"]["robot_exterminate"] = "уничтожить!"
 msg["ui"]["time"] = "Неделя _1_, день _2_, _3_:_4_"
+msg["persistence"] = {}
+msg["persistence"]["load_failed"] = "Сохранение повреждено и не загрузилось. Резервная копия была проверена автоматически."
+msg["persistence"]["save_failed"] = "{#ff0044ff}Не удалось сохранить игру. Предыдущее сохранение не удалено.{#ffffffff}"
 
 return msg
