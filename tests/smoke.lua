@@ -24,6 +24,9 @@ local function validate_loaded_game(slot)
     assert(type(vi) == "table", "camera state is missing")
     assert(type(mobs) == "table", "mob state is missing")
 
+    local rendered, render_error = pcall(draw_gui)
+    assert(rendered, "localized HUD render failed: " .. tostring(render_error))
+
     finish(0, (
         "mode=load language=%s slot=%d world_rows=%d inventory=%d mobs=%d version=%s"
     ):format(

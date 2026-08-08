@@ -849,8 +849,9 @@ if game.hidelog == nil or game.craft or love.mouse.getY()>screen.txt then
 
 		gy = gy - h * add_h
 
-		local border = 
-		msg.gui[34]..string.rep("─",he-12+add_w).."┐\n"..
+		local header = msg.gui[34]
+		local border =
+		header..string.rep("─",math.max(0, he+add_w+6-utf8.len(header))).."┐\n"..
 		string.rep("│   "..string.rep(" ",he+add_w).."  │\n",11+add_h)..
 		"└───────"..string.rep("─",he-2+add_w).."┘\n"
 
@@ -863,10 +864,12 @@ if game.hidelog == nil or game.craft or love.mouse.getY()>screen.txt then
 		
 		love.graphics.printf(text_color (craft.str),gx+w*3+shad, gy+h*1.5+4,vi.textwall_w+add_w*w)
 	else
-		local border = 
-		msg.gui[33]..string.rep("─",he-12).."┐\n"..
+		local header = msg.gui[33]
+		local footer = msg.gui[41]
+		local border =
+		header..string.rep("─",math.max(0, he+6-utf8.len(header))).."┐\n"..
 		string.rep("│   "..string.rep(" ",he).."  │\n",11)..
-		msg.gui[41]..string.rep("─",he-2-95).."┘\n"
+		footer..string.rep("─",math.max(0, he+6-utf8.len(footer))).."┘\n"
 
 		love.graphics.setColor (0,0,0,0.8)
 		love.graphics.rectangle("fill", gx, gy, w*(he+9), h*14)

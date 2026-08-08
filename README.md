@@ -158,6 +158,7 @@ The resulting file is written to `dist/Sarcophagus.love`. Both scripts use the i
 | `locales/en.lua` | Complete English text |
 | `locales/ru.lua` | Active incremental Russian translation |
 | `locales/ru_legacy.lua` | Preserved old Russian draft; excluded from releases |
+| `docs/localization-glossary.md` | Russian terminology and translation style |
 | `gr/` | Source sprite images |
 | `sound/` | Sound and music assets |
 | `maps/` | Map chunks used by world generation |
@@ -325,6 +326,7 @@ love /абсолютный/путь/к/Sarcophagus
 | `locales/en.lua` | Полный английский текст |
 | `locales/ru.lua` | Активный пополняемый русский перевод |
 | `locales/ru_legacy.lua` | Сохранённый старый черновик; не входит в релиз |
+| `docs/localization-glossary.md` | Терминология и стиль русского перевода |
 | `gr/` | Исходные изображения спрайтов |
 | `sound/` | Звуки и музыка |
 | `maps/` | Фрагменты карты для генератора мира |

@@ -1,7 +1,7 @@
 local validator = {}
 
 local color_pattern = "{#%x+}"
-local format_pattern = "%%[-+ #0]*%d*%.?%d*[cdeEfgGiouxXqs]"
+local format_pattern = "%%[-+#0]*%d*%.?%d*[cdeEfgGiouxXqs]"
 local gameplay_markers = { "#dig", "#cut", "#chop", "#smash", "#pierce", "≈" }
 
 local function sorted_matches(value, pattern)
@@ -52,6 +52,10 @@ local function validate_string(base, translation, path, errors, warnings)
 
 	if sorted_matches(base, format_pattern) ~= sorted_matches(translation, format_pattern) then
 		errors[#errors + 1] = path .. ": string.format token set differs"
+	end
+
+	if count_plain(base, "%%") ~= count_plain(translation, "%%") then
+		errors[#errors + 1] = path .. ": escaped percent count differs"
 	end
 
 	for _, marker in ipairs(gameplay_markers) do
