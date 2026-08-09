@@ -21,6 +21,13 @@ do
       end
       return result
     end,
+    setYieldCallback = function(self, callback)
+      if callback ~= nil and type(callback) ~= 'function' then
+        error("yield callback must be a function or nil")
+      end
+      self._yieldCallback = callback
+      return self
+    end,
     number = function(self, value)
       self._union.f64 = value
       return self:u32(self._union.u32[0]):u32(self._union.u32[1])
@@ -331,6 +338,9 @@ do
       if type(value) == 'function' then
         return self
       end
+      if self._yieldCallback then
+        self._yieldCallback()
+      end
       self:_writeTagged(key, stack)
       return self:_writeTagged(value, stack)
     end,
@@ -348,6 +358,7 @@ do
     __init = function(self, sizeOrByteOrder, size)
       self._union = _Union()
       self._length, self._size = 0, 0
+      self._yieldCallback = nil
       local byteOrder = type(sizeOrByteOrder) == 'string' and sizeOrByteOrder or nil
       size = type(sizeOrByteOrder) == 'number' and sizeOrByteOrder or size
       self:setByteOrder(byteOrder)

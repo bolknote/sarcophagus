@@ -179,7 +179,8 @@ Run the automated compatibility checks:
 
 The suite also performs an actual windowed → fullscreen → windowed transition,
 checks double-size rendering, and exercises the complete ten-minute autosave
-path (queue, fade deferral, backup, reload, disable option, and failed-save retry).
+path (incremental serialization, worker-thread compression and writing, backup,
+reload, disable option, and failed-save retry).
 
 Validate the localization overlay separately:
 
@@ -293,7 +294,7 @@ Normal package builds use the committed derived icons and do not require those i
 
 ## Save data
 
-LÖVE stores user data under the `sarcophagus` identity. The game supports nine save slots and writes a screenshot alongside each save. `tests/fixtures/9.sav` is retained as a compatibility fixture during modernization.
+LÖVE stores user data under the `sarcophagus` identity. The game supports nine save slots and writes a screenshot alongside each save. New `.sav` files use a versioned gzip container; original uncompressed `.sav` files and legacy compressed `.save` files remain readable. `tests/fixtures/9.sav` is retained as a compatibility fixture during modernization.
 
 ## Credits and links
 
@@ -477,7 +478,8 @@ love /абсолютный/путь/к/Sarcophagus
 
 Набор тестов также реально переключает окно → полный экран → окно, проверяет
 двойной масштаб и весь путь десятиминутного autosave: постановку в очередь,
-ожидание fade, backup, повторную загрузку, отключение и retry после ошибки записи.
+порционную сериализацию, сжатие и запись в рабочем потоке, backup, повторную
+загрузку, отключение и retry после ошибки записи.
 
 Для отдельной проверки структуры локализаций:
 
@@ -591,7 +593,7 @@ Workflow `Build and release` в GitHub Actions запускает полный �
 
 ## Сохранения
 
-LÖVE хранит пользовательские данные под идентификатором `sarcophagus`. Игра поддерживает девять слотов и сохраняет снимок экрана рядом с каждым сейвом. Файл `tests/fixtures/9.sav` оставлен как контрольный пример для проверки обратной совместимости.
+LÖVE хранит пользовательские данные под идентификатором `sarcophagus`. Игра поддерживает девять слотов и сохраняет снимок экрана рядом с каждым сейвом. Новые `.sav` записываются в версионированном gzip-контейнере; исходные несжатые `.sav` и старые сжатые `.save` по-прежнему загружаются. Файл `tests/fixtures/9.sav` оставлен как контрольный пример для проверки обратной совместимости.
 
 ## Авторство и ссылки
 

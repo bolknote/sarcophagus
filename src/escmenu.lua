@@ -1,19 +1,44 @@
 
 function save_and_quit()
-	if exit then return false, "quit already pending" end
+	if exit or game.save_quitting then
+		return false, "quit already pending"
+	end
 
-	local saved, save_error = game_save(game.savepos)
-	if not saved then
+	local target_game = game
+	local previous_pause = game.pause
+	target_game.save_quitting = true
+	target_game.pause = true
+	local started, save_error = game_save_async(game.savepos, {
+		kind = "quit",
+		on_complete = function(saved, completion_error)
+			target_game.save_quitting = nil
+			if not saved then
+				target_game.pause = previous_pause
+				if game == target_game then
+					textwall(msg.persistence.save_failed, false)
+				end
+				if oldprint then
+					oldprint("Save and Quit failed: " .. tostring(completion_error))
+				end
+				return
+			end
+
+			textwall(msg.game[1], false)
+			target_game.screenshot = nil
+			if game == target_game and target_game.escmenu ~= nil then
+				esc_menu()
+			end
+			target_game.pause = nil
+			quit_after_save = true
+			exit = 10
+		end,
+	})
+	if not started then
+		target_game.save_quitting = nil
+		target_game.pause = previous_pause
+		textwall(msg.persistence.save_failed, false)
 		return false, save_error
 	end
-
-	game.screenshot = nil
-	if game.escmenu ~= nil then
-		esc_menu()
-	end
-	game.pause = nil
-	quit_after_save = true
-	exit = 10
 	return true
 end
 
@@ -218,6 +243,10 @@ end
 
 
 function esc_menu_keypress (key,s)
+	if game.save_quitting then
+		return
+	end
+
 	s = normalize_esc_menu_key(key, s)
 	
 	local max = #msg.escmenu

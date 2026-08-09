@@ -74,6 +74,7 @@ local function validate_persistence()
 	local original_random = love.math.random
 	local test_identity = "sarcophagus-persistence-smoke"
 	local random_was_replaced = false
+	local SaveFormat = require("src.save_format")
 
 	love.filesystem.setIdentity(test_identity)
 	for slot = 1, 3 do
@@ -100,6 +101,18 @@ local function validate_persistence()
 		assert(world == previous_world and vi == previous_vi
 			and pl == previous_pl and game == previous_game,
 			"empty save slot changed active game state")
+
+		-- Current releases must continue to load the original uncompressed .sav
+		-- payloads even though newly written saves use a compressed container.
+		assert(not SaveFormat.is_container(fixture),
+			"legacy fixture unexpectedly uses the new save container")
+		assert(love.filesystem.write("1.sav", fixture))
+		assert(game_load(1), "legacy uncompressed .sav did not load")
+		assert(game_delete_save(1), "legacy uncompressed save was not deleted")
+		previous_world = world
+		previous_vi = vi
+		previous_pl = pl
+		previous_game = game
 
 		assert(love.filesystem.write("1.sav", "not a Sarcophagus save"))
 		loaded, load_error = game_load(1)
@@ -131,6 +144,12 @@ local function validate_persistence()
 		love.graphics.captureScreenshot = function() end
 		textwall = function() end
 		assert(game_save(2), "first game save failed")
+		local current_save = assert(love.filesystem.read("2.sav"))
+		assert(SaveFormat.is_container(current_save),
+			"new game save is not compressed")
+		local decoded_save = SaveFormat.decode(current_save)
+		assert(#decoded_save == SaveFormat.raw_size(current_save),
+			"compressed save header has an invalid raw size")
 		assert(game_save(2), "second game save failed")
 		assert(love.filesystem.getInfo("2.sav.bak"), "save backup was not created")
 		assert(love.filesystem.write("2.sav", "damaged after saving"))
@@ -234,9 +253,31 @@ local function validate_autosave()
 	local original_identity = love.filesystem.getIdentity()
 	local original_capture_screenshot = love.graphics.captureScreenshot
 	local original_textwall = textwall
-	local original_game_save = game_save
+	local original_game_save_async = game_save_async
 	local test_identity = "sarcophagus-autosave-smoke"
 	local messages = {}
+	local SaveFormat = require("src.save_format")
+
+	local function finish_background_save()
+		local deadline = love.timer.getTime() + 30
+		local saw_serializing = false
+		local saw_writing = false
+		local longest_update = 0
+		while save_manager.is_busy() and love.timer.getTime() < deadline do
+			local stage = save_manager.stage()
+			saw_serializing = saw_serializing or stage == "serializing"
+			saw_writing = saw_writing or stage == "writing"
+			local update_started = love.timer.getTime()
+			save_manager.update()
+			longest_update = math.max(
+				longest_update,
+				love.timer.getTime() - update_started
+			)
+			love.timer.sleep(0.001)
+		end
+		assert(not save_manager.is_busy(), "background save timed out")
+		return saw_serializing, saw_writing, longest_update
+	end
 
 	love.filesystem.setIdentity(test_identity)
 	game_delete_save(1)
@@ -271,7 +312,7 @@ local function validate_autosave()
 		exit = nil
 		quit_after_save = nil
 		love.oldkeypressed = love.keypressed
-		game_save = function()
+		game_save_async = function()
 			return false, "simulated write failure"
 		end
 		local saved, save_error = save_and_quit()
@@ -280,7 +321,8 @@ local function validate_autosave()
 		assert(game.escmenu == 2 and game.pause == true and exit == nil,
 			"failed Save and Quit still closed the menu or scheduled an exit")
 
-		game_save = function()
+		game_save_async = function(_, options)
+			options.on_complete(true)
 			return true
 		end
 		assert(save_and_quit(), "successful Save and Quit was rejected")
@@ -299,7 +341,7 @@ local function validate_autosave()
 		love.keypressed = original_keypressed
 		love.oldkeypressed = original_oldkeypressed
 		game.screenshot = original_screenshot
-		game_save = original_game_save
+		game_save_async = original_game_save_async
 
 		game.savepos = 1
 		game.dt = 0
@@ -330,15 +372,39 @@ local function validate_autosave()
 			"deferred autosave was lost or repeated its queue message")
 
 		game.fadein = nil
-		assert(autosave_update(game.dt, 4) == "saved",
-			"queued autosave was not written after the fade")
+		local snapshot_started = love.timer.getTime()
+		assert(autosave_update(game.dt, 4) == "started",
+			"queued autosave did not start after the fade")
+		local snapshot_time = love.timer.getTime() - snapshot_started
+		assert(snapshot_time < 0.5,
+			"save snapshot caused an excessive main-thread stall")
+		assert(game.autosave == "saving" and save_manager.is_busy(),
+			"background autosave state is missing")
+		world.__async_save_probe = "changed after snapshot"
+		assert(love.filesystem.read("1.sav") == before_save,
+			"background autosave replaced the file before serialization finished")
+		assert(save_manager.update(0.0001) == "serializing",
+			"large save serialization was not split across frames")
+		local saw_serializing, saw_writing, longest_update = finish_background_save()
+		assert(saw_serializing and saw_writing,
+			"autosave did not pass through serialization and worker stages")
+		assert(longest_update < 0.05,
+			"incremental save exceeded its per-frame time budget")
 		assert(game.autosave == nil and game.lastsave == 1201,
 			"successful autosave did not schedule the next ten-minute interval")
 		assert(love.filesystem.getInfo("1.sav.bak"),
 			"autosave did not preserve the previous save as a backup")
-		assert(love.filesystem.read("1.sav") ~= before_save,
+		local compressed_save = assert(love.filesystem.read("1.sav"))
+		assert(compressed_save ~= before_save,
 			"autosave did not replace the staged save")
+		assert(SaveFormat.is_container(compressed_save),
+			"autosave did not use the compressed save container")
+		local raw_size = assert(SaveFormat.raw_size(compressed_save))
+		assert(#compressed_save < raw_size,
+			"compressed save is not smaller than its raw payload")
 		assert(game_load(1), "autosaved game could not be loaded again")
+		assert(world.__async_save_probe == nil,
+			"live world mutations leaked into an in-progress save snapshot")
 		assert(game.autosave == nil,
 			"autosave queue flag leaked into the saved game")
 
@@ -363,21 +429,28 @@ local function validate_autosave()
 		game.dt = 3000
 		game.fadein = nil
 		game.fadeout = nil
-		game_save = function()
-			return false
+		game_save_async = function()
+			return false, "simulated autosave failure"
 		end
 		assert(autosave_update(game.dt, 4) == "failed",
 			"failed autosave was reported as successful")
 		assert(game.autosave == nil and game.lastsave == 3030,
 			"failed autosave did not schedule a bounded retry")
-		game_save = original_game_save
+		game_save_async = original_game_save_async
 
-		return "mode=autosave timer=600 deferred=true backup=true reload=true disabled=true retry=30"
+		return ("mode=autosave timer=600 incremental=true worker=true compressed=true backup=true reload=true disabled=true retry=30 snapshot_ms=%.1f max_step_ms=%.1f raw=%d stored=%d")
+			:format(
+				snapshot_time * 1000,
+				longest_update * 1000,
+				raw_size,
+				#compressed_save
+			)
 	end)
 
+	save_manager.shutdown()
 	love.graphics.captureScreenshot = original_capture_screenshot
 	textwall = original_textwall
-	game_save = original_game_save
+	game_save_async = original_game_save_async
 	game_delete_save(1)
 	game_delete_save(2)
 	love.filesystem.remove("info.save")

@@ -43,6 +43,11 @@ end
 
 binser = require "src.binser"
 require ("src.mainlib")
+save_manager = require("src.save_manager")
+
+function game_save_async(name, options)
+	return save_manager.start(name, options)
+end
 
 ini_quad ()
 

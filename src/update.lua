@@ -23,6 +23,10 @@ function autosave_update(now, mouse_idle)
 	now = tonumber(now) or tonumber(game.dt) or 0
 	mouse_idle = tonumber(mouse_idle) or tonumber(mousemoved_last) or 0
 
+	if game.autosave == "saving" then
+		return "saving"
+	end
+
 	-- A fade temporarily makes taking the save preview unsafe. Keep the queued
 	-- save, but do not enqueue it again (and flood the text log) every frame.
 	if game.autosave then
@@ -30,19 +34,39 @@ function autosave_update(now, mouse_idle)
 			return "deferred"
 		end
 
-		-- The queued flag is runtime-only. Clear it before serialization so an
-		-- autosaved game does not immediately save itself again when loaded.
-		game.autosave = nil
-		world = tablecheck(world)
-		local saved = game_save(game.savepos)
-		if saved then
-			game.lastsave = now + AUTOSAVE_INTERVAL
-			return "saved"
+		local target_game = game
+		local started, start_error = game_save_async(game.savepos, {
+			kind = "autosave",
+			on_complete = function(saved, save_error)
+				target_game.autosave = nil
+				local completed_at = tonumber(target_game.dt) or now
+				if saved then
+					target_game.lastsave = completed_at + AUTOSAVE_INTERVAL
+					if game == target_game then
+						textwall(msg.game[1], false)
+					end
+				else
+					target_game.lastsave = completed_at + AUTOSAVE_RETRY_INTERVAL
+					if game == target_game then
+						textwall(msg.persistence.save_failed, false)
+					end
+					if oldprint then
+						oldprint("Autosave failed: " .. tostring(save_error))
+					end
+				end
+			end,
+		})
+		if started then
+			target_game.autosave = "saving"
+			return "started"
 		end
 
-		-- A transient filesystem failure should be retried soon without trying
-		-- (and showing an error) on every rendered frame.
-		game.lastsave = now + AUTOSAVE_RETRY_INTERVAL
+		target_game.autosave = nil
+		target_game.lastsave = now + AUTOSAVE_RETRY_INTERVAL
+		textwall(msg.persistence.save_failed, false)
+		if oldprint then
+			oldprint("Could not start autosave: " .. tostring(start_error))
+		end
 		return "failed"
 	end
 
@@ -79,6 +103,12 @@ end
 
 
 function love.update(d)
+	-- Save serialization is cooperative and receives only a small slice of each
+	-- frame. Worker results are polled before focus and pause early-returns so a
+	-- background save can finish while the window is inactive or the menu is up.
+	if save_manager then
+		save_manager.update()
+	end
 
 	--love.audio.setVolume(0.1)
 

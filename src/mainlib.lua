@@ -26,6 +26,7 @@ end
 
 function love.quit ()
 	if quit_after_save then
+		if save_manager then save_manager.shutdown() end
 		(oldprint or print) ('exit')
 		return
 	end
@@ -38,6 +39,7 @@ function love.quit ()
 		return true
 	end
 
+	if save_manager then save_manager.shutdown() end
 	(oldprint or print) ('exit')
 end
 
@@ -2537,19 +2539,7 @@ function game_delete_save(name)
 end
 
 local function write_with_backup(filename, data)
-	local previous = love.filesystem.read(filename)
-	if previous then
-		local backed_up, backup_error = love.filesystem.write(filename .. ".bak", previous)
-		if not backed_up then
-			return false, backup_error or "could not write backup"
-		end
-	end
-
-	local written, write_error = love.filesystem.write(filename, data)
-	if not written then
-		return false, write_error or "could not write file"
-	end
-	return true
+	return require("src.save_io").write_with_backup(filename, data)
 end
 
 local function decode_metasave(serialized)
@@ -2579,7 +2569,7 @@ function game_loadinfo ()
 
 end
 
-function game_saveinfo ()
+function game_saveinfo_payload ()
 	game.metasave = game.metasave or {}
 	game.metasave.score = game.metasave.score or 0
 
@@ -2595,10 +2585,12 @@ function game_saveinfo ()
 	
 
 
-	local encoded, save = pcall(function()
-		local serialized = binser.serialize(game.metasave)
-		return love.data.compress("string", "gzip", serialized)
-	end)
+	local serialized = binser.serialize(game.metasave)
+	return love.data.compress("string", "gzip", serialized)
+end
+
+function game_saveinfo ()
+	local encoded, save = pcall(game_saveinfo_payload)
 	if not encoded then
 		return false, save
 	end
@@ -2637,19 +2629,70 @@ function table_load (name)
 end
 
 
+local SAVE_SECTION_COUNT = 8
+
+local function copy_save_value(value)
+	if type(value) ~= "table" then
+		return value
+	end
+
+	-- Save files do not preserve metatables, so copying them here only adds work
+	-- and memory. Avoid recursive calls for primitive keys and values as the
+	-- world contains millions of them.
+	local copy = {}
+	for key, nested in next, value do
+		local copied_key = type(key) == "table" and copy_save_value(key) or key
+		local nested_type = type(nested)
+		if nested_type == "table" then
+			nested = copy_save_value(nested)
+		elseif nested_type == "cdata" then
+			nested = 1000
+		end
+		copy[copied_key] = nested
+	end
+	return copy
+end
+
+function game_save_snapshot ()
+	local snapshot = {
+		copy_save_value(world),
+		copy_save_value(vi),
+		copy_save_value(pl),
+		copy_save_value(game),
+		copy_save_value(tips),
+		copy_save_value(disp),
+		copy_save_value(cf),
+		copy_save_value(mobs),
+	}
+
+	-- These fields describe an in-flight operation in the current process. They
+	-- must never cause a loaded game to resume or repeat that operation.
+	snapshot[4].autosave = nil
+	snapshot[4].save_quitting = nil
+	return snapshot
+end
+
+function game_serialize_snapshot (snapshot, yield_callback, initial_size)
+	if type(snapshot) ~= "table" then
+		error("save snapshot must be a table")
+	end
+
+	local BlobWriter = require("src.BlobWriter")
+	local blob = BlobWriter(initial_size)
+	blob:setYieldCallback(yield_callback)
+	for index = 1, SAVE_SECTION_COUNT do
+		if type(snapshot[index]) ~= "table" then
+			error("invalid save snapshot section " .. tostring(index))
+		end
+		blob:write(snapshot[index])
+	end
+	return blob:tostring()
+end
+
 function game_save (name)
 	local encoded, save = pcall(function()
-		local BlobWriter = require("src.BlobWriter")
-		local blob = BlobWriter()
-		blob:write(world)
-			:write(vi)
-			:write(pl)
-			:write(game)
-			:write(tips)
-			:write(disp)
-			:write(cf)
-			:write(mobs)
-		return blob:tostring()
+		local raw = game_serialize_snapshot(game_save_snapshot())
+		return require("src.save_format").encode(raw)
 	end)
 
 	if not encoded then
@@ -2676,9 +2719,7 @@ end
 
 
 local function decode_game_save(serialized, compressed)
-	if compressed then
-		serialized = love.data.decompress("string", "gzip", serialized)
-	end
+	serialized = require("src.save_format").decode(serialized, compressed)
 
 	local BlobReader = require("src.BlobReader")
 	local blob = BlobReader(serialized)
