@@ -438,6 +438,12 @@ local function validate_settings()
 end
 
 local function validate_display()
+    local application_icon = love.window.getIcon()
+    assert(application_icon ~= nil,
+        "the running application is still using the inherited LÖVE icon")
+    assert(application_icon:getWidth() == 256 and application_icon:getHeight() == 256,
+        "the running application icon has unexpected dimensions")
+
     local width, height, flags = love.window.getMode()
     local pixel_width, pixel_height = love.graphics.getPixelDimensions()
     local dpi_scale = love.graphics.getDPIScale()
@@ -522,12 +528,129 @@ local function validate_display()
 		pixel_font
 	) == #wrapped_inventory_name and #wrapped_inventory_name > 1,
 		"inventory frame does not account for wrapped item names")
+	local localized_item_details = table.concat({
+		"{#3e8948ff}#дробление: 3",
+		"{#ff0044ff}урон: 4-5    урон/с: 6.00",
+		"{#8b9bb4ff}Очень длинное локализованное описание свойства инструмента",
+		"",
+		"{#fee761ff}Z] {#ffffffff}Положить  {#fee761ff}R] {#ffffffff}Бросить   ",
+		"{#fee761ff}P] {#ffffffff}Надеть    {#fee761ff}I] {#ffffffff}Осмотреть ",
+	}, "\n").."\n"
+	local visible_item_details = localized_item_details
+		:gsub("{#%x+}", "")
+		:gsub("\n+$", "")
+	local _, wrapped_item_details = pixel_font:getWrap(
+		visible_item_details,
+		210
+	)
+	assert(gui_wrapped_text_line_count(
+		localized_item_details,
+		210,
+		pixel_font
+	) == #wrapped_item_details and #wrapped_item_details > 6,
+		"inventory details frame does not account for localized wrapped rows")
+	local current_x, current_y = gui_restored_panel_origin(100, 200, nil, nil)
+	assert(current_x == 100 and current_y == 200,
+		"ground inventory reused a panel origin from an earlier frame")
+	local restored_x, restored_y = gui_restored_panel_origin(100, 200, 30, 40)
+	assert(restored_x == 30 and restored_y == 40,
+		"ground card did not restore its current-frame panel origin")
 	assert(normalize_gameplay_key("up", false) == "w",
 		"up arrow is not a gameplay/crafting alternative to W")
 	assert(normalize_gameplay_key("down", false) == "s",
 		"down arrow is not a gameplay/crafting alternative to S")
 	assert(normalize_gameplay_key("up", true) == "up",
 		"Ctrl+arrow no longer reaches development controls")
+	assert(gameplay_key_from_event("z", "q") == "z",
+		"a layout-reported Z is mistaken for the Q pick-up action")
+	assert(gameplay_key_from_event("я", "z") == "z",
+		"the physical Z shortcut does not work in a Cyrillic layout")
+	assert(gameplay_key_from_event("q", "z") == "q",
+		"a layout-reported Q is mistaken for the Z drop action")
+
+	local original_stats_for_prayer = pl.stats
+	local original_dying_for_prayer = pl.dying
+	local original_isdead_for_prayer = pl.isdead
+	local original_unrest_for_prayer = pl.unrest
+	local original_lasthit_for_prayer = game.lasthit
+	local original_sct_for_prayer = sct
+	pl.stats = {
+		faith = { hp = 5, maxhp = 100, pc = 5 },
+		body = { hp = 40, maxhp = 100, pc = 40 },
+	}
+	pl.dying = nil
+	pl.isdead = nil
+	pl.unrest = 0
+	sct = {}
+	assert(reset_failed_prayer_faith() == 5,
+		"failed prayer did not consume the accumulated faith")
+	assert(pl.stats.faith.hp == 0 and pl.stats.faith.pc == 0
+		and pl.stats.body.hp == 40,
+		"failed prayer dealt the missing faith as body damage")
+	pl.stats = original_stats_for_prayer
+	pl.dying = original_dying_for_prayer
+	pl.isdead = original_isdead_for_prayer
+	pl.unrest = original_unrest_for_prayer
+	game.lasthit = original_lasthit_for_prayer
+	sct = original_sct_for_prayer
+
+	local original_buffs_after_death = pl.buffs
+	local original_dying_after_death = pl.dying
+	local original_isdead_after_death = pl.isdead
+	pl.buffs = {}
+	pl.dying = 1
+	pl.isdead = true
+	assert(buff_add(12, "keep") == false and next(pl.buffs) == nil,
+		"a skull can apply chills after the player has died")
+	pl.buffs = original_buffs_after_death
+	pl.dying = original_dying_after_death
+	pl.isdead = original_isdead_after_death
+
+	-- Reproduce the reported case: the stone is selected, moss is the first
+	-- ground item, and the true/player tile pairs temporarily disagree.  Z must
+	-- prepend the stone to the visible ground list without removing the moss.
+	local original_world_for_drop = world
+	local original_ttl_list_for_drop = game.ttl_list
+	local original_justremoved_for_drop = game.justremoved
+	local original_inv_for_drop = pl.inv
+	local original_invsize_for_drop = pl.invsize
+	local original_invselect_for_drop = pl.invselect
+	local original_inv_show_for_drop = pl.inv_show
+	local original_inv_show_c_for_drop = pl.inv_show_c
+	local original_xt_for_drop, original_yt_for_drop = pl.xt, pl.yt
+	local original_tx_for_drop, original_ty_for_drop = pl.tx, pl.ty
+	local ground_moss = { i = 109 }
+	local other_tile_item = { i = 31 }
+	world = {
+		[10] = { [10] = { b = 0, i = { ground_moss } } },
+		[11] = { [11] = { b = 0, i = { other_tile_item } } },
+	}
+	game.ttl_list = {}
+	pl.inv = { { i = 26 }, { i = 5 } }
+	pl.invsize = 9
+	pl.invselect = 2
+	pl.xt, pl.yt = 10, 10
+	pl.tx, pl.ty = 11, 11
+	inv_show()
+	assert(inventory_drop_selected_item(),
+		"Z failed to put the selected stone on the ground")
+	assert(#pl.inv == 1 and pl.inv[1].i == 26,
+		"Z removed or retained the wrong inventory item")
+	assert(world[10][10].i[1].i == 5 and world[10][10].i[2] == ground_moss,
+		"Z picked up/replaced the moss instead of dropping the stone")
+	assert(#world[11][11].i == 1 and world[11][11].i[1] == other_tile_item,
+		"Z dropped the stone on a different coordinate pair")
+	world = original_world_for_drop
+	game.ttl_list = original_ttl_list_for_drop
+	game.justremoved = original_justremoved_for_drop
+	pl.inv = original_inv_for_drop
+	pl.invsize = original_invsize_for_drop
+	pl.invselect = original_invselect_for_drop
+	pl.inv_show = original_inv_show_for_drop
+	pl.inv_show_c = original_inv_show_c_for_drop
+	pl.xt, pl.yt = original_xt_for_drop, original_yt_for_drop
+	pl.tx, pl.ty = original_tx_for_drop, original_ty_for_drop
+
 	assert(not development_reload_requested("f7", false, true),
 		"plain F7 triggers a development reload instead of prayer")
 	assert(development_reload_requested("f7", true, true),

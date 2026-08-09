@@ -34,6 +34,23 @@ function gui_wrapped_line_count(text, wrap_width, text_font)
 	return math.max(1, #lines)
 end
 
+function gui_wrapped_text_line_count(text, wrap_width, text_font)
+	local plain = text:gsub("{#%x+}", ""):gsub("\n+$", "")
+	if plain == "" then
+		return 0
+	end
+
+	return gui_wrapped_line_count(plain, wrap_width, text_font)
+end
+
+function gui_restored_panel_origin(current_x, current_y, saved_x, saved_y)
+	if saved_x ~= nil then
+		return saved_x, saved_y
+	end
+
+	return current_x, current_y
+end
+
 function ground_card_border(top, text, body_rows)
 	top = top:gsub("\n$", "")
 	local top_width = utf8.len(top)
@@ -429,9 +446,12 @@ if icnt > 0 then
 
 		end
 
-
-
-
+	if astr ~= "" then
+		-- Localized tool statistics and action labels can wrap inside the
+		-- 210-pixel details column. Size the frame from the lines that LÖVE
+		-- will actually draw, rather than from the unwrapped source rows.
+		acnt = gui_wrapped_text_line_count(astr, 210, font)
+	end
 
 	icnt = icnt + 2
 
@@ -547,6 +567,11 @@ end
 
 	local ground
 	local groundn
+	-- These coordinates are only valid for the current frame. Keeping them in
+	-- globals made the ground inventory jump back to a previous frame's height
+	-- when the hovered block disappeared or the selected item panel grew.
+	local gxold
+	local gyold
 
 	pl.inspect = nil
 
@@ -675,19 +700,11 @@ end
 
 
 
-		 	gxold = nil
+			gxold = gx
+			gyold = gy
 
-			--if farground and ground~=0 then
-
-				gxold = gx
-				gyold = gy
-
-				gx = 0
-				gy = screen.txt - (cnt+5)*h
-
-			--end
-
-
+			gx = 0
+			gy = screen.txt - (cnt+5)*h
 
 		local ground_frame_width
 		border, ground_frame_width = ground_card_border(border, str, cnt + 1)
@@ -725,10 +742,7 @@ end
 
 
 
-	if gxold then
-		gx = gxold
-		gy = gyold
-	end
+	gx, gy = gui_restored_panel_origin(gx, gy, gxold, gyold)
 
 
 	local ginvstr = ""

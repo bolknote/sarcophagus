@@ -1,6 +1,7 @@
 conf.lua
 LICENSE.md
 main.lua
+packaging/icon.png
 version.txt
 src/BlobReader.lua
 src/BlobWriter.lua

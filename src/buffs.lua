@@ -30,6 +30,11 @@ end
 
 
 function buff_add (a,mode,num) --refresh, add, keep
+	-- The death transition clears every status effect. Mob AI still runs later
+	-- in that frame, so reject effects which would otherwise be re-added to the
+	-- dead player and survive into the next life.
+	if pl.isdead or pl.dying then return false end
+
 	mode = mode or 'refresh'
 
 	if mode=='add' and pl.buffs[a]==nil then
@@ -71,6 +76,8 @@ function buff_add (a,mode,num) --refresh, add, keep
 			pl.buffs[a].cnt = (pl.buffs[a].cnt or 1) + (num or 1)
 		end
 	end
+
+	return true
 end
 
 function buff_tick ()

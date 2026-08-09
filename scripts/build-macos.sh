@@ -32,7 +32,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-for tool in codesign ditto lipo plutil spctl unzip xcrun zip; do
+for tool in codesign ditto lipo pgrep plutil spctl unzip xcrun zip; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Required macOS tool is missing: $tool" >&2
         exit 1
@@ -62,6 +62,12 @@ if [[ -n "$notary_profile" && "$signing_identity" == "-" ]]; then
     exit 1
 fi
 
+if pgrep -f "$application/Contents/MacOS/Sarcophagus" >/dev/null; then
+    echo "Sarcophagus is currently running from the target app bundle." >&2
+    echo "Quit the game before rebuilding so macOS cannot retain the old code and Dock icon." >&2
+    exit 1
+fi
+
 if [[ -z "$love_archive_override" ]]; then
     "$script_directory/build-love.sh"
 elif [[ ! -f "$love_archive" ]]; then
@@ -87,8 +93,12 @@ fi
 mv "$application/Contents/MacOS/love" "$application/Contents/MacOS/Sarcophagus"
 chmod +x "$application/Contents/MacOS/Sarcophagus"
 rm -f \
+    "$application/Contents/Resources/Assets.car" \
     "$application/Contents/Resources/GameIcon.icns" \
     "$application/Contents/Resources/OS X AppIcon.icns"
+# LÖVE's Assets.car contains its heart-shaped GameIcon and OS X AppIcon.
+# Keeping it beside our .icns lets macOS resolve the inherited icon for a
+# running application even after CFBundleIconName has been removed.
 cp "$icon_source" "$application/Contents/Resources/Sarcophagus.icns"
 
 # The official LÖVE SDK bundle contains C/C++ headers for framework consumers.
@@ -223,7 +233,7 @@ if "$plist_buddy" -c 'Print :CFBundleIconName' \
     echo "Packaged macOS app still contains the inherited LÖVE icon name." >&2
     exit 1
 fi
-for inherited_icon in "GameIcon.icns" "OS X AppIcon.icns"; do
+for inherited_icon in "Assets.car" "GameIcon.icns" "OS X AppIcon.icns"; do
     if [[ -e "$verification_directory/Sarcophagus.app/Contents/Resources/$inherited_icon" ]]; then
         echo "Packaged macOS app still contains the inherited LÖVE icon: $inherited_icon" >&2
         exit 1

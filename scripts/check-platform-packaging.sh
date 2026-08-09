@@ -180,10 +180,19 @@ for macos_icon_marker in \
     'packaging/macos/Sarcophagus.icns' \
     'CFBundleIconFile' \
     'Delete :CFBundleIconName' \
+    'Assets.car' \
     'OS X AppIcon.icns' \
     'Contents/Resources/Sarcophagus.icns'; do
     if ! grep -Fq "$macos_icon_marker" "$macos_builder"; then
         echo "macOS builder is missing icon integration: $macos_icon_marker" >&2
+        exit 1
+    fi
+done
+for macos_running_app_marker in \
+    'pgrep -f "$application/Contents/MacOS/Sarcophagus"' \
+    'Quit the game before rebuilding'; do
+    if ! grep -Fq "$macos_running_app_marker" "$macos_builder"; then
+        echo "macOS builder does not guard against a running stale app: $macos_running_app_marker" >&2
         exit 1
     fi
 done

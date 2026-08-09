@@ -364,6 +364,52 @@ function normalize_gameplay_key(key, developer_arrow)
 	return key
 end
 
+function gameplay_key_from_event(key, scancode)
+	-- Q takes the first ground item while Z drops the selected inventory item.
+	-- Prefer an actual Latin Q/Z reported by the active layout, but keep the
+	-- physical scancode fallback so the shortcuts still work in Cyrillic mode.
+	if key == "q" or key == "z" then
+		return key
+	end
+	return scancode or key
+end
+
+function inventory_drop_selected_item()
+	if type(pl.invselect) ~= "number" or not pl.inv[pl.invselect] then
+		return false
+	end
+
+	-- The ground panel and the pick-up action use xt/yt.  tx/ty can briefly
+	-- point at another tile while movement/camera coordinates are settling.
+	local x, y = pl.xt, pl.yt
+	if x == nil or y == nil then
+		x, y = pl.tx, pl.ty
+	end
+	if x == nil or y == nil or not (world[y] and world[y][x]) then
+		return false
+	end
+
+	local maximum = maptile(x, y, "itemcount") or 0
+	if maximum == 0 then maximum = cf.itemmax end
+	if inv_ground_count(x, y) >= maximum then
+		textwall(msg.game[14])
+		return false
+	end
+
+	local dropped = inv_remove(pl.invselect)
+	if not dropped then return false end
+	return inv_ground_add(x, y, dropped) ~= nil
+end
+
+function reset_failed_prayer_faith()
+	-- The original failure message says that faith falls to zero, but routing
+	-- that reset through stat_spend makes the missing amount damage the body.
+	local accumulated = math.max(0, tonumber(pl.stats.faith.hp) or 0)
+	pl.stats.faith.hp = 0
+	pl.stats.faith.pc = 0
+	return accumulated
+end
+
 function development_reload_requested(key, control_down, development)
 	return development and control_down and key == "f7"
 end
@@ -399,7 +445,7 @@ function love.keypressed(key,s)
 	
 	if pl.isdead then return end
 
-	key = s or key
+	key = gameplay_key_from_event(key, s)
 
 	local developer_arrow = IS_DEVELOPMENT and game.dbg and game.dbg[1] and (
 		love.keyboard.isScancodeDown("lctrl")
@@ -693,16 +739,7 @@ function love.keypressed(key,s)
 			end
 
 		else
-			
-			local max = maptile (pl.tx, pl.ty,'itemcount') or 0
-			if max==0 then max=cf.itemmax end
-
-			if inv_ground_count (pl.tx, pl.ty)<max then
-				--inv_ground_add (pl.tx, pl.ty, inv_remove (pl.invselect),{groundlast = true})
-				inv_ground_add (pl.tx, pl.ty, inv_remove (pl.invselect))
-			else
-				textwall (msg.game[14])
-			end
+			inventory_drop_selected_item()
 		end
 
 		inv_show ()
@@ -1099,7 +1136,7 @@ function love.keypressed(key,s)
 
 
 		else
-			stat_spend ('faith', 100)
+			reset_failed_prayer_faith()
 			textwall (msg.game[42],false,{[1] = prayer_chance})
 		end
 

@@ -17,8 +17,8 @@ world = {}
 
 io.stdout:setvbuf("no")
 
---local imgData = love.image.newImageData ('packaging/icon.png')
---love.window.setIcon (imgData)
+local imgData = love.image.newImageData('packaging/icon.png')
+love.window.setIcon(imgData)
 love.window.setTitle('Sarcophagus v.'..game_version)
 
 love.graphics.setDefaultFilter("nearest", "nearest", 1)
@@ -77,4 +77,3 @@ end
 if IS_DEVELOPMENT then
 	moving_editor = loadfile('tools/dev/moving_editor.lua')
 end
-
