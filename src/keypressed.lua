@@ -303,7 +303,17 @@ end
 
 function inventory_gui_mousepressed(x, y)
 	local gui_x, gui_y = gui_mouse_position(x, y)
-	local row = gui_mouse_row(game.inventory_mouse_rows, gui_x, gui_y)
+	local row = gui_mouse_row(game.inventory_action_mouse_rows, gui_x, gui_y)
+	if row and row.hold then
+		game.gui_throw_down = true
+		return true
+	end
+	if row and row.key and love.keypressed then
+		love.keypressed(row.key, row.key)
+		return true
+	end
+
+	row = gui_mouse_row(game.inventory_mouse_rows, gui_x, gui_y)
 	if row and pl.inv[row.slot] then
 		pl.invselect = row.slot
 		inv_show ()
@@ -381,6 +391,7 @@ end
 function love.mousereleased (x,y,button)
 	if button==1 then
 		game.gui_mouse_down = nil
+		game.gui_throw_down = nil
 	end
 
 	if world==nil then return end

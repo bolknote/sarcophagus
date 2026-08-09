@@ -736,20 +736,42 @@ local function validate_display()
 	inv_show()
 	local original_gr2x_for_mouse = game.gr2x
 	local original_inventory_mouse_rows = game.inventory_mouse_rows
+	local original_inventory_action_mouse_rows = game.inventory_action_mouse_rows
 	local original_ground_mouse_rows = game.ground_mouse_rows
 	local original_craft_ini_for_mouse = craft_ini
 	local original_item_unlock_for_mouse = item_unlock
+	local original_keypressed_for_mouse = love.keypressed
+	local original_gui_throw_down_for_mouse = game.gui_throw_down
 	craft_ini = function() end
 	item_unlock = function() end
 	game.gr2x = true
 	game.inventory_mouse_rows = {
 		{ x = 100, y = 100, width = 100, height = 20, slot = 1 },
 	}
+	game.inventory_action_mouse_rows = {
+		{ x = 100, y = 160, width = 100, height = 20, key = "p" },
+		{ x = 210, y = 160, width = 100, height = 20, key = "r", hold = true },
+	}
 	game.ground_mouse_rows = {}
 	assert(inventory_gui_mousepressed(110, 110),
 		"inventory row mouse click was not consumed")
 	assert(pl.invselect == 1,
 		"inventory row mouse click selected the wrong slot")
+	local clicked_action
+	love.keypressed = function(key, scancode)
+		clicked_action = { key, scancode }
+	end
+	assert(inventory_gui_mousepressed(110, 170),
+		"inventory action mouse click was not consumed")
+	assert(clicked_action and clicked_action[1] == "p"
+		and clicked_action[2] == "p",
+		"inventory action mouse click did not dispatch its displayed shortcut")
+	assert(inventory_gui_mousepressed(220, 170),
+		"held inventory action mouse click was not consumed")
+	assert(game.gui_throw_down,
+		"mouse-down on the throw action did not start charging a throw")
+	game.gui_throw_down = nil
+	love.keypressed = original_keypressed_for_mouse
 	pl.invselect = 2
 	assert(inventory_drop_selected_item(),
 		"Z failed to put the selected stone on the ground")
@@ -777,9 +799,12 @@ local function validate_display()
 		"ground row mouse click picked up the wrong item")
 	game.gr2x = original_gr2x_for_mouse
 	game.inventory_mouse_rows = original_inventory_mouse_rows
+	game.inventory_action_mouse_rows = original_inventory_action_mouse_rows
 	game.ground_mouse_rows = original_ground_mouse_rows
 	craft_ini = original_craft_ini_for_mouse
 	item_unlock = original_item_unlock_for_mouse
+	love.keypressed = original_keypressed_for_mouse
+	game.gui_throw_down = original_gui_throw_down_for_mouse
 	world = original_world_for_drop
 	game.ttl_list = original_ttl_list_for_drop
 	game.justremoved = original_justremoved_for_drop

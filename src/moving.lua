@@ -312,7 +312,8 @@ function moving ()
 
 	-- throwing item
 	--and type(pl.invselect)=='number'
-	if (is_pressed("r") or love.mouse.isDown(2)) and pl.inv[pl.invselect] and item[pl.inv[pl.invselect].i].throw~=nil  then
+	if (is_pressed("r") or love.mouse.isDown(2) or game.gui_throw_down)
+		and pl.inv[pl.invselect] and item[pl.inv[pl.invselect].i].throw~=nil then
 
 		local ithrow = pl.inv[pl.invselect]
 

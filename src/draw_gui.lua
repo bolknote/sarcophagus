@@ -43,6 +43,12 @@ function gui_wrapped_text_line_count(text, wrap_width, text_font)
 	return gui_wrapped_line_count(plain, wrap_width, text_font)
 end
 
+function gui_text_line_offset(text, wrap_width, text_font)
+	local plain = text:gsub("{#%x+}", "")
+	local _, lines = (text_font or font):getWrap(plain.."|", wrap_width)
+	return math.max(0, #lines - 1)
+end
+
 function gui_restored_panel_origin(current_x, current_y, saved_x, saved_y)
 	if saved_x ~= nil then
 		return saved_x, saved_y
@@ -147,6 +153,7 @@ function draw_gui ()
 	local inventory_mouse_rows = {}
 	local equipment_mouse_rows = {}
 	game.inventory_mouse_rows = {}
+	game.inventory_action_mouse_rows = {}
 	game.ground_mouse_rows = {}
 
 	local gx = 1150
@@ -343,12 +350,25 @@ end
 
 local il
 
+local function add_inventory_toggle_mouse_row(line, hint)
+	if hint == "" then return end
+	local visible_hint = hint:gsub("{#%x+}", ""):gsub("\n", "")
+	game.inventory_action_mouse_rows[#game.inventory_action_mouse_rows+1] = {
+		x = gx+w*3,
+		y = gy+h*(2.5+line),
+		width = font:getWidth(visible_hint),
+		height = h,
+		key = "0",
+	}
+end
+
 
 if type(pl.invselect)~='number' and pl.inv[pl.invselect] then
 	local toggle_hint, toggle_rows = inventory_mode_toggle_hint(true, ecnt)
 	invstr = einvstr..toggle_hint
 	invstrdur = einvstrdur
 	game.inventory_mouse_rows = equipment_mouse_rows
+	add_inventory_toggle_mouse_row(ecnt+1, toggle_hint)
 	
 
 	icnt = ecnt + toggle_rows
@@ -356,6 +376,7 @@ if type(pl.invselect)~='number' and pl.inv[pl.invselect] then
 else
 	local toggle_hint, toggle_rows = inventory_mode_toggle_hint(false, ecnt)
 	invstr = invstr..toggle_hint
+	add_inventory_toggle_mouse_row(icnt+1, toggle_hint)
 	icnt = icnt + toggle_rows
 	game.inventory_mouse_rows = inventory_mouse_rows
 
@@ -381,11 +402,44 @@ end
 if icnt > 0 then
 --	if true then
 
+	local inventory_content_lines = icnt
 	local astr = ""
 	local acnt = 0
 	local dstr = ""
 	local dcnt = 0
 	local comp 
+	local action_entries = {}
+	local action_prefix_lines
+	local action_row = 0
+	local action_column = 0
+	local action_row_text = ""
+
+	local function append_inventory_action(key, label, options)
+		options = options or {}
+		if action_prefix_lines == nil then
+			action_prefix_lines = gui_text_line_offset(astr, 210, font)
+		end
+
+		local visible_text = key.."] "..label
+		action_entries[#action_entries+1] = {
+			key = string.lower(key),
+			row = action_row,
+			x_offset = font:getWidth(action_row_text),
+			width = font:getWidth(visible_text),
+			hold = options.hold,
+		}
+		action_row_text = action_row_text..visible_text
+		astr = astr.."{#fee761ff}"..key.."]{#ffffffff} "..label
+
+		action_column = action_column + 1
+		if action_column == 2 then
+			acnt = acnt + 1
+			astr = astr.."\n"
+			action_row = action_row + 1
+			action_column = 0
+			action_row_text = ""
+		end
+	end
 
 
 
@@ -417,46 +471,30 @@ if icnt > 0 then
 		if it then
 
 			local it = item[pl.inv[pl.invselect].i]
-			
-			local half = 0
 
 			if type(pl.invselect)=='number' then
-				astr = astr.."{#fee761ff}Z]{#ffffffff} "
-					..inventory_z_action_label(it)
-				half = half + 0.5
+				append_inventory_action("Z", inventory_z_action_label(it))
 			end
 
 			
 			--type(pl.invselect)=='number' and
 			if item[pl.inv[pl.invselect].i].throw~=nil then
-				astr = astr.."{#fee761ff}R]{#ffffffff} "..msg.gui[13] -- throw
-				half = half + 0.5
-
-				if half==1 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
+				append_inventory_action("R", msg.gui[13], { hold = true }) -- throw
 			end
 
 			
 			
 			if type(pl.invselect)=='number' and item[pl.inv[pl.invselect].i].onempty~=nil then
-				astr = astr.."{#fee761ff}R]{#ffffffff} "..msg.gui[20] -- empty
-				half = half + 0.5
-
-				if half==1 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
+				append_inventory_action("R", msg.gui[20]) -- empty
 			end
 
 
 			if it.calories then
-				astr = astr.."{#fee761ff}U]{#ffffffff} "..msg.gui[15]
-				half = half + 0.5
-
-				if half==1 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
+				append_inventory_action("U", msg.gui[15])
 			end
 
 			if it.onuse then
-				astr = astr.."{#fee761ff}U]{#ffffffff} "..msg.gui[19]
-				half = half + 0.5
-
-				if half==1 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
+				append_inventory_action("U", msg.gui[19])
 			end
 
 
@@ -464,34 +502,33 @@ if icnt > 0 then
 			if it.equip then
 
 				if type(pl.invselect)=='number' then
-					astr = astr.."{#fee761ff}P]{#ffffffff} "..msg.gui[16]
+					append_inventory_action("P", msg.gui[16])
 				else
-					astr = astr.."{#fee761ff}P]{#ffffffff} "..msg.gui[17]
+					append_inventory_action("P", msg.gui[17])
 				end
-				half = half + 0.5
-
-				if half==1 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
 			end
 
 			
 
 			if item[pl.inv[pl.invselect].i].craftable then
 
-				astr = astr.."{#fee761ff}C]{#ffffffff} "..msg.gui[28]
-				half = half + 0.5
-
-				if half==1 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
+				append_inventory_action("C", msg.gui[28])
 
 			end
 
 			if msg.item[pl.inv[pl.invselect].i].info or
 				item[pl.inv[pl.invselect].i].calories then
 
-				astr = astr.."{#fee761ff}I]{#ffffffff} "..msg.gui[24]
-				half = half + 0.5
+				append_inventory_action("I", msg.gui[24])
 			end
 
-			if half>0 then acnt = acnt + 1; astr = astr.."\n"; half = 0 end
+			if action_column>0 then
+				acnt = acnt + 1
+				astr = astr.."\n"
+				action_row = action_row + 1
+				action_column = 0
+				action_row_text = ""
+			end
 
 			if type(pl.invselect)~='number' then 
 				astr = astr.."\n"
@@ -504,6 +541,23 @@ if icnt > 0 then
 		-- 210-pixel details column. Size the frame from the lines that LÖVE
 		-- will actually draw, rather than from the unwrapped source rows.
 		acnt = gui_wrapped_text_line_count(astr, 210, font)
+	end
+
+	if #action_entries > 0 then
+		local action_origin_x = gx+w*3
+		local action_origin_y = gy+h*2.5
+			+ h*(inventory_content_lines + 3 + (action_prefix_lines or 0))
+
+		for _, action in ipairs(action_entries) do
+			game.inventory_action_mouse_rows[#game.inventory_action_mouse_rows+1] = {
+				x = action_origin_x + action.x_offset,
+				y = action_origin_y + h*action.row,
+				width = action.width,
+				height = h,
+				key = action.key,
+				hold = action.hold,
+			}
+		end
 	end
 
 	icnt = icnt + 2
