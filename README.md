@@ -5,7 +5,7 @@
 
   [Official page](https://acerbial.itch.io/sarcophagus) ·
   [Download the original release](https://acerbial.itch.io/sarcophagus) ·
-  [Modernization plan](plan.md)
+  [Releases](https://github.com/bolknote/sarcophagus/releases)
 </div>
 
 [English](#english) · [Русский](#русский)
@@ -144,9 +144,6 @@ This repository contains the completed modernized version, including:
 - a complete English/Russian localization system;
 - backward-compatible save loading;
 - automated smoke tests and release checks.
-
-See [plan.md](plan.md) for the completed modernization roadmap and the remaining
-non-code release checks.
 
 ## Running from source
 
@@ -294,7 +291,6 @@ Normal package builds use the committed derived icons and do not require those i
 | `scripts/` | Tests, exact release manifest, audit and build scripts |
 | `tests/fixtures/9.sav` | Backward-compatibility save fixture |
 | `docs/localization-glossary.md` | Russian terminology and translation style |
-| `plan.md` | Modernization roadmap |
 
 ## Save data
 
@@ -448,9 +444,6 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 - сохранение совместимости со старыми сейвами;
 - автоматические smoke-тесты и проверки релиза.
 
-Завершённая последовательность модернизации и оставшиеся внекодовые проверки
-описаны в [plan.md](plan.md).
-
 ## Запуск из исходников
 
 Требования:
@@ -597,7 +590,6 @@ Workflow `Build and release` в GitHub Actions запускает полный �
 | `scripts/` | Тесты, точный манифест, аудит и сборка релиза |
 | `tests/fixtures/9.sav` | Контрольный сейв для обратной совместимости |
 | `docs/localization-glossary.md` | Терминология и стиль русского перевода |
-| `plan.md` | План модернизации |
 
 ## Сохранения
 
