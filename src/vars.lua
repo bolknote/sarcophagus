@@ -133,16 +133,6 @@
 
 
 
-	-- coby block
-	cf.cob_pick = 
-	{
-		{-1,0},
-		{-1,1},
-		{1,0},
-		{1,1}
-	}
-
-
 	pl.diet = {
 		veggies = 0,
 		fruits = 0,

@@ -35,7 +35,6 @@ src/mobs_ai.lua
 src/moving.lua
 src/msg.lua
 src/projes.lua
-src/save.lua
 src/settings.lua
 src/sound.lua
 src/stones.lua

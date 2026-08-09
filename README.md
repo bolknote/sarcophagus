@@ -286,7 +286,6 @@ Normal package builds use the committed derived icons and do not require those i
 | `assets/maps/` | Map chunks used by world generation |
 | `assets/sounds/` | Runtime sound assets |
 | `assets/sprites/` | Development sprite sources; replaced by the atlas in releases |
-| `archive/` | Legacy code and assets excluded from releases |
 | `packaging/` | Shared icon and platform-specific package metadata |
 | `scripts/` | Tests, exact release manifest, audit and build scripts |
 | `tests/fixtures/9.sav` | Backward-compatibility save fixture |
@@ -585,7 +584,6 @@ Workflow `Build and release` в GitHub Actions запускает полный �
 | `assets/maps/` | Фрагменты карты для генератора мира |
 | `assets/sounds/` | Звуки, используемые игрой |
 | `assets/sprites/` | Исходники спрайтов для разработки; в релизе заменяются атласом |
-| `archive/` | Старый код и ассеты, исключённые из релиза |
 | `packaging/` | Общая иконка и платформенные метаданные пакетов |
 | `scripts/` | Тесты, точный манифест, аудит и сборка релиза |
 | `tests/fixtures/9.sav` | Контрольный сейв для обратной совместимости |

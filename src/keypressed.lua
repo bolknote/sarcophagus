@@ -1259,14 +1259,6 @@ function love.keypressed(key,s)
 
 		--dump (hex_color("#f6757aff"))
 
-		--mapthread = love.thread.newThread('save.lua')
-		--mapthread:start(world, vi, pl, game, tips, disp, cf, mobs)
-
-		--local bitser = require 'bitser'
-
-		--save = bitser.dumps({world, vi, pl, game, tips, disp, cf, mobs})
-		--save = bitser.dumps({world, vi, game, tips, disp, cf, mobs})
-
 		--oldprint (
 
 		types = {}

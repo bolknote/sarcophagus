@@ -769,16 +769,6 @@ end
 -- BLOCKS
 --------------------------------------------------
 
-
-function cob_pick ()
-
-
-	
-
-end
-
-
-
 function growup (x,y,z,w)
 
 	local tile, map = maptile (x,y-1,"all")
@@ -2610,24 +2600,6 @@ function game_saveinfo ()
 end
 
 
-
-function game_autosave (name)
-	local m = love.thread.getChannel( 'saveinfo' ):pop()
-	love.thread.getChannel('saveinfo'):push('busy')
-
-	if m~='busy' then
-		if savethread then
-			savethread:release( )
-		end
-		savethread = love.thread.newThread('src/save.lua')
-		savethread:start(name,world, vi, pl, game, tips, disp, cf, mobs)
-	else
-		love.thread.getChannel('saveinfo'):push('busy')
-	end
-
-	love.graphics.captureScreenshot(name..".png")
-
-end
 
 function table_save (name,a,deterministic)
 	local BlobWriter = require('src.BlobWriter')
