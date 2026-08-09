@@ -123,7 +123,7 @@ Keyboard, mouse and gamepads are supported by the original game.
 
 The original version `0.10.591` is available for Windows, macOS and Linux from the [official itch.io page](https://acerbial.itch.io/sarcophagus). The itch.io page describes the original project as in development.
 
-The current modernized version in this repository is `0.11.0`.
+The current modernized version in this repository is `0.11.1`.
 Ready-to-run packages are published on the
 [GitHub Releases page](https://github.com/bolknote/sarcophagus/releases).
 
@@ -247,13 +247,13 @@ After `dist/Sarcophagus.love` has been built, create the Linux x86_64 AppImage o
 ./scripts/build-linux-appimage.sh
 ```
 
-The script downloads the official LÖVE 11.5 AppImage and pinned AppImage tooling, rejects every binary whose SHA-256 differs from the recorded value, fuses the game into the native runner, installs the project desktop entry and icon, then extracts the result again to verify its contents and embedded `.love`. The output is `dist/Sarcophagus-linux-x86_64-0.11.0.AppImage`.
+The script downloads the official LÖVE 11.5 AppImage and pinned AppImage tooling, rejects every binary whose SHA-256 differs from the recorded value, fuses the game into the native runner, installs the project desktop entry and icon, then extracts the result again to verify its contents and embedded `.love`. The output is `dist/Sarcophagus-linux-x86_64-0.11.1.AppImage`.
 
 Make a downloaded build executable and launch it directly:
 
 ```sh
-chmod +x Sarcophagus-linux-x86_64-0.11.0.AppImage
-./Sarcophagus-linux-x86_64-0.11.0.AppImage
+chmod +x Sarcophagus-linux-x86_64-0.11.1.AppImage
+./Sarcophagus-linux-x86_64-0.11.1.AppImage
 ```
 
 The `Build and release` GitHub Actions workflow runs the complete test suite,
@@ -422,7 +422,7 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 
 Оригинальная версия `0.10.591` доступна для Windows, macOS и Linux на [официальной странице itch.io](https://acerbial.itch.io/sarcophagus). На itch.io исходный проект по-прежнему обозначен как находящийся в разработке.
 
-Текущая модернизированная версия в этом репозитории — `0.11.0`.
+Текущая модернизированная версия в этом репозитории — `0.11.1`.
 Готовые пакеты публикуются на
 [странице GitHub Releases](https://github.com/bolknote/sarcophagus/releases).
 
@@ -546,13 +546,13 @@ powershell.exe -NoProfile -File scripts\build-windows.ps1
 ./scripts/build-linux-appimage.sh
 ```
 
-Сценарий загружает официальный AppImage LÖVE 11.5 и закреплённые инструменты AppImage, отклоняет любой бинарник с несовпадающей SHA-256, встраивает игру в нативный раннер, устанавливает desktop-файл и иконку проекта, а затем повторно извлекает результат и проверяет его состав и вложенный `.love`. Результат сохраняется как `dist/Sarcophagus-linux-x86_64-0.11.0.AppImage`.
+Сценарий загружает официальный AppImage LÖVE 11.5 и закреплённые инструменты AppImage, отклоняет любой бинарник с несовпадающей SHA-256, встраивает игру в нативный раннер, устанавливает desktop-файл и иконку проекта, а затем повторно извлекает результат и проверяет его состав и вложенный `.love`. Результат сохраняется как `dist/Sarcophagus-linux-x86_64-0.11.1.AppImage`.
 
 Загруженному пакету нужно дать право на запуск:
 
 ```sh
-chmod +x Sarcophagus-linux-x86_64-0.11.0.AppImage
-./Sarcophagus-linux-x86_64-0.11.0.AppImage
+chmod +x Sarcophagus-linux-x86_64-0.11.1.AppImage
+./Sarcophagus-linux-x86_64-0.11.1.AppImage
 ```
 
 Workflow `Build and release` в GitHub Actions запускает полный набор тестов,
