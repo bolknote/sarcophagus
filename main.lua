@@ -13,7 +13,16 @@ server_version = ""
 game_version = love.filesystem.read('version.txt')
 BUILD_MODE = require("src.build_mode").detect()
 IS_DEVELOPMENT = BUILD_MODE == "development"
+GAME_CRASHED = false
 world = {}
+
+local default_errorhandler = love.errorhandler
+if default_errorhandler then
+	function love.errorhandler(message)
+		GAME_CRASHED = true
+		return default_errorhandler(message)
+	end
+end
 
 io.stdout:setvbuf("no")
 

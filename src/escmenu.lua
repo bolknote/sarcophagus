@@ -1,4 +1,22 @@
 
+function save_and_quit()
+	if exit then return false, "quit already pending" end
+
+	local saved, save_error = game_save(game.savepos)
+	if not saved then
+		return false, save_error
+	end
+
+	game.screenshot = nil
+	if game.escmenu ~= nil then
+		esc_menu()
+	end
+	game.pause = nil
+	quit_after_save = true
+	exit = 10
+	return true
+end
+
 function esc_menu ()
 
 	
@@ -13,10 +31,7 @@ function esc_menu ()
 
 		[2] = {
 		f = function ()
-			game_save (game.savepos)
-			game.screenshot = nil	
-			esc_menu ()
-			exit = 10
+			save_and_quit()
 		end
 		},
 

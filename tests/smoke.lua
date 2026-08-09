@@ -255,6 +255,52 @@ local function validate_autosave()
 			messages[#messages + 1] = message
 		end
 
+		-- Save and Quit must be a checked operation rather than an unconditional
+		-- delayed quit. A failed write leaves the paused menu intact; a successful
+		-- write closes it and freezes the game until the quit event is sent.
+		local original_exit = exit
+		local original_quit_after_save = quit_after_save
+		local original_pause = game.pause
+		local original_escmenu_state = game.escmenu
+		local original_escmenu = escmenu
+		local original_keypressed = love.keypressed
+		local original_oldkeypressed = love.oldkeypressed
+		local original_screenshot = game.screenshot
+		game.escmenu = 2
+		game.pause = true
+		exit = nil
+		quit_after_save = nil
+		love.oldkeypressed = love.keypressed
+		game_save = function()
+			return false, "simulated write failure"
+		end
+		local saved, save_error = save_and_quit()
+		assert(not saved and save_error == "simulated write failure",
+			"Save and Quit ignored a failed game save")
+		assert(game.escmenu == 2 and game.pause == true and exit == nil,
+			"failed Save and Quit still closed the menu or scheduled an exit")
+
+		game_save = function()
+			return true
+		end
+		assert(save_and_quit(), "successful Save and Quit was rejected")
+		assert(game.escmenu == nil and game.pause == nil
+			and exit == 10 and quit_after_save == true,
+			"successful Save and Quit did not enter the guarded exit state")
+		exit = 2
+		assert(quit_countdown_update() and exit == 1,
+			"quit countdown does not advance independently of simulation state")
+
+		exit = original_exit
+		quit_after_save = original_quit_after_save
+		game.pause = original_pause
+		game.escmenu = original_escmenu_state
+		escmenu = original_escmenu
+		love.keypressed = original_keypressed
+		love.oldkeypressed = original_oldkeypressed
+		game.screenshot = original_screenshot
+		game_save = original_game_save
+
 		game.savepos = 1
 		game.dt = 0
 		game.lastsave = nil

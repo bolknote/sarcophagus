@@ -65,6 +65,18 @@ function autosave_update(now, mouse_idle)
 	end
 end
 
+function quit_countdown_update()
+	if not exit then return false end
+
+	exit = exit - 1
+	if exit < 0 then
+		exit = nil
+		sound_killall()
+		love.event.quit()
+	end
+	return true
+end
+
 
 function love.update(d)
 
@@ -149,6 +161,12 @@ function love.update(d)
 	
 	next_time = next_time + min_dt
 
+	-- A successful Save and Quit freezes the simulation immediately. Keep the
+	-- short preview-capture countdown running even if focus changes meanwhile.
+	if quit_countdown_update() then
+		return
+	end
+
 	if not love.window.hasFocus() then
 		return
 	end
@@ -196,27 +214,6 @@ function love.update(d)
 		love.graphics.captureScreenshot(game.savepos..".png")
 	end
 
-	if exit then
-		exit = exit - 1
-		if exit < 0 then
-
-			exit = nil
-			sound_killall ()
-			love.event.quit()
-
-			-- love.old_keypressed = love.keypressed
-			-- love.old_update = love.update
-			-- love.old_draw = love.draw
-
-
-			-- love.keypressed = love.menu_keypressed
-			-- love.update = love.menu_update
-			-- love.draw =  love.menu_draw
-
-			return
-
-		end
-	end
 	
 
 	local ambient_id = sound_ambient_id ()

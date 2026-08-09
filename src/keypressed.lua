@@ -466,6 +466,7 @@ end
 function love.keypressed(key,s)
 
 	--print (s)
+	if exit then return end
 
 	mousemoved = nil
 	mousemoved_last = 0

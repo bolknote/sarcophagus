@@ -11,8 +11,34 @@
 
 -- end
 
+function gameplay_save_on_quit_allowed()
+	return not GAME_CRASHED
+		and os.getenv("SARCOPHAGUS_SMOKE_TEST") == nil
+		and type(world) == "table"
+		and next(world) ~= nil
+		and type(game) == "table"
+		and type(pl) == "table"
+		and game.savepos ~= nil
+		and game.mapgenning == nil
+		and love.update ~= love.menu_update
+		and not pl.isdead
+end
+
 function love.quit ()
-	oldprint ('exit')
+	if quit_after_save then
+		(oldprint or print) ('exit')
+		return
+	end
+
+	-- Route a normal window close or Cmd+Q through the same checked save path
+	-- as the in-game menu. Returning true cancels this immediate quit; a short
+	-- countdown lets the queued save preview reach the next rendered frame.
+	if gameplay_save_on_quit_allowed() and save_and_quit then
+		save_and_quit()
+		return true
+	end
+
+	(oldprint or print) ('exit')
 end
 
 function testproj_kill ()
