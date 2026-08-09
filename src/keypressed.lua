@@ -286,11 +286,48 @@ end
 
 -- keypress
 
+local function gui_mouse_position(x, y)
+	if game.gr2x then
+		return x/2, y/2
+	end
+	return x, y
+end
+
+local function gui_mouse_row(rows, x, y)
+	for _, row in ipairs(rows or {}) do
+		if x >= row.x and x < row.x+row.width
+			and y >= row.y and y < row.y+row.height then
+			return row
+		end
+	end
+end
+
 function love.mousepressed (x, y, button, istouch, presses)
 	
 	if world==nil then return end
 
 	mousetruemoved_last = 0
+
+	if button==1 then
+		local gui_x, gui_y = gui_mouse_position(x, y)
+		local row = gui_mouse_row(game.inventory_mouse_rows, gui_x, gui_y)
+		if row and pl.inv[row.slot] then
+			pl.invselect = row.slot
+			inv_show ()
+			craft_ini ()
+			game.gui_mouse_down = true
+			return
+		end
+
+		row = gui_mouse_row(game.ground_mouse_rows, gui_x, gui_y)
+		if row then
+			inventory_pick_ground_item(row.index, row.ground_item)
+			inv_show ()
+			craft_ini ()
+			game.gui_mouse_down = true
+			return
+		end
+	end
 
 	--print (button.." "..presses)
 	--4 drop 5 up
@@ -338,7 +375,10 @@ end
 
 
 function love.mousereleased (x,y,button)
-	
+	if button==1 then
+		game.gui_mouse_down = nil
+	end
+
 	if world==nil then return end
 
 	if button==1 and game.dbg[2] then
@@ -372,6 +412,51 @@ function gameplay_key_from_event(key, scancode)
 		return key
 	end
 	return scancode or key
+end
+
+local function inventory_has_free_numeric_slot()
+	for slot=1,pl.invsize do
+		if pl.inv[slot]==nil then return true end
+	end
+	return false
+end
+
+function inventory_pick_ground_item(index, expected_item)
+	local x, y = pl.xt, pl.yt
+	if x==nil or y==nil or not (world[y] and world[y][x]) then
+		return false
+	end
+
+	local ground = world[y][x].i
+	if not ground then return false end
+
+	if expected_item and ground[index]~=expected_item then
+		index = nil
+		for candidate, ground_item in ipairs(ground) do
+			if ground_item==expected_item then
+				index = candidate
+				break
+			end
+		end
+	end
+	if not index or not ground[index] then return false end
+
+	if not inventory_has_free_numeric_slot() then
+		textwall (msg.game[44],true)
+		return false
+	end
+
+	local hasgloves = pl.inv.a and pl.inv.a.i==357
+	local de = readmap (x,y,"de") or 0
+	if de>cf.deadfire and not hasgloves then
+		player_hit (cf.firehit)
+		textwall (msg.game[6])
+		return false
+	end
+
+	local picked = inv_ground_remove (x,y,index)
+	if not picked then return false end
+	return inv_add (picked,{pick=1})~=nil
 end
 
 function inventory_drop_selected_item()
@@ -707,19 +792,7 @@ function love.keypressed(key,s)
 			pl.candrop = nil
 			inv_add (item)
 		else
-
-			local hasgloves = (pl.inv.a and pl.inv.a.i==357)
-			
-			local de = readmap (pl.tx,pl.ty,"de") or 0
-			if de>cf.deadfire and hasgloves==false then
-				player_hit (cf.firehit)
-				textwall (msg.game[6]) 
-			else
-				inv_add(inv_ground_remove (pl.xt, pl.yt,1),{pick=1})		
-			end
-
-
-
+			inventory_pick_ground_item(1)
 		end
 		
 	end

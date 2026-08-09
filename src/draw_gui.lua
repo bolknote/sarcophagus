@@ -132,6 +132,10 @@ function draw_gui ()
 
 	local h = 14
 	local w = 8
+	local inventory_mouse_rows = {}
+	local equipment_mouse_rows = {}
+	game.inventory_mouse_rows = {}
+	game.ground_mouse_rows = {}
 
 	local gx = 1150
 	local gx = screen.inv
@@ -210,6 +214,7 @@ for k=1,9 do
 		--dump (pl.inv_show[start+k])
 
 		local item_line_count = 1
+		local item_row_y = gy + h*(2.5+icnt)
 
 		if n then
 
@@ -226,6 +231,13 @@ for k=1,9 do
 				210,
 				font
 			)
+			inventory_mouse_rows[#inventory_mouse_rows+1] = {
+				x = gx+w,
+				y = item_row_y,
+				width = w*34,
+				height = h*item_line_count,
+				slot = pl.inv_show[start+k],
+			}
 
 			if pl.invselect==pl.inv_show[start+k] then
 				pl.invselect_k = k
@@ -274,6 +286,7 @@ end
 		if v then
 
 			local n = item[v.i].name
+			local item_row_y = gy + h*(2.5+ecnt)
 			local prefix = pl.invselect==ev and ev.." [" or ev.."  "
 			local suffix = pl.invselect==ev and "]" or " "
 			local item_line_count = gui_wrapped_line_count(
@@ -281,6 +294,13 @@ end
 				210,
 				font
 			)
+			equipment_mouse_rows[#equipment_mouse_rows+1] = {
+				x = gx+w,
+				y = item_row_y,
+				width = w*34,
+				height = h*item_line_count,
+				slot = ev,
+			}
 
 			if pl.invselect==ev then
 				scnt = ecnt + item_line_count
@@ -315,6 +335,7 @@ if type(pl.invselect)~='number' and pl.inv[pl.invselect] then
 	local toggle_hint, toggle_rows = inventory_mode_toggle_hint(true, ecnt)
 	invstr = einvstr..toggle_hint
 	invstrdur = einvstrdur
+	game.inventory_mouse_rows = equipment_mouse_rows
 	
 
 	icnt = ecnt + toggle_rows
@@ -323,6 +344,7 @@ else
 	local toggle_hint, toggle_rows = inventory_mode_toggle_hint(false, ecnt)
 	invstr = invstr..toggle_hint
 	icnt = icnt + toggle_rows
+	game.inventory_mouse_rows = inventory_mouse_rows
 
 	local is = pl.invsize..""
 	if #is==1 then is="0"..is end
@@ -800,6 +822,14 @@ if ground and #ground>0 then
 			w * 32,
 			font
 		)
+		game.ground_mouse_rows[#game.ground_mouse_rows+1] = {
+			x = gx+w,
+			y = gy+h*(2.5+gicnt),
+			width = w*34,
+			height = h*item_line_count,
+			index = i,
+			ground_item = v,
+		}
 
 		ginvstr = ginvstr.."{#d87644ff}"..i..") {#ead4aaff}"..draw_itemname(v)
 

@@ -420,12 +420,11 @@ end
 
 							love.graphics.setColor (1,1,1,1)
 
+						end
 
-							-- cooking progress
-							if wb.tneed then
-								draw_cooking (x,y, wb.tneed, wb.done)
-							end
-
+						-- Keep the progress indicator stable between discrete heat ticks.
+						if wb.tneed then
+							draw_cooking (x,y, wb.tneed, wb.done)
 						end
 
 					end

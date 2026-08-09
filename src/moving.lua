@@ -930,10 +930,11 @@ function moving ()
 
 
 		local mul = 1
+		local gameplay_mouse_down = love.mouse.isDown(1) and not game.gui_mouse_down
 		--if cclimb==1 and maptile (r.x,r.y+1,'col')==0 then mul = 0.5 end
 
 		-- walk right
-		if (not is_pressed("e") and not love.mouse.isDown(1)) and is_pressed("d") and pl.state~='pullup' then
+		if (not is_pressed("e") and not gameplay_mouse_down) and is_pressed("d") and pl.state~='pullup' then
 
 			--pl.iswalking=true
 			pl.flip = 1
@@ -1004,7 +1005,7 @@ function moving ()
 
 
 		--walk left
-		if (not is_pressed("e") and not love.mouse.isDown(1)) and is_pressed("a") and pl.state~='pullup' then
+		if (not is_pressed("e") and not gameplay_mouse_down) and is_pressed("a") and pl.state~='pullup' then
 
 			--pl.iswalking = true
 			pl.flip = -1
@@ -1072,7 +1073,7 @@ function moving ()
 
 		end
 
-		if love.mouse.isDown(1) and pl.state~='pick' then
+		if gameplay_mouse_down and pl.state~='pick' then
 			-- if pl.x > mouse_x then pl.flip = -1 end
 			-- if pl.x < mouse_x then pl.flip = 1 end
 		end
@@ -1083,7 +1084,7 @@ function moving ()
 			pl.iswalking = nil
 		end
 
-		if (is_pressed("e") or love.mouse.isDown(1)) and pl.iscarry == nil then
+		if (is_pressed("e") or gameplay_mouse_down) and pl.iscarry == nil then
 			
 			if pl.oldstate~='kick' then
 

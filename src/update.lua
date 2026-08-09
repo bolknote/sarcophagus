@@ -892,7 +892,7 @@ function love.update(d)
 
 				if rt then
 					pl.state = 'idle'
-					currentFrame = 0
+					currentFrame = 1
 				end
 
 				frameTime = 0
