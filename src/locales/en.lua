@@ -270,6 +270,7 @@ msg.gui =
 	[44] = 'Water (_1_% dirty)',
 	[45] = "Pick up   ",
 	[46] = "Dig       ",
+	[47] = "Carry     ",
 
 	
 

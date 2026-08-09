@@ -401,6 +401,33 @@ function inventory_drop_selected_item()
 	return inv_ground_add(x, y, dropped) ~= nil
 end
 
+function inventory_z_action()
+	if pl.iscarry or type(pl.invselect) ~= "number" or not pl.inv[pl.invselect] then
+		return false
+	end
+
+	local selected = pl.inv[pl.invselect]
+	local definition = item[selected.i]
+	if not definition then return false end
+
+	local put = definition.put
+	if put ~= nil then
+		if put == 0 then
+			textwall(msg.game[37])
+			return false
+		end
+
+		ithrow = 0
+		pl.canthrow = 0
+		pl.iscarry = createblock(put)
+		pl.iscarry.ittl = selected.t
+		inv_remove(pl.invselect)
+		return true
+	end
+
+	return inventory_drop_selected_item()
+end
+
 function reset_failed_prayer_faith()
 	-- The original failure message says that faith falls to zero, but routing
 	-- that reset through stat_spend makes the missing amount damage the body.
@@ -709,38 +736,7 @@ function love.keypressed(key,s)
 
 		if (togo.down or 0)>1 then return end
 
-			if pl.iscarry and stone[pl.iscarry.b].digtoinv and stone[pl.iscarry.b].digtoinv~=0 then
-				
-				local item = item_make(stone[pl.iscarry.b].digtoinv)
-				if pl.iscarry.ittl then
-					item.ttl = pl.iscarry.ittl
-				end
-				pl.iscarry = nil
-				pl.candrop = nil
-				inv_add (item)
-				return
-
-			end
-
-		
-		local put = item[pl.inv[pl.invselect].i].put
-		if put then
-
-			if put~=0 then
-				ithrow = 0
-				pl.canthrow = 0
-				if not pl.iscarry then
-					pl.iscarry = createblock (put)
-					pl.iscarry.ittl = pl.inv[pl.invselect].t
-					inv_remove (pl.invselect)
-				end
-			else
-				textwall (msg.game[37])  --cant put
-			end
-
-		else
-			inventory_drop_selected_item()
-		end
+		inventory_z_action()
 
 		inv_show ()
 

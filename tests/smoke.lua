@@ -414,6 +414,20 @@ local function validate_settings()
         )
         assert(utf8.len(draw_tool_pad("тест")) == 13, "UTF-8 UI padding is invalid")
         assert(msg.gui.item.dig == "#копание: ", "Russian tool tags were not activated")
+		local inventory_hint, inventory_hint_rows = inventory_mode_toggle_hint(true, 1)
+		assert(inventory_hint:find("Инвентарь", 1, true) and inventory_hint_rows == 2,
+			"equipment view does not point back to the populated inventory")
+		local equipment_hint, equipment_hint_rows = inventory_mode_toggle_hint(false, 1)
+		assert(equipment_hint:find("Надетые предметы", 1, true)
+			and equipment_hint_rows == 2,
+			"inventory view does not expose the equipment list")
+		local empty_hint, empty_hint_rows = inventory_mode_toggle_hint(false, 0)
+		assert(empty_hint == "" and empty_hint_rows == 0,
+			"inventory shows an unusable equipment shortcut")
+		assert(inventory_z_action_label(item[109]) == "В руки    ",
+			"a placeable inventory item is misleadingly labelled as a ground drop")
+		assert(inventory_z_action_label(item[5]) == "Положить  ",
+			"an ordinary inventory item lost its ground-drop label")
         for _, key in ipairs({ "dig", "cut", "chop", "smash", "pierce" }) do
             assert(
                 utf8.len(msg.gui.item[key] .. "5") <= 13,
@@ -650,6 +664,43 @@ local function validate_display()
 	pl.inv_show_c = original_inv_show_c_for_drop
 	pl.xt, pl.yt = original_xt_for_drop, original_yt_for_drop
 	pl.tx, pl.ty = original_tx_for_drop, original_ty_for_drop
+
+	-- Placeable inventory items enter the carried-block state on Z and are
+	-- placed with Space. A second/repeated Z must not immediately return the
+	-- block to the inventory; Q remains the explicit return action.
+	local original_carry_for_put = pl.iscarry
+	local original_candrop_for_put = pl.candrop
+	local original_canthrow_for_put = pl.canthrow
+	local original_ithrow_for_put = ithrow
+	local original_justremoved_for_put = game.justremoved
+	local original_inv_for_put = pl.inv
+	local original_invsize_for_put = pl.invsize
+	local original_invselect_for_put = pl.invselect
+	local original_inv_show_for_put = pl.inv_show
+	local original_inv_show_c_for_put = pl.inv_show_c
+	pl.iscarry = nil
+	pl.candrop = nil
+	pl.inv = { { i = 109 }, { i = 26 } }
+	pl.invsize = 9
+	pl.invselect = 1
+	inv_show()
+	assert(inventory_z_action(), "Z did not move moss into the carried-block state")
+	local carried_moss = pl.iscarry
+	assert(carried_moss and carried_moss.b == 108,
+		"Z prepared the wrong placeable block")
+	assert(not inventory_z_action(), "repeated Z toggled the carried block")
+	assert(pl.iscarry == carried_moss and not inv_find(109),
+		"repeated Z returned the carried moss to the inventory")
+	pl.iscarry = original_carry_for_put
+	pl.candrop = original_candrop_for_put
+	pl.canthrow = original_canthrow_for_put
+	ithrow = original_ithrow_for_put
+	game.justremoved = original_justremoved_for_put
+	pl.inv = original_inv_for_put
+	pl.invsize = original_invsize_for_put
+	pl.invselect = original_invselect_for_put
+	pl.inv_show = original_inv_show_for_put
+	pl.inv_show_c = original_inv_show_c_for_put
 
 	assert(not development_reload_requested("f7", false, true),
 		"plain F7 triggers a development reload instead of prayer")

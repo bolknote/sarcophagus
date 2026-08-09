@@ -51,6 +51,26 @@ function gui_restored_panel_origin(current_x, current_y, saved_x, saved_y)
 	return current_x, current_y
 end
 
+function inventory_mode_toggle_hint(showing_equipment, equipped_count)
+	if showing_equipment then
+		return msg.gui[10], 2
+	end
+
+	if equipped_count > 0 then
+		return msg.gui[4], 2
+	end
+
+	return "", 0
+end
+
+function inventory_z_action_label(definition)
+	if definition and definition.put and definition.put ~= 0 then
+		return msg.gui[47]
+	end
+
+	return msg.gui[14]
+end
+
 function ground_card_border(top, text, body_rows)
 	top = top:gsub("\n$", "")
 	local top_width = utf8.len(top)
@@ -291,22 +311,19 @@ end
 local il
 
 
--- if ecnt > 0 then
--- 	invstr = invstr..msg.gui[4]
--- 	icnt = icnt + 2
--- end
-
 if type(pl.invselect)~='number' and pl.inv[pl.invselect] then
-	invstr = einvstr
+	local toggle_hint, toggle_rows = inventory_mode_toggle_hint(true, ecnt)
+	invstr = einvstr..toggle_hint
 	invstrdur = einvstrdur
 	
 
-	icnt = ecnt
+	icnt = ecnt + toggle_rows
 	il = msg.gui[2]
-
-	-- invstr = invstr..msg.gui[10]
-	-- icnt = icnt + 2
 else
+	local toggle_hint, toggle_rows = inventory_mode_toggle_hint(false, ecnt)
+	invstr = invstr..toggle_hint
+	icnt = icnt + toggle_rows
+
 	local is = pl.invsize..""
 	if #is==1 then is="0"..is end
 	is=is.."/"
@@ -369,7 +386,8 @@ if icnt > 0 then
 			local half = 0
 
 			if type(pl.invselect)=='number' then
-				astr = astr.."{#fee761ff}Z]{#ffffffff} "..msg.gui[14] -- put
+				astr = astr.."{#fee761ff}Z]{#ffffffff} "
+					..inventory_z_action_label(it)
 				half = half + 0.5
 			end
 
