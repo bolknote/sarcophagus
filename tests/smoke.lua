@@ -724,6 +724,8 @@ local function validate_display()
 	local original_gr2x_for_mouse = game.gr2x
 	local original_inventory_mouse_rows = game.inventory_mouse_rows
 	local original_ground_mouse_rows = game.ground_mouse_rows
+	local original_craft_ini_for_mouse = craft_ini
+	craft_ini = function() end
 	game.gr2x = true
 	game.inventory_mouse_rows = {
 		{ x = 100, y = 100, width = 100, height = 20, slot = 1 },
@@ -761,6 +763,7 @@ local function validate_display()
 	game.gr2x = original_gr2x_for_mouse
 	game.inventory_mouse_rows = original_inventory_mouse_rows
 	game.ground_mouse_rows = original_ground_mouse_rows
+	craft_ini = original_craft_ini_for_mouse
 	world = original_world_for_drop
 	game.ttl_list = original_ttl_list_for_drop
 	game.justremoved = original_justremoved_for_drop
