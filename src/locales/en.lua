@@ -112,14 +112,13 @@ msg.escmenu = {
 	[2] = "Save and quit",
 	[3] = "",
 	[4] = "Fullscreen",
-	[5] = "Double size",
-	[6] = "",
-	[7] = "Invert stereo",
-	[8] = "Volume",
-	[9] = "",
-	[10] = 'No autosave',
-	[11] = "Discord channel",
-	[12] = "Language: _1_",
+	[5] = "2x scale",
+	[6] = "Invert stereo",
+	[7] = "Volume",
+	[8] = "",
+	[9] = 'No autosave',
+	[10] = "Discord channel",
+	[11] = "Language: _1_",
 	}
 
 msg.language = {

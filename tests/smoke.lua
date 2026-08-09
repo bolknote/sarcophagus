@@ -470,10 +470,23 @@ local function validate_settings()
 		local empty_hint, empty_hint_rows = inventory_mode_toggle_hint(false, 0)
 		assert(empty_hint == "" and empty_hint_rows == 0,
 			"inventory shows an unusable equipment shortcut")
+		local numeric_slots = inventory_numeric_slots({
+			[1] = { i = 5 },
+			[7] = { i = 26 },
+			r = { i = 5 },
+			l = { i = 19 },
+		}, 9)
+		assert(#numeric_slots == 2
+			and numeric_slots[1] == 1
+			and numeric_slots[2] == 7,
+			"equipped items leak into the numeric inventory view")
 		assert(inventory_z_action_label(item[109]) == "В руки    ",
 			"a placeable inventory item is misleadingly labelled as a ground drop")
 		assert(inventory_z_action_label(item[5]) == "Положить  ",
 			"an ordinary inventory item lost its ground-drop label")
+		assert(msg.escmenu[5] == "Масштаб 2×"
+			and msg.escmenu[6] == "Инвертировать стерео",
+			"obsolete smooth 2x menu option is still exposed")
         for _, key in ipairs({ "dig", "cut", "chop", "smash", "pierce" }) do
             assert(
                 utf8.len(msg.gui.item[key] .. "5") <= 13,
@@ -1525,6 +1538,58 @@ local function validate_display()
     ))
 end
 
+local function validate_smooth2x_filter()
+	assert(smooth2x_available(),
+		"the optional smooth 2x shader pipeline did not compile")
+
+	local previous_canvas = love.graphics.getCanvas()
+	local previous_shader = love.graphics.getShader()
+	local previous_blend_mode, previous_alpha_mode = love.graphics.getBlendMode()
+	local red, green, blue, alpha = love.graphics.getColor()
+	local source = love.graphics.newCanvas(8, 8, { dpiscale = 1 })
+	local output = love.graphics.newCanvas(16, 16, { dpiscale = 1 })
+	source:setFilter("nearest", "nearest")
+
+	love.graphics.setCanvas(source)
+	love.graphics.clear(0, 0, 0, 1)
+	love.graphics.setColor(1, 1, 1, 1)
+	for y = 0, 7 do
+		for x = 0, y do
+			love.graphics.rectangle("fill", x, y, 1, 1)
+		end
+	end
+
+	love.graphics.setCanvas(output)
+	love.graphics.clear(0, 0, 0, 1)
+	assert(draw_smooth2x_world(source),
+		"smooth 2x draw helper rejected valid render targets")
+	love.graphics.setCanvas(previous_canvas)
+
+	local pixels = output:newImageData()
+	local blended_pixels = 0
+	for y = 0, 15 do
+		for x = 0, 15 do
+			local value = pixels:getPixel(x, y)
+			if value > 0.015 and value < 0.985 then
+				blended_pixels = blended_pixels + 1
+			end
+		end
+	end
+	local white = pixels:getPixel(2, 14)
+	local black = pixels:getPixel(14, 2)
+	assert(blended_pixels >= 8,
+		"smooth 2x did not interpolate any intermediate edge pixels")
+	assert(white > 0.95 and black < 0.05,
+		"smooth 2x blurred flat image regions")
+
+	pixels:release()
+	source:release()
+	output:release()
+	love.graphics.setShader(previous_shader)
+	love.graphics.setBlendMode(previous_blend_mode, previous_alpha_mode)
+	love.graphics.setColor(red, green, blue, alpha)
+end
+
 local function validate_display_modes()
 	local original_width, original_height, original_flags = love.window.getMode()
 	local original_fullscreen_setting = game.fullscreen
@@ -1539,6 +1604,8 @@ local function validate_display_modes()
 
 		game.gr2x = false
 		screen_res()
+		assert(not enhanced_2x_enabled(),
+			"enhanced 2x renderer is active at normal scale")
 		local normal_x, normal_y = screen.x, screen.y
 		assert(normal_x == math.floor(width / 32) + 3,
 			"normal-size horizontal viewport is invalid")
@@ -1547,6 +1614,10 @@ local function validate_display_modes()
 
 		game.gr2x = true
 		screen_res()
+		game.smooth2x = false
+		assert(enhanced_2x_enabled(),
+			"legacy smooth2x setting still disables 2x rendering")
+		game.smooth2x = nil
 		assert(screen.x == math.ceil(normal_x / 2)
 			and screen.y == math.ceil(normal_y / 2),
 			"double-size mode does not halve the logical viewport")
@@ -1563,6 +1634,13 @@ local function validate_display_modes()
 		local _, _, restored_window_flags = love.window.getMode()
 		assert(not restored_window_flags.fullscreen,
 			"windowed mode did not return after fullscreen")
+		local canvas_width, canvas_height = gr2x:getPixelDimensions()
+		local window_pixel_width, window_pixel_height =
+			love.graphics.getPixelDimensions()
+		assert(canvas_width == window_pixel_width
+			and canvas_height == window_pixel_height,
+			"world render targets were not resized with the Retina window")
+		validate_smooth2x_filter()
 
 		return ("mode=display-modes window=%dx%d fullscreen=%dx%d double=true"):format(
 			width,
@@ -1680,14 +1758,14 @@ local function write_render(image_data, mode)
 	finish(0, ("mode=%s-render output=%s"):format(mode, output))
 end
 
-local function begin_render_test(mode)
+local function begin_render_test(mode, cleanup)
 	local delegate_update = love.update
 	local delegate_draw = love.draw
 	local wrapper_update
 	local wrapper_draw
 	local requested = false
 	local playable_frames = 0
-	local game_started = mode == "menu"
+	local game_started = mode == "menu" or mode == "loaded"
 	local started_at = love.timer.getTime()
 
 	if mode == "new-game" or mode == "generation" then
@@ -1733,10 +1811,12 @@ local function begin_render_test(mode)
 		delegate_draw()
 		local frames_needed = mode == "menu" and 2
 			or mode == "generation" and 150
+			or mode == "loaded" and 30
 			or 90
 		if game_started and playable_frames >= frames_needed and not requested then
 			requested = true
 			love.graphics.captureScreenshot(function(image_data)
+				if cleanup then cleanup() end
 				local ok, err = pcall(write_render, image_data, mode)
 				if not ok then
 					finish(1, "mode=" .. mode .. "-render " .. tostring(err))
@@ -1747,6 +1827,32 @@ local function begin_render_test(mode)
 
 	love.update = wrapper_update
 	love.draw = wrapper_draw
+end
+
+local function begin_loaded_render_test(slot)
+	local original_identity = love.filesystem.getIdentity()
+	local test_identity = "sarcophagus-loaded-render-smoke"
+	local save_name = tostring(slot) .. ".sav"
+	love.filesystem.setIdentity(test_identity)
+	love.filesystem.remove(save_name)
+
+	local fixture_name = "tests/fixtures/" .. save_name
+	local fixture, fixture_error = love.filesystem.read(fixture_name)
+	assert(fixture, "cannot read render fixture: " .. tostring(fixture_error))
+	assert(love.filesystem.write(save_name, fixture), "cannot stage render fixture")
+	assert(game_load(slot), "cannot load render fixture")
+
+	game.savepos = slot
+	game.gr2x = true
+	game.menu = nil
+	screen_res()
+	love.update = love.old_update
+	love.draw = love.old_draw
+
+	begin_render_test("loaded", function()
+		love.filesystem.remove(save_name)
+		love.filesystem.setIdentity(original_identity)
+	end)
 end
 
 function smoke.install(specification)
@@ -1849,6 +1955,14 @@ function smoke.install(specification)
 
 		if mode == "generation-render" then
 			begin_render_test("generation")
+			return
+		end
+
+		if mode == "load-render" then
+			local slot = tonumber(value)
+			assert(slot and slot >= 1 and slot <= 9,
+				"invalid render save slot")
+			begin_loaded_render_test(slot)
 			return
 		end
 

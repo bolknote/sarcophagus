@@ -80,6 +80,7 @@ assets/maps/d.map
 assets/maps/home.map
 assets/shaders/lighting.glsl
 assets/shaders/noise.glsl
+assets/shaders/smooth2x.glsl
 assets/sounds/amoeba.ogg
 assets/sounds/bounce.ogg
 assets/sounds/bow.ogg

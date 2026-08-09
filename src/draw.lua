@@ -36,6 +36,54 @@ function water_render_colors(dirtiness)
 		0.72
 end
 
+function draw_smooth2x_world(source)
+	if not smooth2x_available() or not source then
+		return false
+	end
+
+	local previous_shader = love.graphics.getShader()
+	local previous_blend_mode, previous_alpha_mode = love.graphics.getBlendMode()
+	local red, green, blue, alpha = love.graphics.getColor()
+	local source_width, source_height = source:getDimensions()
+
+	love.graphics.setColor(1, 1, 1, 1)
+	love.graphics.setBlendMode("alpha", "premultiplied")
+	smooth2x_shader:send("source_size", {source_width, source_height})
+	smooth2x_shader:send("sharpness", 0.30)
+	love.graphics.setShader(smooth2x_shader)
+	love.graphics.draw(source, 0, 0, 0, 2, 2)
+
+	love.graphics.setShader(previous_shader)
+	love.graphics.setBlendMode(previous_blend_mode, previous_alpha_mode)
+	love.graphics.setColor(red, green, blue, alpha)
+	return true
+end
+
+local function send_world_lights(scale)
+	local count = 0
+	local total_power = 0
+	scale = scale or 1
+
+	for _, light in pairs(lights) do
+		if light.x
+			and light.x > 0 and light.y > 0
+			and light.x < screen.width and light.y < screen.height then
+			count = count + 1
+			local name = "lights[" .. count .. "]"
+			shader:send(name .. ".position", {
+				light.x * scale,
+				light.y * scale,
+			})
+			shader:send(name .. ".diffuse", light.l)
+			shader:send(name .. ".power", light.p * scale)
+			total_power = total_power + light.p
+		end
+	end
+
+	shader:send("num_lights", count + 1)
+	return total_power
+end
+
 function love.draw()
 	
 
@@ -67,28 +115,11 @@ function love.draw()
     
 
 	game_cursor = spt.cursor
-	love.graphics.setShader(shader)
+	local deferred_lighting = enhanced_2x_enabled()
+	local deferred_cooking_indicators = {}
 	
 	shader:send("ci",1)
-	
-	local n = 0
-	local p = 0
-	for k,light in pairs(lights) do
-		if light.x then
-
-			if light.x>0 and light.y>0 and light.x<screen.width and light.y<screen.height then
-
-				n = n + 1
-				local name = "lights[" .. n .."]"
-				shader:send(name .. ".position", {light.x, light.y})
-				shader:send(name .. ".diffuse", light.l)
-				shader:send(name .. ".power", light.p)
-				p = p + light.p
-				
-			end
-
-		end
-	end
+	local p = send_world_lights(1)
 
 	--print (n)
 
@@ -108,7 +139,11 @@ function love.draw()
 --	shader2:send("t2", factor)
 
 	
-	shader:send("num_lights", n+1)
+	if deferred_lighting then
+		love.graphics.setShader()
+	else
+		love.graphics.setShader(shader)
+	end
 
 --love.graphics.setShader(shader2)
 --local factor = math.floor (love.math.random (1,4))
@@ -346,7 +381,14 @@ end
 							--oldprint (dumpvar (wb.b))
 						end
 
-						if wb.b>0 and stone[wb.b].zindex and wb.de==nil then
+						local draw_in_depth_layer = wb.b>0
+							and stone[wb.b].zindex
+							and wb.de==nil
+						if draw_in_depth_layer then
+							-- This layer is composited back into the world below with the
+							-- lighting shader active. Applying the shader while building the
+							-- layer as well would darken z-indexed objects twice in pixel mode.
+							love.graphics.setShader()
 							love.graphics.setCanvas({block_canvas})
 						end
 
@@ -359,11 +401,16 @@ end
 						end
 
 
-						if wb.b>0 and stone[wb.b].zindex then
+						if draw_in_depth_layer then
 							if game.gr2x then
 								love.graphics.setCanvas({gr2x, stencil=true})
 							else
 								love.graphics.setCanvas()
+							end
+							if deferred_lighting then
+								love.graphics.setShader()
+							else
+								love.graphics.setShader(shader)
 							end
 						end
 
@@ -424,7 +471,16 @@ end
 
 						-- Keep the progress indicator stable between discrete heat ticks.
 						if wb.tneed then
-							draw_cooking (x,y, wb.tneed, wb.done)
+							if deferred_lighting then
+								deferred_cooking_indicators[#deferred_cooking_indicators + 1] = {
+									x = x,
+									y = y,
+									tneed = wb.tneed,
+									done = wb.done,
+								}
+							else
+								draw_cooking (x,y, wb.tneed, wb.done)
+							end
 						end
 
 					end
@@ -490,7 +546,11 @@ end
 
 
 						love.graphics.setColor (255,255,255,100)
-						love.graphics.setShader(shader)
+						if deferred_lighting then
+							love.graphics.setShader()
+						else
+							love.graphics.setShader(shader)
+						end
 
 						if game.gr2x then
 							love.graphics.setCanvas({gr2x, stencil=true})
@@ -621,6 +681,42 @@ end
 	love.graphics.setShader()
 	love.graphics.setColor (255,255,255,100)
 
+	if deferred_lighting then
+		-- Reconstruct and sharpen the unlit world first. Applying the authored
+		-- stepped light mask before this pass turns its dithered boundary into a
+		-- comb, so lighting is composited only after the image is final-sized.
+		love.graphics.setCanvas(smooth2x_canvas)
+		love.graphics.clear(0, 0, 0, 0)
+		draw_smooth2x_world(gr2x)
+
+		love.graphics.setCanvas()
+		send_world_lights(2)
+		shader:send("t", factor * 2)
+		shader:send("ci", 0)
+		local blend_mode, alpha_mode = love.graphics.getBlendMode()
+		love.graphics.setBlendMode("alpha", "premultiplied")
+		love.graphics.setShader(shader)
+		love.graphics.setColor(1, 1, 1, 1)
+		love.graphics.draw(smooth2x_canvas, 0, 0)
+		love.graphics.setShader()
+		love.graphics.setBlendMode(blend_mode, alpha_mode)
+
+		for _, indicator in ipairs(deferred_cooking_indicators) do
+			draw_cooking_smooth2x(
+				indicator.x,
+				indicator.y,
+				indicator.tneed,
+				indicator.done
+			)
+		end
+
+		-- Reuse the source canvas as a transparent overlay layer. This preserves
+		-- the old clipping and coordinate rules for world labels while keeping
+		-- them out of both the lighting and sharpening passes.
+		love.graphics.setCanvas({gr2x, stencil=true})
+		love.graphics.clear(0, 0, 0, 0)
+	end
+
 
 for k,v in pairs(sct) do
 --x,y,ttl,text
@@ -745,7 +841,14 @@ alttext ()
 
 	if game.gr2x then
 		love.graphics.setCanvas()
-		love.graphics.draw (gr2x, 0,0,0,2,2)
+		if deferred_lighting then
+			local blend_mode, alpha_mode = love.graphics.getBlendMode()
+			love.graphics.setBlendMode("alpha", "premultiplied")
+			love.graphics.draw (gr2x, 0,0,0,2,2)
+			love.graphics.setBlendMode(blend_mode, alpha_mode)
+		else
+			love.graphics.draw (gr2x, 0,0,0,2,2)
+		end
 		--love.graphics.draw (quad, gr2x, 500,200,0,0.5,0.5)
 	end
 

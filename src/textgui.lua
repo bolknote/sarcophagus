@@ -218,6 +218,54 @@ function draw_cooking (x,y,t,pc)
 
 end
 
+function draw_cooking_smooth2x (x,y,t,pc)
+
+	-- At 2x scale this HUD-like indicator is drawn directly into the
+	-- final-sized frame. Keeping the two values on separate rows makes the
+	-- required heat and the completed work readable without filtering either
+	-- one through the low-resolution world canvas.
+	t = math.max(0, math.min(1, t or 0))
+	pc = math.max(0, math.min(1, pc or 0))
+
+	local r = tile2px (x,y)
+	local left = math.floor(r.x * 2) + 4
+	local top = math.floor(r.y * 2) + 4
+	local width = 58
+	local height = 10
+	local inner_left = left + 2
+	local inner_top = top + 2
+	local inner_width = width - 4
+	local heat_width = math.floor(inner_width * t + 0.5)
+	local progress_width = math.floor(inner_width * pc + 0.5)
+
+	local old_style = love.graphics.getLineStyle()
+	local old_width = love.graphics.getLineWidth()
+	local red, green, blue, alpha = love.graphics.getColor()
+
+	love.graphics.setLineStyle('smooth')
+	love.graphics.setLineWidth(1.5)
+	love.graphics.setColor(0.03, 0.10, 0.16, 0.88)
+	love.graphics.rectangle('fill', left, top, width, height, 2, 2)
+	-- Keep the frame subordinate to the actual progress bar. A saturated
+	-- yellow outline looked almost luminous at the final 2x resolution.
+	love.graphics.setColor(0.58, 0.51, 0.24, 0.72)
+	love.graphics.rectangle('line', left, top, width, height, 2, 2)
+
+	if heat_width > 0 then
+		love.graphics.setColor(0.61, 0.15, 0.20, 1)
+		love.graphics.rectangle('fill', inner_left, inner_top, heat_width, 2, 1, 1)
+	end
+	if progress_width > 0 then
+		love.graphics.setColor(0.99, 0.90, 0.38, 1)
+		love.graphics.rectangle('fill', inner_left, inner_top + 4, progress_width, 2, 1, 1)
+	end
+
+	love.graphics.setLineStyle(old_style)
+	love.graphics.setLineWidth(old_width)
+	love.graphics.setColor(red, green, blue, alpha)
+
+end
+
 
 function draw_itemname (it)
 

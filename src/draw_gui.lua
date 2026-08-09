@@ -63,6 +63,18 @@ function inventory_mode_toggle_hint(showing_equipment, equipped_count)
 	return "", 0
 end
 
+function inventory_numeric_slots(inventory, inventory_size)
+	local slots = {}
+
+	for slot = 1, inventory_size do
+		if inventory[slot] then
+			slots[#slots + 1] = slot
+		end
+	end
+
+	return slots
+end
+
 function inventory_z_action_label(definition)
 	if definition and definition.put and definition.put ~= 0 then
 		return msg.gui[47]
@@ -170,6 +182,19 @@ local icnt = 0
 local ecnt = 0
 local scnt = 0
 
+local inventory_slots = inventory_numeric_slots(pl.inv, pl.invsize)
+local inventory_start = 0
+if type(pl.invselect) == "number" then
+	for index, slot in ipairs(inventory_slots) do
+		if slot == pl.invselect then
+			if index > 5 then
+				inventory_start = index - 5
+			end
+			break
+		end
+	end
+end
+pl.invselect_d = inventory_start
 
 
 for k=1,9 do
@@ -178,13 +203,6 @@ for k=1,9 do
 	--pl.inv_show = {}
 
 --		local v = pl.inv[k+pl.invpage*9] or {}
-		
-		local start = 0
-		if pl.inv_show_c>5 then
-			start = pl.inv_show_c - 5
-		end
-
-		pl.invselect_d = start
 
 		-- if pl.invsize<k+pl.invpage*9 then 
 		-- 	break
@@ -192,34 +210,29 @@ for k=1,9 do
 
 		--print (k+pl.invpage*9)
 
-		local v = pl.inv[pl.inv_show[start+k]] or {}
+		local slot = inventory_slots[inventory_start+k]
+		local v = slot and pl.inv[slot] or {}
 
 		local n
 		if item[v.i] then
 			n = item[v.i].name
 		end
 
-		local ks = (k+start).."]"
+		local ks = slot and slot.."]" or "  "
 
-		if pl.inv_show[start+k] then
-			if type(pl.inv_show[start+k])~='number' or n==nil then
-				ks = "  "
-			end
-		end
-
-		if k+start>9 then
+		if slot and slot>9 then
 			ks = "  "
 		end
 
-		--dump (pl.inv_show[start+k])
+		--dump (slot)
 
 		local item_line_count = 1
 		local item_row_y = gy + h*(2.5+icnt)
 
 		if n then
 
-			n = draw_itemname (pl.inv[pl.inv_show[start+k]])
-			local marker = pl.invselect==pl.inv_show[start+k]
+			n = draw_itemname (pl.inv[slot])
+			local marker = pl.invselect==slot
 				and (ctrshow and "■" or "·")
 				or " "
 			local plain_name = item[v.i].name
@@ -236,10 +249,10 @@ for k=1,9 do
 				y = item_row_y,
 				width = w*34,
 				height = h*item_line_count,
-				slot = pl.inv_show[start+k],
+				slot = slot,
 			}
 
-			if pl.invselect==pl.inv_show[start+k] then
+			if pl.invselect==slot then
 				pl.invselect_k = k
 				scnt = icnt + item_line_count
 

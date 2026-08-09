@@ -52,7 +52,7 @@ function esc_menu ()
 		end
 		},
 
-		[7] = {
+		[6] = {
 		value = 'invertstereo', 
 		type = 'bool',
 		f = function ()
@@ -60,7 +60,7 @@ function esc_menu ()
 		end
 		},
 
-		[8] = {
+		[7] = {
 		value = 'mastervolume', 
 		type = 'val',
 		def = 100,
@@ -83,19 +83,19 @@ function esc_menu ()
 		end
 		},
 
-		[10] = {
+		[9] = {
 		value = 'nosave', 
 		type = 'bool',
 		},
 
 
-		[11] = {
+		[10] = {
 		f = function ()
 			love.system.openURL("https://discord.gg/j7c2ytY")
 		end
 		},
 
-		[12] = {
+		[11] = {
 		type = 'language',
 		f = function ()
 			language_next()

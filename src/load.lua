@@ -1,3 +1,63 @@
+local function canvas_matches_window (canvas)
+	if not canvas then return false end
+	local canvas_width, canvas_height = canvas:getPixelDimensions()
+	local window_width, window_height = love.graphics.getPixelDimensions()
+	return canvas_width == window_width and canvas_height == window_height
+end
+
+local function release_canvas (canvas)
+	if canvas then canvas:release() end
+end
+
+function resize_render_canvases ()
+	if canvas_matches_window(gr2x)
+		and canvas_matches_window(smooth2x_canvas)
+		and canvas_matches_window(block_canvas)
+		and canvas_matches_window(water_canvas) then
+		return false
+	end
+
+	release_canvas(gr2x)
+	release_canvas(smooth2x_canvas)
+	release_canvas(block_canvas)
+	release_canvas(water_canvas)
+
+	gr2x = love.graphics.newCanvas()
+	smooth2x_canvas = love.graphics.newCanvas()
+	block_canvas = love.graphics.newCanvas()
+	water_canvas = love.graphics.newCanvas()
+
+	gr2x:setFilter("nearest", "nearest")
+	smooth2x_canvas:setFilter("nearest", "nearest")
+	block_canvas:setFilter("nearest", "nearest")
+	water_canvas:setFilter("nearest", "nearest")
+	return true
+end
+
+local function load_optional_smooth2x_shaders ()
+	local smooth_ok, smooth_shader = pcall(
+		love.graphics.newShader,
+		'assets/shaders/smooth2x.glsl'
+	)
+	if smooth_ok then
+		smooth2x_shader = smooth_shader
+		SMOOTH2X_ERROR = nil
+		return true
+	end
+
+	smooth2x_shader = nil
+	SMOOTH2X_ERROR = tostring(smooth_shader)
+	return false
+end
+
+function smooth2x_available ()
+	return smooth2x_shader ~= nil and smooth2x_canvas ~= nil
+end
+
+function enhanced_2x_enabled ()
+	return game ~= nil and game.gr2x and smooth2x_available()
+end
+
 function love.load()
 
 	local joysticks = love.joystick.getJoysticks() or {}
@@ -38,6 +98,7 @@ function love.load()
 
 
 	shader2 = love.graphics.newShader('assets/shaders/noise.glsl')
+	load_optional_smooth2x_shaders()
 
 	mouse_x = love.mouse.getX()
 	mouse_y = love.mouse.getY()
@@ -114,11 +175,6 @@ function love.load()
 
 
 	--SpriteBatch = love.graphics.newSpriteBatch (quad)
-	gr2x = love.graphics.newCanvas()
-	block_canvas = love.graphics.newCanvas()
-	water_canvas = love.graphics.newCanvas()
-	
-
 	minimap_canvas = love.graphics.newCanvas(cf.wmax,cf.wmax)
 	text_canvas = love.graphics.newCanvas(vi.textwall_w,vi.textwall_h)
 

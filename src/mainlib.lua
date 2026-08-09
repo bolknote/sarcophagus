@@ -128,7 +128,7 @@ end
 
 
 function love.resize(w, h)
-  screen_res ()
+	screen_res ()
 end
 
 function img_load (name)
@@ -209,6 +209,10 @@ function screen_res ()
 		screen.x = math.ceil (screen.x/2)
 		screen.y = math.ceil (screen.y/2)
 
+	end
+
+	if resize_render_canvases then
+		resize_render_canvases()
 	end
 
 
@@ -2448,6 +2452,10 @@ function savefiles ()
 end
 
 function game_migrate ()
+
+	-- Enhanced rendering is now an inherent part of the 2x scale. Discard the
+	-- obsolete per-save switch left by development builds.
+	game.smooth2x = nil
 
 	pl.inv = pl.inv or {}
 	pl.invsize = pl.invsize or 9
