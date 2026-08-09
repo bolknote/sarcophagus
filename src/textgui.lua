@@ -1,3 +1,54 @@
+local utf8lib = require("utf8")
+
+local russian_lowercase = {
+	"а", "б", "в", "г", "д", "е", "ё", "ж", "з", "и", "й",
+	"к", "л", "м", "н", "о", "п", "р", "с", "т", "у", "ф",
+	"х", "ц", "ч", "ш", "щ", "ъ", "ы", "ь", "э", "ю", "я",
+}
+
+local russian_uppercase = {
+	"А", "Б", "В", "Г", "Д", "Е", "Ё", "Ж", "З", "И", "Й",
+	"К", "Л", "М", "Н", "О", "П", "Р", "С", "Т", "У", "Ф",
+	"Х", "Ц", "Ч", "Ш", "Щ", "Ъ", "Ы", "Ь", "Э", "Ю", "Я",
+}
+
+local russian_locked_replacement = {}
+
+local function add_russian_locked_replacements (alphabet)
+	for index, letter in ipairs(alphabet) do
+		local bucket_start = math.floor((index - 1) / 6) * 6 + 1
+		local replacement = alphabet[bucket_start]
+		if replacement == letter then
+			replacement = alphabet[index < #alphabet and index + 1 or index - 1]
+		end
+		russian_locked_replacement[letter] = replacement
+	end
+end
+
+add_russian_locked_replacements(russian_lowercase)
+add_russian_locked_replacements(russian_uppercase)
+
+local function lock_russian_text (str)
+	local result = {}
+	local word_position = 0
+
+	for _, codepoint in utf8lib.codes(str) do
+		local character = utf8lib.char(codepoint)
+		local replacement = russian_locked_replacement[character]
+		if replacement then
+			word_position = word_position + 1
+			if word_position % 2 == 0 then
+				character = replacement
+			end
+		else
+			word_position = 0
+		end
+		result[#result + 1] = character
+	end
+
+	return table.concat(result)
+end
+
 function draw_fullbox (n)
 
 	n = n or 43
@@ -43,12 +94,22 @@ function draw_progress (pc,max)
 end
 
 function locked_txt (str)
+	local color_tags = {}
+	str = string.gsub(str, "({#%x+})", function (tag)
+		color_tags[#color_tags + 1] = tag
+		return "\1"..#color_tags.."\2"
+	end)
+
 	str = string.gsub (str,'([a-z])[a-f]','%1a')
 	str = string.gsub (str,'([a-z])[f-i]','%1f')
 	str = string.gsub (str,'([a-z])[i-n]','%1i')
 	str = string.gsub (str,'([a-z])[n-r]','%1n')
 	str = string.gsub (str,'([a-z])[r-v]','%1r')
 	str = string.gsub (str,'([a-z])[v-z]','%1v')
+	str = lock_russian_text(str)
+	str = string.gsub(str, "\1(%d+)\2", function (index)
+		return color_tags[tonumber(index)]
+	end)
 	return str.." "
 end
 

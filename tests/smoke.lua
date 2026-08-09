@@ -1216,12 +1216,45 @@ local function validate_display()
 
 	local original_language = LANGUAGE
 	local original_font = font
+	assert(locked_txt("flammable items") == "fiaimabia irair ",
+		"English locked-hint obfuscation changed")
+	local tagged_locked_hint = locked_txt(
+		"{#fee761ff}flammable{#ffffffff} items"
+	)
+	assert(tagged_locked_hint:find("{#fee761ff}", 1, true)
+		and tagged_locked_hint:find("{#ffffffff}", 1, true),
+		"locked-hint obfuscation damaged a color marker")
 	-- validate_display runs before love.load, while the live reload happens
 	-- during gameplay. Supply the same kind of initialized runtime font so
 	-- language_set also reapplies names to the content tables in this test.
 	font = pixel_font
 	for _, language in ipairs({"en", "ru"}) do
 		language_set(language, false)
+		local locked_hint_count = 0
+		for collection_name, collection in pairs({
+			item = msg.item,
+			stone = msg.stone,
+		}) do
+			for definition_id, definition in pairs(collection) do
+				for tip_number, tip in pairs(definition.tips or {}) do
+					local locked_tip = locked_txt(tip)
+					local _, source_newlines = tip:gsub("\n", "")
+					local _, locked_newlines = locked_tip:gsub("\n", "")
+					assert(locked_tip ~= tip .. " ", (
+						"%s %s %s tip %s is readable while locked"
+					):format(language, collection_name, definition_id, tip_number))
+					assert(utf8.len(locked_tip) == utf8.len(tip) + 1, (
+						"%s %s %s tip %s changed display length while locked"
+					):format(language, collection_name, definition_id, tip_number))
+					assert(source_newlines == locked_newlines, (
+						"%s %s %s tip %s changed line count while locked"
+					):format(language, collection_name, definition_id, tip_number))
+					locked_hint_count = locked_hint_count + 1
+				end
+			end
+		end
+		assert(locked_hint_count > 0,
+			language .. " locale has no locked hints to validate")
 		local expected_tool_tags = language == "ru" and {
 			dig = "#копание",
 			cut = "#резка",
