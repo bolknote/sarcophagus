@@ -286,10 +286,9 @@ end
 
 -- keypress
 
-local function gui_mouse_position(x, y)
-	if game.gr2x then
-		return x/2, y/2
-	end
+function gui_mouse_position(x, y)
+	-- The doubled canvas contains only the world. GUI is drawn afterwards in
+	-- window coordinates, which are also used by mouse events.
 	return x, y
 end
 
@@ -302,31 +301,36 @@ local function gui_mouse_row(rows, x, y)
 	end
 end
 
+function inventory_gui_mousepressed(x, y)
+	local gui_x, gui_y = gui_mouse_position(x, y)
+	local row = gui_mouse_row(game.inventory_mouse_rows, gui_x, gui_y)
+	if row and pl.inv[row.slot] then
+		pl.invselect = row.slot
+		inv_show ()
+		craft_ini ()
+		return true
+	end
+
+	row = gui_mouse_row(game.ground_mouse_rows, gui_x, gui_y)
+	if row then
+		inventory_pick_ground_item(row.index, row.ground_item)
+		inv_show ()
+		craft_ini ()
+		return true
+	end
+
+	return false
+end
+
 function love.mousepressed (x, y, button, istouch, presses)
 	
 	if world==nil then return end
 
 	mousetruemoved_last = 0
 
-	if button==1 then
-		local gui_x, gui_y = gui_mouse_position(x, y)
-		local row = gui_mouse_row(game.inventory_mouse_rows, gui_x, gui_y)
-		if row and pl.inv[row.slot] then
-			pl.invselect = row.slot
-			inv_show ()
-			craft_ini ()
-			game.gui_mouse_down = true
-			return
-		end
-
-		row = gui_mouse_row(game.ground_mouse_rows, gui_x, gui_y)
-		if row then
-			inventory_pick_ground_item(row.index, row.ground_item)
-			inv_show ()
-			craft_ini ()
-			game.gui_mouse_down = true
-			return
-		end
+	if button==1 and inventory_gui_mousepressed(x, y) then
+		game.gui_mouse_down = true
+		return
 	end
 
 	--print (button.." "..presses)

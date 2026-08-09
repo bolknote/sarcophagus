@@ -721,6 +721,19 @@ local function validate_display()
 	pl.xt, pl.yt = 10, 10
 	pl.tx, pl.ty = 11, 11
 	inv_show()
+	local original_gr2x_for_mouse = game.gr2x
+	local original_inventory_mouse_rows = game.inventory_mouse_rows
+	local original_ground_mouse_rows = game.ground_mouse_rows
+	game.gr2x = true
+	game.inventory_mouse_rows = {
+		{ x = 100, y = 100, width = 100, height = 20, slot = 1 },
+	}
+	game.ground_mouse_rows = {}
+	assert(inventory_gui_mousepressed(110, 110),
+		"inventory row mouse click was not consumed")
+	assert(pl.invselect == 1,
+		"inventory row mouse click selected the wrong slot")
+	pl.invselect = 2
 	assert(inventory_drop_selected_item(),
 		"Z failed to put the selected stone on the ground")
 	assert(#pl.inv == 1 and pl.inv[1].i == 26,
@@ -729,6 +742,25 @@ local function validate_display()
 		"Z picked up/replaced the moss instead of dropping the stone")
 	assert(#world[11][11].i == 1 and world[11][11].i[1] == other_tile_item,
 		"Z dropped the stone on a different coordinate pair")
+	game.inventory_mouse_rows = {}
+	game.ground_mouse_rows = {
+		{
+			x = 100,
+			y = 130,
+			width = 100,
+			height = 20,
+			index = 2,
+			ground_item = ground_moss,
+		},
+	}
+	assert(inventory_gui_mousepressed(110, 140),
+		"ground row mouse click was not consumed")
+	assert(inv_find(109) and #world[10][10].i == 1
+		and world[10][10].i[1].i == 5,
+		"ground row mouse click picked up the wrong item")
+	game.gr2x = original_gr2x_for_mouse
+	game.inventory_mouse_rows = original_inventory_mouse_rows
+	game.ground_mouse_rows = original_ground_mouse_rows
 	world = original_world_for_drop
 	game.ttl_list = original_ttl_list_for_drop
 	game.justremoved = original_justremoved_for_drop
