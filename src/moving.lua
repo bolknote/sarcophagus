@@ -8,6 +8,57 @@ function carried_block_placement_warning (block_id,support)
 	return (localized and localized.info) or msg.game[37]
 end
 
+local digging_tool_stats = { "dig", "cut", "chop", "smash", "pierce" }
+
+function digging_tool_selection (gather, selected_slot)
+	local selection = {
+		slot = selected_slot,
+		cant = true,
+		no_tool = nil,
+		bonus = 1,
+		needed = nil,
+		needed_level = nil,
+	}
+
+	if gather.dig == 0 then
+		selection.cant = false
+		selection.no_tool = true
+		return selection
+	end
+
+	for _, stat in ipairs(digging_tool_stats) do
+		local required_level = gather[stat]
+		if required_level then
+			local tool_level = inv_itemstat(selected_slot, stat) or 0
+			if tool_level >= required_level then
+				selection.cant = false
+				selection.bonus = tool_level - required_level
+				return selection
+			end
+			selection.needed = stat
+			selection.needed_level = required_level
+		end
+	end
+
+	local minimum_speed = 10
+	for slot in pairs(pl.inv) do
+		local speed = inv_itemstat(slot, "digspeed") or 0
+		for _, stat in ipairs(digging_tool_stats) do
+			local required_level = gather[stat]
+			local tool_level = inv_itemstat(slot, stat) or 0
+			if required_level and tool_level >= required_level
+				and minimum_speed > speed then
+				selection.slot = slot
+				selection.cant = false
+				selection.bonus = tool_level - required_level
+				minimum_speed = speed
+			end
+		end
+	end
+
+	return selection
+end
+
 
 function moving ()
 
@@ -1325,60 +1376,13 @@ function moving ()
 			local m = tile.digtime
 			local dig = tile.dig
 
-			local needed
-			local neededn
-
-			pl.digcant = true
-			pl.no_tool_dig = nil
-
-			pl.toolbonus = 1
-
-			if gather.dig == 0 then
-				pl.digcant = false
-				pl.no_tool_dig = true
-			else
-				for i,v in ipairs({'dig','cut','chop','smash','pierce'}) do
-
-					local tool = inv_itemstat(pl.invselect,v) or 0
-
-					if gather[v] and tool>=gather[v] then
-						pl.toolbonus = tool-gather[v]
-						pl.digcant = false
-						break
-					end
-
-					if gather[v] then
-						needed = v
-						neededn = gather[v]
-					end
-
-				end
-			end
-
-
-			--autopick right tool
-			local oldinvselect = pl.invselect
-			local mins = 10
-			if pl.digcant==true then
-				--print 'te'
-				--for ii=1,pl.invsize do
-				for ii,v in pairs(pl.inv) do
-					for i,v in ipairs({'dig','cut','chop','smash','pierce'}) do
-						local tool = inv_itemstat(ii,v) or 0
-						if gather[v] and tool>=gather[v] and mins>(inv_itemstat(ii,'digspeed') or 0) then
-							pl.toolbonus = tool-gather[v]
-							pl.digcant = false
-							pl.invselect = ii
-							mins = inv_itemstat(ii,'digspeed')
-						end
-					end
-
-					if pl.digcant == false then
-						--break
-					end
-
-				end
-			end
+			local digging_tool = digging_tool_selection(gather, pl.invselect)
+			local dig_tool_slot = digging_tool.slot
+			local needed = digging_tool.needed
+			local neededn = digging_tool.needed_level
+			pl.digcant = digging_tool.cant
+			pl.no_tool_dig = digging_tool.no_tool
+			pl.toolbonus = digging_tool.bonus
 
 
 			if pl.digcant == false then
@@ -1386,11 +1390,6 @@ function moving ()
 			end
 
 
-			
-			local tool = inv_itemstat(pl.invselect,v) or 0
-
-
-			
 			if m>0 then
 
 				if pl.stats.arms.pc<33 then 
@@ -1427,11 +1426,11 @@ function moving ()
 
 				--print (tostring(pl.no_tool_dig))
 
-				if inv_itemstat(pl.invselect,'digspeed') and pl.no_tool_dig==nil then
-					pl.digspeed = pl.digspeed * inv_itemstat(pl.invselect,'digspeed')
+				if inv_itemstat(dig_tool_slot,'digspeed') and pl.no_tool_dig==nil then
+					pl.digspeed = pl.digspeed * inv_itemstat(dig_tool_slot,'digspeed')
 				end
 
-				--print (inv_itemstat(pl.invselect,'digspeed'))
+				--print (inv_itemstat(dig_tool_slot,'digspeed'))
 
 				if pl.digcant and pl.digdone>50 then
 					pl.digback = true
@@ -1472,8 +1471,8 @@ function moving ()
 				local stat = 'arms'
 
 				m = m * (pl.digspend or 1)
-				if inv_itemstat(pl.invselect,'dighands') then
-					stat_spend (stat, m*inv_itemstat(pl.invselect,'dighands'))
+				if inv_itemstat(dig_tool_slot,'dighands') then
+					stat_spend (stat, m*inv_itemstat(dig_tool_slot,'dighands'))
 				else
 					stat_spend (stat, m)
 				end
@@ -1484,10 +1483,10 @@ function moving ()
 				game.time = game.time + m * 50 --32
 				game.recovery = game.recovery + m * 50
 
-				if pl.no_tool_dig==nil and inv_itemstat(pl.invselect,'dighit') then
-					local t = inv_item(pl.invselect,'t')
-					t = t - inv_itemstat(pl.invselect,'dighit')
-					inv_item (pl.invselect,'t',t)
+				if pl.no_tool_dig==nil and inv_itemstat(dig_tool_slot,'dighit') then
+					local t = inv_item(dig_tool_slot,'t')
+					t = t - inv_itemstat(dig_tool_slot,'dighit')
+					inv_item (dig_tool_slot,'t',t)
 				end
 
 
@@ -1580,8 +1579,6 @@ function moving ()
 				end
 
 			end
-
-			--pl.invselect = oldinvselect
 
 		end
 

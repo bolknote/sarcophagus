@@ -628,6 +628,35 @@ local function validate_display()
 	assert(gameplay_key_from_event("q", "z") == "q",
 		"a layout-reported Q is mistaken for the Z drop action")
 
+	-- Digging may use a tool from an equipment slot, but that internal choice
+	-- must not switch the inventory UI from its selected numeric slot. This was
+	-- especially visible when a full inventory could not select newly dug loot.
+	local original_inv_for_digging = pl.inv
+	local original_invsize_for_digging = pl.invsize
+	local original_invselect_for_digging = pl.invselect
+	pl.invsize = 9
+	pl.inv = { r = { i = 11, t = 100 } }
+	for slot = 1, pl.invsize do
+		pl.inv[slot] = { i = 3 }
+	end
+	pl.invselect = 4
+	local digging_tool = digging_tool_selection({ dig = 1 }, pl.invselect)
+	assert(digging_tool.slot == "r" and not digging_tool.cant,
+		"digging did not find the equipped bone tool")
+	assert(pl.invselect == 4 and type(pl.invselect) == "number",
+		"automatic digging-tool choice changed the inventory selection")
+	pl.inv[4] = { i = 5, t = 100 }
+	digging_tool = digging_tool_selection({ dig = 1 }, pl.invselect)
+	assert(digging_tool.slot == 4 and pl.invselect == 4,
+		"digging ignored the already selected suitable tool")
+	digging_tool = digging_tool_selection({ dig = 0 }, pl.invselect)
+	assert(not digging_tool.cant and digging_tool.no_tool
+		and digging_tool.slot == 4 and pl.invselect == 4,
+		"tool-free digging changed the inventory selection")
+	pl.inv = original_inv_for_digging
+	pl.invsize = original_invsize_for_digging
+	pl.invselect = original_invselect_for_digging
+
 	local original_stats_for_prayer = pl.stats
 	local original_dying_for_prayer = pl.dying
 	local original_isdead_for_prayer = pl.isdead
