@@ -118,9 +118,16 @@ local function start_request(request)
 			end
 		end
 
+		-- Save and Quit already pauses the simulation and locks input. Avoid the
+		-- per-entry checkpoint overhead there and finish serialization in one
+		-- pass; compression and filesystem writing still happen in the worker.
+		local yield_callback = checkpoint
+		if request.kind == "quit" then
+			yield_callback = nil
+		end
 		return game_serialize_snapshot(
 			job.snapshot,
-			checkpoint,
+			yield_callback,
 			estimated_buffer_size(job.name)
 		)
 	end)

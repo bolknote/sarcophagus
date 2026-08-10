@@ -408,6 +408,27 @@ local function validate_autosave()
 		assert(game.autosave == nil,
 			"autosave queue flag leaked into the saved game")
 
+		-- Save and Quit runs while the simulation is paused. Its serialization
+		-- should finish in one update instead of inheriting the deliberately tiny
+		-- autosave slices and making the user wait for many rendered frames.
+		local quit_saved
+		local quit_save_error
+		assert(game_save_async(2, {
+			kind = "quit",
+			screenshot = false,
+			on_complete = function(saved, completion_error)
+				quit_saved = saved
+				quit_save_error = completion_error
+			end,
+		}), "background quit save did not start")
+		local quit_serialize_started = love.timer.getTime()
+		assert(save_manager.update() == "writing",
+			"quit serialization was spread across autosave-sized slices")
+		local quit_serialize_time = love.timer.getTime() - quit_serialize_started
+		finish_background_save()
+		assert(quit_saved and quit_save_error == nil,
+			"background quit save failed")
+
 		game_delete_save(2)
 		game.savepos = 2
 		game.dt = 2000
@@ -438,10 +459,11 @@ local function validate_autosave()
 			"failed autosave did not schedule a bounded retry")
 		game_save_async = original_game_save_async
 
-		return ("mode=autosave timer=600 incremental=true worker=true compressed=true backup=true reload=true disabled=true retry=30 snapshot_ms=%.1f max_step_ms=%.1f raw=%d stored=%d")
+		return ("mode=autosave timer=600 incremental=true worker=true compressed=true backup=true reload=true disabled=true retry=30 snapshot_ms=%.1f max_step_ms=%.1f quit_serialize_ms=%.1f raw=%d stored=%d")
 			:format(
 				snapshot_time * 1000,
 				longest_update * 1000,
+				quit_serialize_time * 1000,
 				raw_size,
 				#compressed_save
 			)
