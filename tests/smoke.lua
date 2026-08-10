@@ -260,15 +260,22 @@ local function validate_autosave()
 
 	local function finish_background_save()
 		local deadline = love.timer.getTime() + 30
+		local started_at = love.timer.getTime()
 		local saw_serializing = false
 		local saw_writing = false
 		local longest_update = 0
+		local update_count = 0
+		local serialize_update_count = 0
 		while save_manager.is_busy() and love.timer.getTime() < deadline do
 			local stage = save_manager.stage()
 			saw_serializing = saw_serializing or stage == "serializing"
 			saw_writing = saw_writing or stage == "writing"
+			if stage == "serializing" then
+				serialize_update_count = serialize_update_count + 1
+			end
 			local update_started = love.timer.getTime()
 			save_manager.update()
+			update_count = update_count + 1
 			longest_update = math.max(
 				longest_update,
 				love.timer.getTime() - update_started
@@ -276,7 +283,8 @@ local function validate_autosave()
 			love.timer.sleep(0.001)
 		end
 		assert(not save_manager.is_busy(), "background save timed out")
-		return saw_serializing, saw_writing, longest_update
+		return saw_serializing, saw_writing, longest_update,
+			love.timer.getTime() - started_at, update_count, serialize_update_count
 	end
 
 	love.filesystem.setIdentity(test_identity)
@@ -385,11 +393,15 @@ local function validate_autosave()
 			"background autosave replaced the file before serialization finished")
 		assert(save_manager.update(0.0001) == "serializing",
 			"large save serialization was not split across frames")
-		local saw_serializing, saw_writing, longest_update = finish_background_save()
+		local saw_serializing, saw_writing, longest_update,
+			autosave_elapsed, autosave_updates,
+			autosave_serialize_updates = finish_background_save()
 		assert(saw_serializing and saw_writing,
 			"autosave did not pass through serialization and worker stages")
-		assert(longest_update < 0.05,
+		assert(longest_update < 0.02,
 			"incremental save exceeded its per-frame time budget")
+		assert(autosave_serialize_updates < 180,
+			"incremental save took too many rendered frames")
 		assert(game.autosave == nil and game.lastsave == 1201,
 			"successful autosave did not schedule the next ten-minute interval")
 		assert(love.filesystem.getInfo("1.sav.bak"),
@@ -459,10 +471,13 @@ local function validate_autosave()
 			"failed autosave did not schedule a bounded retry")
 		game_save_async = original_game_save_async
 
-		return ("mode=autosave timer=600 incremental=true worker=true compressed=true backup=true reload=true disabled=true retry=30 snapshot_ms=%.1f max_step_ms=%.1f quit_serialize_ms=%.1f raw=%d stored=%d")
+		return ("mode=autosave timer=600 incremental=true worker=true compressed=true backup=true reload=true disabled=true retry=30 snapshot_ms=%.1f max_step_ms=%.1f autosave_elapsed_ms=%.1f autosave_updates=%d autosave_serialize_updates=%d quit_serialize_ms=%.1f raw=%d stored=%d")
 			:format(
 				snapshot_time * 1000,
 				longest_update * 1000,
+				autosave_elapsed * 1000,
+				autosave_updates,
+				autosave_serialize_updates,
 				quit_serialize_time * 1000,
 				raw_size,
 				#compressed_save

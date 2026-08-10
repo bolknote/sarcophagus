@@ -2,7 +2,10 @@ local SaveFormat = require("src.save_format")
 
 local SaveManager = {}
 
-local DEFAULT_SERIALIZE_BUDGET = 0.004
+-- Gameplay is capped at 30 FPS, leaving 33 ms for each frame. A 10 ms slice
+-- finishes a typical late-game save in a few seconds while retaining ample
+-- time for simulation and Retina rendering.
+local DEFAULT_SERIALIZE_BUDGET = 0.010
 local CHECK_INTERVAL = 128
 local DEFAULT_BUFFER_SIZE = 8 * 1024 * 1024
 
