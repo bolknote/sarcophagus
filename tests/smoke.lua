@@ -1,4 +1,5 @@
 local smoke = {}
+local gameplay_keypressed = love.keypressed
 
 local function finish(exit_code, message)
     local stream = exit_code == 0 and io.stdout or io.stderr
@@ -15,6 +16,1176 @@ local function table_size(value)
     return count
 end
 
+local function process_test_actor(registry)
+	local ActorState = require("src.actor_state")
+	local host = ActorState.new({ actor_id = "host", actor_role = "host" })
+	host.inv = {}
+	host.invsize = 9
+	host.invselect = 1
+	host.unlock_i = {}
+	host.unlock_c = {}
+	host.visited = {}
+	host.ferted = {}
+	host.quests = {}
+	host.stats = { body = { hp = 100, maxhp = 100, pc = 100, d = 0 } }
+	host.state = "idle"
+	host.oldstate = "idle"
+	host.truex, host.truey = 32, 64
+	host.tx, host.ty, host.xt, host.yt = 2, 3, 2, 3
+	registry:bind_host(host, {})
+	return host
+end
+
+local function install_process_network_test(role, value)
+	local ActorRegistry = require("src.actor_registry")
+	local InputState = require("src.input_state")
+	local Replication = require("src.network.replication")
+	local Runtime = require("src.network.runtime")
+	local Session = require("src.network.session")
+	local port_value, discovery_value = value:match("^(%d+),(%d+)$")
+	local port = tonumber(port_value or value)
+	local discovery_port = tonumber(discovery_value)
+	assert(port and port >= 1 and port <= 65535 and port == math.floor(port),
+		"invalid process-test port")
+	assert(discovery_port == nil or (discovery_port >= 1
+		and discovery_port <= 65535 and discovery_port == math.floor(discovery_port)),
+		"invalid process-test discovery port")
+
+	io.stdout:setvbuf("no")
+	io.stderr:setvbuf("no")
+	love.draw = function() end
+	local elapsed = 0
+	local finished = false
+	local runtime
+	local function complete(code, details)
+		if finished then return end
+		finished = true
+		if runtime and runtime.role ~= "offline" then runtime:prepare_quit() end
+		finish(code, "mode=network-process-" .. role .. " " .. details)
+	end
+	local function guard(callback)
+		love.update = function(dt)
+			if finished then return end
+			local ok, err = pcall(callback, dt)
+			if not ok then complete(1, tostring(err)) end
+		end
+	end
+
+	local registry = ActorRegistry.new()
+	local host_actor = process_test_actor(registry)
+	local world_id = string.rep("a", 64)
+	local process_content_hash = string.rep("b", 64)
+	local multicast_discovery = os.getenv(
+		"SARCOPHAGUS_PROCESS_DISCOVERY"
+	) == "multicast"
+	local forced_disconnect = (tonumber(os.getenv(
+		"SARCOPHAGUS_NET_DISCONNECT_AFTER"
+	)) or 0) > 0
+	if role == "host" then
+		local action_seen, input_seen, delta_sent, event_sent = false, false, false, false
+		local completion_elapsed
+		local reconnect_seen, reconnect_completed = false, not forced_disconnect
+		runtime = Runtime.new({
+			registry = registry,
+			state_interval = 0.01,
+			progress_interval = 0.1,
+			world_interval = 0.01,
+			spawn_provider = function()
+				return { truex = 96, truey = 128, tx = 4, ty = 5, xt = 4, yt = 5 }
+			end,
+			state_provider = function(session)
+				return {
+					world = { [1] = { [1] = { b = 0 } } },
+					game = { world_id = world_id, time = 7 },
+					host_actor = host_actor,
+					guest_actor = session.guest,
+					tips = {}, disp = {}, mobs = {}, tick = 11,
+					world_id = world_id,
+					session_id = session.session_id,
+				}
+			end,
+			dropper = function() return true end,
+			simulation_handler = function(guest, input)
+				if InputState.is_down(input, "d") then
+					input_seen = true
+					guest.truex = (guest.truex or 0) + 1
+				end
+			end,
+			action_handler = function(_, action)
+				action_seen = action.action == "process-test"
+				return action_seen
+			end,
+			replication_provider = function(session, include_progress)
+				return {
+					tick = 12,
+					input_seen = input_seen,
+					action_seen = action_seen,
+					progress = include_progress and true or nil,
+					guest_actor = Replication.capture_actor(session.guest),
+				}
+			end,
+			world_delta_provider = function()
+				if delta_sent then return nil end
+				delta_sent = true
+				return {
+					sequence = 1,
+					tick = 12,
+					cells = { { x = 1, y = 1, cell = { b = 77 } } },
+				}
+			end,
+			event_provider = function()
+				if event_sent or not action_seen then return nil end
+				event_sent = true
+				return { kind = "process-test", value = 91 }
+			end,
+		})
+		assert(runtime:start_host({
+			host = multicast_discovery and "*" or "127.0.0.1",
+			port = port,
+			last_port = port,
+				discovery = discovery_port ~= nil,
+				discovery_port = discovery_port,
+			game_version = "process-test",
+			content_hash = process_content_hash,
+			world_id = world_id,
+		}))
+		io.stdout:write("SARCOPHAGUS_PROCESS_HOST_READY port=" .. port .. "\n")
+		guard(function(dt)
+			elapsed = elapsed + dt
+			runtime:update(dt)
+			if runtime.session.state == Session.STATE.RECONNECT_GRACE then
+				reconnect_seen = true
+			elseif reconnect_seen and runtime.session.state == Session.STATE.PLAYING then
+				reconnect_completed = true
+			end
+			if runtime:pending_approval() then assert(runtime:approve_guest()) end
+			if action_seen and input_seen and reconnect_completed then
+				completion_elapsed = completion_elapsed or elapsed
+				if elapsed - completion_elapsed >= 0.75 then
+					complete(0, "handshake=true input=true action=true reconnect="
+						.. tostring(reconnect_seen))
+				end
+			end
+			if elapsed > 12 then
+				complete(1, "timeout state=" .. tostring(runtime.session.state))
+			end
+		end)
+	else
+		local snapshot_seen, replicated, progress_seen, world_delta, action_result, network_event
+		local discovery_requested = discovery_port ~= nil
+		local discovery_seen = not discovery_requested
+		local action_sent = false
+		local process_input
+		local next_input_send = 0
+		local reconnect_seen, reconnect_completed = false, not forced_disconnect
+		runtime = Runtime.new({
+			registry = registry,
+			state_interval = 0.01,
+			world_interval = 0.01,
+			state_applier = function(snapshot)
+				snapshot_seen = snapshot.header.tick == 11
+				registry:bind_host(snapshot.host_actor, {})
+				registry:bind_guest(snapshot.guest_actor, { local_actor = true })
+			end,
+			replication_applier = function(state)
+				replicated = state
+				progress_seen = progress_seen or state.progress == true
+			end,
+			world_delta_applier = function(delta) world_delta = delta end,
+			action_result_handler = function(result) action_result = result end,
+			event_handler = function(value)
+				network_event = value
+				return value.kind == "process-test" and value.value == 91
+			end,
+		})
+		local function connect(address, gameplay_port)
+			return runtime:connect({
+				host = address,
+				port = gameplay_port,
+				game_version = "process-test",
+				content_hash = process_content_hash,
+			})
+		end
+		if discovery_port then
+			assert(runtime:start_browsing({
+				port = discovery_port,
+				game_version = "process-test",
+				content_hash = process_content_hash,
+			}))
+			if not multicast_discovery then
+				assert(runtime.browser:refresh("127.0.0.1", discovery_port))
+			end
+		else
+			assert(connect("127.0.0.1", port))
+		end
+		guard(function(dt)
+			elapsed = elapsed + dt
+			runtime:update(dt)
+			if runtime.client_state == "reconnecting"
+				or runtime.client_state == "resuming" then
+				reconnect_seen = true
+			elseif reconnect_seen and runtime.client_state == "playing" then
+				reconnect_completed = true
+			end
+			if discovery_port and runtime.role == "offline" then
+				local records = runtime:servers()
+				if records[1] then
+					discovery_seen = (multicast_discovery
+						or records[1].address == "127.0.0.1")
+						and records[1].gameplay_port == port
+					assert(discovery_seen, "discovery returned an invalid host record")
+					assert(connect(records[1].address, records[1].gameplay_port))
+				end
+			end
+			if runtime.client_state == "playing" then
+				if not action_sent then
+					assert(runtime:send_action({
+						action_id = 1,
+						action = "process-test",
+					}))
+					action_sent = true
+				end
+				if (not replicated or not replicated.input_seen)
+					and elapsed >= next_input_send then
+					process_input = process_input or InputState.new()
+					InputState.set_button(process_input, "d", true)
+					InputState.advance(process_input)
+					assert(runtime:send_input(process_input))
+					next_input_send = elapsed + 0.05
+				end
+			end
+			if reconnect_completed and discovery_seen and snapshot_seen
+				and replicated and replicated.input_seen
+				and replicated.action_seen and progress_seen and world_delta
+				and world_delta.cells[1].cell.b == 77
+				and action_result and action_result.ok and network_event then
+				complete(0,
+					"snapshot=true state=true progress=true world=true action_result=true event=true discovery="
+						.. tostring(discovery_requested and discovery_seen)
+						.. " reconnect=" .. tostring(reconnect_seen))
+			end
+			if runtime.client_state == "failed" or runtime.client_state == "rejected" then
+				complete(1, "state=" .. tostring(runtime.client_state)
+					.. " error=" .. tostring(runtime.last_error))
+			end
+			if elapsed > 12 then
+				complete(1, "timeout state=" .. tostring(runtime.client_state)
+					.. " error=" .. tostring(runtime.last_error))
+			end
+		end)
+	end
+end
+
+local function validate_actor_architecture()
+	local ActorState = require("src.actor_state")
+	local ActorRegistry = require("src.actor_registry")
+	local InputState = require("src.input_state")
+	local PlayerAnimation = require("src.player_animation")
+	local NetworkReplication = require("src.network.replication")
+	local ItemIdentity = require("src.item_identity")
+	local ActorInventory = require("src.actor_inventory")
+	local GhostActor = require("src.ghost_actor")
+
+	assert(actors.host == pl and actors.local_actor == pl,
+		"global player is not registered as the local host actor")
+	assert(pl.actor_id == "host" and pl.actor_role == "host",
+		"host actor identity is invalid")
+	assert(type(pl.animation) == "table" and pl.animation.frame == 1,
+		"host animation state is not actor-owned")
+
+	local registry = ActorRegistry.new()
+	local host = ActorState.new({ actor_id = "host", actor_role = "host" })
+	host.state = "idle"
+	host.oldstate = "idle"
+	host.x = 0
+	host.y = 0
+	host.flip = 1
+	local guest = ActorState.new({ actor_id = "guest", actor_role = "guest" })
+	guest.state = "idle"
+	guest.oldstate = "idle"
+	guest.x = 100
+	guest.y = 0
+	guest.flip = -1
+
+	registry:bind_host(host, {})
+	registry:bind_guest(guest)
+	assert(registry.host == host and registry.guest == guest,
+		"actor registry did not retain both actors")
+	assert(registry:runtime(host) ~= registry:runtime(guest),
+		"actors unexpectedly share runtime sidecar state")
+
+	local host_input = registry:runtime(host).input
+	assert(InputState.set_button(host_input, "a", true))
+	assert(InputState.is_down(host_input, "a"))
+	assert(not InputState.is_down(registry:runtime(guest).input, "a"),
+		"input state leaked between actors")
+	local packet = InputState.snapshot(host_input)
+	local remote_input = InputState.new()
+	assert(InputState.apply_snapshot(remote_input, packet))
+	assert(InputState.is_down(remote_input, "a"),
+		"input snapshot did not round-trip")
+
+	local definitions = {
+		idle = {
+			cnt = 2,
+			dur = { 1, 1 },
+			ani = { 2, 1 },
+			add = { [2] = { 3, -2 } },
+		},
+		walk = {
+			cnt = 2,
+			dur = { 1, 1 },
+			ani = { 2, 1 },
+		},
+	}
+	assert(PlayerAnimation.update(host, 0.01, definitions))
+	assert(host.animation.frame == 2 and host.x == 3 and host.y == -2,
+		"host actor animation did not advance independently")
+	assert(guest.animation.frame == 1 and guest.x == 100,
+		"host animation mutated guest actor")
+
+	guest.animation.frame = 2
+	guest.animation.time = 0.4
+	guest.animation.cycle = 3
+	local client_animation = guest.animation
+	assert(NetworkReplication.apply_actor(guest, {
+		state = "idle",
+		oldstate = "walk",
+		animation = { frame = 1, time = 0, cycle = 0 },
+	}, {
+		fields = { "state", "oldstate", "animation" },
+		preserve_animation = true,
+	}))
+	assert(guest.animation == client_animation
+		and guest.animation.frame == 2 and guest.animation.time == 0.4
+		and guest.oldstate == "idle",
+		"replication rewound an active client animation clock")
+	assert(NetworkReplication.apply_actor(guest, {
+		state = "walk",
+		oldstate = "walk",
+		animation = { frame = 2, time = 0.9, cycle = 12 },
+	}, {
+		fields = { "state", "oldstate", "animation" },
+		preserve_animation = true,
+	}))
+	assert(guest.state == "walk" and guest.oldstate == "idle"
+		and guest.animation == client_animation,
+		"replication hid an authoritative animation-state transition")
+	assert(PlayerAnimation.update(guest, 0, definitions)
+		and guest.animation.frame == 1 and guest.oldstate == "walk",
+		"authoritative state transition did not reset client animation once")
+
+	local legacy = ActorState.ensure({ state = "idle" }, {
+		actor_id = "host",
+		actor_role = "host",
+		force_identity = true,
+	})
+	assert(legacy.animation.frame == 1 and legacy.animation.time == 0,
+		"legacy actor migration did not supply animation state")
+
+	local identity_world = {}
+	local first = { i = 31 }
+	local second = { i = 31 }
+	local first_uid = assert(ItemIdentity.ensure(first, identity_world))
+	local second_uid = assert(ItemIdentity.ensure(second, identity_world))
+	assert(first_uid ~= second_uid, "new item instances share a uid")
+	local duplicate = { i = 31, uid = first_uid }
+	local seen = { [first_uid] = first }
+	local repaired_uid = assert(ItemIdentity.ensure(duplicate, identity_world, seen))
+	assert(repaired_uid ~= first_uid and seen[repaired_uid] == duplicate,
+		"duplicate item uid was not repaired")
+
+	host.inv = { [1] = first }
+	host.invsize = 9
+	host.unlock_i = { [31] = true }
+	host.unlock_c = { [5] = true }
+	host.visited = { ["1-1"] = true }
+	host.ferted = {}
+	host.stats = {
+		body = { hp = 20, maxhp = 120, pc = 16, d = -5 },
+		faith = { hp = 30, maxhp = 100, pc = 30, d = 1 },
+	}
+	local session_ghost = GhostActor.new(host, { session_id = "test-session" })
+	assert(next(session_ghost.inv) == nil and session_ghost.invsize == 9,
+		"ghost copied material inventory")
+	assert(session_ghost.unlock_i == host.unlock_i
+		and session_ghost.visited == host.visited,
+		"ghost does not share world knowledge")
+	assert(session_ghost.stats ~= host.stats
+		and session_ghost.stats.body.hp == 120
+		and session_ghost.stats.faith.hp == 0,
+		"ghost personal stats were not reset independently")
+	local ghost_item = { i = 31 }
+	assert(ActorInventory.add(session_ghost, ghost_item, identity_world) == 1)
+	assert(ActorInventory.count(session_ghost) == 1)
+	assert(ActorInventory.remove(session_ghost, 1) == ghost_item)
+	assert(host.inv[1] == first, "ghost inventory operation mutated host inventory")
+
+	finish(0,
+		"mode=actors registry=true input=true animation=true migration=true "
+			.. "items=true ghost=true")
+end
+
+local function validate_network_core()
+	local ActorState = require("src.actor_state")
+	local ActorRegistry = require("src.actor_registry")
+	local ActorInventory = require("src.actor_inventory")
+	local InputState = require("src.input_state")
+	local Protocol = require("src.network.protocol")
+	local Session = require("src.network.session")
+	local ContentHash = require("src.network.content_hash")
+	local Identity = require("src.network.identity")
+	local EnetTransport = require("src.network.enet_transport")
+	local GuestPossessions = require("src.guest_possessions")
+	local ItemIdentity = require("src.item_identity")
+	local GhostActor = require("src.ghost_actor")
+	local NetworkSnapshot = require("src.network.snapshot")
+	local NetworkReplication = require("src.network.replication")
+	local WorldJournal = require("src.network.world_journal")
+	local Runtime = require("src.network.runtime")
+	local LANDiscovery = require("src.network.discovery")
+	local enet_ok, enet = pcall(require, "enet")
+	local socket_ok, socket = pcall(require, "socket")
+	assert(enet_ok and type(enet) == "table", "lua-enet is unavailable")
+	assert(socket_ok and type(socket) == "table", "LuaSocket is unavailable")
+	local content_hash = ContentHash.compute({ "version.txt", "conf.lua" })
+	assert(type(content_hash) == "string" and #content_hash == 64,
+		"content manifest hash is invalid")
+	local identity_state = {}
+	local world_id = Identity.ensure_world(identity_state)
+	local test_content_hash = string.rep("b", 64)
+	local discovery_session_id = string.rep("c", 64)
+	local client_nonce = string.rep("d", 64)
+	local incomplete_nonce = string.rep("e", 64)
+	assert(Identity.valid(world_id) and Identity.ensure_world(identity_state) == world_id,
+		"world identity is not stable")
+
+	local server, client
+	local loopback_ok, loopback_error = pcall(function()
+		server = assert(EnetTransport.create_server({
+			host = "127.0.0.1",
+			port = 23872,
+			last_port = 23892,
+		}))
+		client = assert(EnetTransport.create_client({
+			faults = {
+				loss_percent = 100,
+				random = function() return 0 end,
+			},
+		}))
+		assert(client:connect("127.0.0.1", server.port))
+		local server_connected
+		local client_connected
+		local deadline = love.timer.getTime() + 2
+		while love.timer.getTime() < deadline
+			and (not server_connected or not client_connected) do
+			local server_event = server:poll(1)
+			local client_event = client:poll(1)
+			server_connected = server_connected
+				or (server_event and server_event.type == "connect")
+			client_connected = client_connected
+				or (client_event and client_event.type == "connect")
+		end
+		assert(server_connected and client_connected, "ENet loopback did not connect")
+		assert(client:send(nil, "ping", { nonce = "loopback" },
+			Protocol.CHANNEL.CONTROL, true))
+		client:flush()
+		local received
+		deadline = love.timer.getTime() + 2
+		while love.timer.getTime() < deadline and not received do
+			local event = server:poll(2)
+			if event and event.type == "receive" then received = event end
+		end
+		assert(received, "ENet loopback packet was not received")
+		local message = assert(Protocol.decode(received.data))
+		assert(message.kind == "ping" and message.payload.nonce == "loopback",
+			"ENet loopback payload was corrupted")
+		assert(client:send_raw(nil, "fault-loss", Protocol.CHANNEL.INPUT, false))
+		assert(client:stats().faults.dropped == 1,
+			"artificial unreliable packet loss was not recorded")
+		client.faults.loss_percent = 0
+		client.faults.duplication_percent = 100
+		assert(client:send_raw(nil, "fault-duplicate", Protocol.CHANNEL.INPUT, false))
+		client:flush()
+		local duplicates = 0
+		deadline = love.timer.getTime() + 2
+		while love.timer.getTime() < deadline and duplicates < 2 do
+			local event = server:poll(2)
+			if event and event.type == "receive"
+				and event.data == "fault-duplicate" then
+				duplicates = duplicates + 1
+			end
+		end
+		assert(duplicates == 2 and client:stats().faults.duplicated == 1,
+			"artificial unreliable packet duplication was not applied")
+		client.faults.duplication_percent = 0
+		client.faults.latency_ms = 20
+		assert(client:send_raw(nil, "fault-delay", Protocol.CHANNEL.INPUT, false))
+		assert(client:stats().faults.queued == 1,
+			"artificial latency did not queue a packet")
+		love.timer.sleep(0.03)
+		client:poll(0)
+		client:flush()
+		local delayed
+		deadline = love.timer.getTime() + 2
+		while love.timer.getTime() < deadline and not delayed do
+			local event = server:poll(2)
+			delayed = event and event.type == "receive"
+				and event.data == "fault-delay"
+		end
+		assert(delayed and client:stats().faults.queued == 0,
+			"artificial latency did not release the queued packet")
+		local client_stats = client:stats()
+		local server_stats = server:stats()
+		assert(client_stats.packets_sent >= 1 and client_stats.bytes_sent > 0
+			and server_stats.packets_received >= 1 and server_stats.bytes_received > 0,
+			"ENet transport diagnostics did not count traffic")
+	end)
+	if client then client:close() end
+	if server then server:close() end
+	assert(loopback_ok, loopback_error)
+
+	local runtime_server, runtime_client
+	local runtime_loopback_ok, runtime_loopback_error = pcall(function()
+		local host_registry = ActorRegistry.new()
+		local runtime_host_actor = ActorState.new({ actor_id = "host", actor_role = "host" })
+		runtime_host_actor.inv = {}
+		runtime_host_actor.invsize = 9
+		runtime_host_actor.unlock_i = {}
+		runtime_host_actor.unlock_c = {}
+		runtime_host_actor.visited = {}
+		runtime_host_actor.ferted = {}
+		runtime_host_actor.stats = {
+			body = { hp = 100, maxhp = 100, pc = 100, d = 0 },
+		}
+		host_registry:bind_host(runtime_host_actor, {})
+		local client_registry = ActorRegistry.new()
+		local applied_snapshot
+		local applied_state
+		local applied_world
+		local simulated_input
+		local handled_action
+		local catchup_allowed = true
+		local pending_delta = {
+			sequence = 1,
+			tick = 2,
+			cells = { { x = 1, y = 1, cell = { b = 12 } } },
+		}
+		runtime_server = Runtime.new({
+			registry = host_registry,
+			state_interval = 0.001,
+			world_interval = 0.001,
+			spawn_provider = function()
+				return { truex = 32, truey = 64, tx = 2, ty = 3, xt = 2, yt = 3 }
+			end,
+			state_provider = function(session_state)
+				return {
+					world = { [1] = { [1] = { b = 0 } } },
+					game = { world_id = world_id, time = 1 },
+					host_actor = runtime_host_actor,
+					guest_actor = session_state.guest,
+					tips = {}, disp = {}, mobs = {}, tick = 1,
+					world_id = world_id,
+					session_id = session_state.session_id,
+				}
+			end,
+			dropper = function() return true end,
+			catchup_validator = function()
+				return catchup_allowed,
+					catchup_allowed and nil or "snapshot_catchup_overflow"
+			end,
+			simulation_handler = function(_, remote_input)
+				simulated_input = InputState.is_down(remote_input, "a")
+			end,
+			action_handler = function(_, action)
+				handled_action = action.action_id
+				return true
+			end,
+			replication_provider = function(session_state)
+				return {
+					tick = 2,
+					guest_actor = NetworkReplication.capture_actor(session_state.guest),
+				}
+			end,
+			world_delta_provider = function()
+				local value = pending_delta
+				pending_delta = nil
+				return value
+			end,
+		})
+		runtime_client = Runtime.new({
+			registry = client_registry,
+			state_interval = 0.001,
+			world_interval = 0.001,
+			state_applier = function(snapshot_state)
+				applied_snapshot = snapshot_state
+				client_registry:bind_host(snapshot_state.host_actor, {})
+				client_registry:bind_guest(snapshot_state.guest_actor, { local_actor = true })
+			end,
+			replication_applier = function(value) applied_state = value end,
+			world_delta_applier = function(value) applied_world = value end,
+		})
+		local started, runtime_port = runtime_server:start_host({
+			host = "127.0.0.1",
+			port = 23930,
+			last_port = 23950,
+			discovery = false,
+			game_version = "test-version",
+			content_hash = test_content_hash,
+			world_id = world_id,
+		})
+		assert(started)
+		assert(runtime_client:connect({
+			host = "127.0.0.1",
+			port = runtime_port,
+			game_version = "test-version",
+			content_hash = test_content_hash,
+		}))
+		local function pump(predicate, label)
+			local deadline = love.timer.getTime() + 3
+			while love.timer.getTime() < deadline and not predicate() do
+				runtime_server:update(0.01)
+				runtime_client:update(0.01)
+				love.timer.sleep(0.001)
+			end
+			assert(predicate(), label)
+		end
+		pump(function() return runtime_server:pending_approval() ~= nil end,
+			"runtime join request did not reach host")
+		assert(runtime_server:approve_guest())
+		pump(function()
+			return runtime_server.session.state == Session.STATE.PLAYING
+				and runtime_client.client_state == "playing"
+		end, "runtime snapshot handshake did not reach playing")
+		assert(applied_snapshot and applied_snapshot.header.tick == 1,
+			"runtime snapshot was not applied")
+		local runtime_input = InputState.new()
+		InputState.set_button(runtime_input, "a", true)
+		InputState.advance(runtime_input)
+		assert(runtime_client:send_input(runtime_input))
+		assert(runtime_client:send_action({ action_id = "runtime:1", action = "test" }))
+		pump(function()
+			return simulated_input and handled_action == "runtime:1"
+				and applied_state and applied_world
+		end, "runtime input/action/replication loop did not complete")
+		assert(applied_world.cells[1].cell.b == 12,
+			"runtime world delta was corrupted")
+		local original_guest = runtime_server.session.guest
+		assert(runtime_server.session:disconnect("runtime-test", false))
+		assert(runtime_server.transport:disconnect(0, true))
+		runtime_server.peer = nil
+		pump(function()
+			return runtime_server.session.state == Session.STATE.PLAYING
+				and runtime_client.client_state == "playing"
+		end, "runtime reconnect did not resume playing")
+		assert(runtime_server.session.guest == original_guest,
+			"runtime reconnect replaced the guest actor")
+		catchup_allowed = false
+		assert(runtime_server.session:disconnect("runtime-overflow-test", false))
+		assert(runtime_server.transport:disconnect(0, true))
+		runtime_server.peer = nil
+		pump(function()
+			return runtime_server.session.state == Session.STATE.LISTENING
+				and (runtime_client.client_state == "rejected"
+					or runtime_client.client_state == "disconnected")
+		end, "runtime reconnect ignored an invalid catch-up journal")
+		assert(runtime_server.session.guest == nil,
+			"invalid reconnect catch-up retained the guest actor")
+		assert(runtime_server.peer == nil and runtime_server.transport.peer == nil,
+			"rejected reconnect retained the ENet peer")
+		assert(runtime_client:prepare_quit())
+		catchup_allowed = true
+		assert(runtime_client:connect({
+			host = "127.0.0.1",
+			port = runtime_port,
+			game_version = "test-version",
+			content_hash = test_content_hash,
+		}))
+		pump(function() return runtime_server:pending_approval() ~= nil end,
+			"host did not accept a new peer after reconnect rejection")
+		assert(runtime_server:reject_guest("rejected_by_host"))
+		pump(function()
+			return runtime_client.client_state == "rejected"
+				or runtime_client.client_state == "disconnected"
+		end, "runtime host rejection did not reach the client")
+		assert(runtime_server.peer == nil and runtime_server.transport.peer == nil,
+			"host rejection retained the ENet peer")
+	end)
+	if runtime_client then runtime_client:prepare_quit() end
+	if runtime_server then runtime_server:prepare_quit() end
+	assert(runtime_loopback_ok, runtime_loopback_error)
+
+	local responder, browser
+	local discovery_ok, discovery_error = pcall(function()
+		local valid_advertisement = {
+			protocol_version = tostring(Protocol.VERSION),
+			game_version = "test-version",
+			content_hash = test_content_hash,
+			session_id = discovery_session_id,
+			world_id = world_id,
+			gameplay_port = 23872,
+			players = 1,
+			capacity = 2,
+			joinable = true,
+			display_name = "Loopback world",
+		}
+		assert(LANDiscovery.valid_advertisement(valid_advertisement),
+			"valid LAN advertisement was rejected")
+		local fractional_advertisement = {}
+		for key, value in pairs(valid_advertisement) do
+			fractional_advertisement[key] = value
+		end
+		fractional_advertisement.players = 1.5
+		assert(not LANDiscovery.valid_advertisement(fractional_advertisement),
+			"fractional LAN player count was accepted")
+		local invalid_utf8_advertisement = {}
+		for key, value in pairs(valid_advertisement) do
+			invalid_utf8_advertisement[key] = value
+		end
+		invalid_utf8_advertisement.display_name = "bad\255name"
+		assert(not LANDiscovery.valid_advertisement(invalid_utf8_advertisement),
+			"invalid UTF-8 LAN display name was accepted")
+		local repaired_utf8 = Protocol.sanitize_utf8("bad\255name Привет")
+		local utf8_library = require("utf8")
+		assert(utf8_library.len(repaired_utf8)
+			and repaired_utf8:find("name Привет", 1, true),
+			"invalid network text was not repaired for the menu renderer")
+		assert(#Protocol.sanitize_utf8("Привет", 5) <= 5,
+			"UTF-8 network text truncation split its byte budget")
+		responder = assert(LANDiscovery.create_responder(function()
+			return valid_advertisement
+		end, { bind = "127.0.0.1", port = 23921 }))
+		browser = assert(LANDiscovery.create_browser({ port = 23921 }))
+		assert(browser:refresh(nil, 23921))
+		local deadline = love.timer.getTime() + 2
+		local records = {}
+		while love.timer.getTime() < deadline and #records == 0 do
+			responder:update()
+			browser:update()
+			records = browser:list()
+		end
+		assert(#records == 1
+			and records[1].session_id == discovery_session_id
+			and records[1].address == "127.0.0.1",
+			"LAN discovery response was not retained")
+	end)
+	if browser then browser:close() end
+	if responder then responder:close() end
+	assert(discovery_ok, discovery_error)
+
+	local hello = Protocol.hello({
+		game_version = "test-version",
+		content_hash = test_content_hash,
+		capabilities = { "snapshot-v1", "input-v1", "actions-v1" },
+		client_nonce = client_nonce,
+	})
+	local encoded = Protocol.encode("hello", hello)
+	local decoded = assert(Protocol.decode(encoded))
+	assert(decoded.kind == "hello"
+		and decoded.payload.client_nonce == client_nonce,
+		"protocol control message did not round-trip")
+	local incomplete_hello = Protocol.hello({
+		game_version = "test-version",
+		content_hash = test_content_hash,
+		capabilities = { "snapshot-v1" },
+		client_nonce = incomplete_nonce,
+	})
+	local capability_ok, capability_error = Protocol.validate_hello(
+		incomplete_hello,
+		{ game_version = "test-version", content_hash = test_content_hash }
+	)
+	assert(not capability_ok and capability_error == "missing_capability",
+		"handshake accepted a client without required capabilities")
+	local invalid_hash_hello = Protocol.hello({
+		game_version = "test-version",
+		content_hash = "not-a-sha256",
+		capabilities = { "snapshot-v1", "input-v1", "actions-v1" },
+		client_nonce = client_nonce,
+	})
+	local hash_ok, hash_error = Protocol.validate_hello(invalid_hash_hello, {
+		game_version = "test-version",
+		content_hash = test_content_hash,
+	})
+	assert(not hash_ok and hash_error == "invalid_content_hash",
+		"handshake accepted a malformed content hash")
+	assert(not Protocol.decode(string.rep("x", Protocol.MAX_MESSAGE_BYTES + 1)),
+		"oversized protocol message was accepted")
+
+	local registry = ActorRegistry.new()
+	local host = ActorState.new({ actor_id = "host", actor_role = "host" })
+	host.inv = {}
+	host.invsize = 9
+	host.unlock_i = {}
+	host.unlock_c = {}
+	host.visited = {}
+	host.ferted = {}
+	host.stats = { body = { hp = 100, maxhp = 100, pc = 100, d = 0 } }
+	host.state = "idle"
+	host.oldstate = "idle"
+	registry:bind_host(host, {})
+
+	local clock = 0
+	local drops = 0
+	local dropped_items = 0
+	local session_token = string.rep("f", 64)
+	local reconnect_token = string.rep("1", 64)
+	local session = Session.new({
+		registry = registry,
+		clock = function() return clock end,
+		token_factory = function(prefix)
+			return prefix == "session" and session_token or reconnect_token
+		end,
+			reconnect_timeout = 15,
+			input_rate = 1,
+			input_burst = 2,
+		dropper = function(guest)
+			drops = drops + 1
+			dropped_items = #ActorInventory.drain_items(guest)
+			return true
+		end,
+	})
+	local expected = {
+		game_version = "test-version",
+		content_hash = test_content_hash,
+	}
+	assert(session:begin_join(hello, expected, clock))
+	assert(session.state == Session.STATE.AWAITING_APPROVAL)
+	local approved, welcome = session:approve(host, { xt = 10, yt = 20 })
+	assert(approved and welcome.reconnect_token == reconnect_token)
+	assert(session.guest and registry.guest == session.guest,
+		"approved guest was not registered")
+	local world_state = {}
+		assert(ActorInventory.add(session.guest, { i = 31 }, world_state) == 1)
+		assert(session:snapshot_sent(42))
+		assert(not session:ready(41),
+			"host accepted READY for a different snapshot tick")
+		assert(session:ready(42))
+	assert(session:accept_action("action:1"))
+	assert(session:record_action_result("action:1", {
+		action_id = "action:1",
+		ok = true,
+	}))
+	local duplicate_action_ok, duplicate_action_error, cached_action_result =
+		session:accept_action("action:1")
+	assert(not duplicate_action_ok and duplicate_action_error == "duplicate_action"
+		and cached_action_result and cached_action_result.ok,
+		"duplicate action did not return its cached authoritative result")
+	for index = 2, 60 do
+		assert(session:accept_action("action:" .. tostring(index), clock))
+	end
+	local rate_ok, rate_error = session:accept_action("action:61", clock)
+	assert(not rate_ok and rate_error == "action_rate_limited",
+		"guest action burst was not rate limited")
+	local input = InputState.new()
+		InputState.set_button(input, "a", true)
+		InputState.advance(input)
+		assert(session:accept_input(InputState.snapshot(input)))
+		local authoritative_input = registry:runtime(session.guest).input
+		local malformed_input = {
+			sequence = 2,
+			held = { a = true },
+			aim = { world_x = math.huge },
+		}
+		assert(not InputState.apply_snapshot(authoritative_input, malformed_input)
+			and authoritative_input.sequence == 1
+			and InputState.is_down(authoritative_input, "a"),
+			"malformed input partially replaced the last valid state")
+		local duplicate_input_ok, duplicate_input_error = session:accept_input(
+			InputState.snapshot(input)
+		)
+		assert(not duplicate_input_ok and duplicate_input_error == "stale_input",
+			"duplicate input sequence was accepted")
+		InputState.advance(input)
+		assert(session:accept_input(InputState.snapshot(input)))
+		InputState.advance(input)
+		local input_rate_ok, input_rate_error = session:accept_input(InputState.snapshot(input))
+		assert(not input_rate_ok and input_rate_error == "input_rate_limited",
+			"guest input burst was not rate limited")
+
+	clock = 10
+	assert(session:disconnect("wifi", false, clock))
+	assert(session.state == Session.STATE.RECONNECT_GRACE)
+	assert(not session:resume(string.rep("0", 64)))
+	assert(session:resume(reconnect_token))
+	assert(session.state == Session.STATE.PLAYING)
+	assert(session:disconnect("wifi", false, clock))
+	clock = 26
+	assert(session:update(clock))
+	assert(drops == 1 and dropped_items == 1,
+		"guest possessions were not dropped exactly once")
+	assert(session.state == Session.STATE.LISTENING and registry.guest == nil,
+		"expired guest session was not cleaned up")
+	assert(session:update(clock + 100) and drops == 1,
+		"finished session repeated possession drop")
+
+	local timeout_clock = 0
+	local timeout_drops = 0
+	local timeout_registry = ActorRegistry.new()
+	timeout_registry:bind_host(host, {})
+	local timeout_session = Session.new({
+		registry = timeout_registry,
+		clock = function() return timeout_clock end,
+		token_factory = function(prefix)
+			return prefix == "session" and string.rep("2", 64)
+				or string.rep("3", 64)
+		end,
+		snapshot_timeout = 2,
+		catchup_timeout = 2,
+		dropper = function()
+			timeout_drops = timeout_drops + 1
+			return true
+		end,
+	})
+	assert(timeout_session:begin_join(hello, expected, timeout_clock))
+	assert(timeout_session:approve(host, { xt = 10, yt = 20 }))
+	assert(timeout_session:snapshot_sent(7))
+	timeout_clock = 3
+	local timed_out, timeout_reason = timeout_session:update(timeout_clock)
+	assert(timed_out and timeout_reason == "catchup_timeout"
+		and timeout_drops == 1
+		and timeout_session.state == Session.STATE.LISTENING,
+		"snapshot catch-up timeout did not clean the guest")
+
+	local function empty_world()
+		local result = {}
+		for y = 1, 5 do
+			result[y] = {}
+			for x = 1, 5 do result[y][x] = {} end
+		end
+		return result
+	end
+	local possession_state = {}
+	local carried_item = { i = 32 }
+	local inventory_item = { i = 31 }
+	ItemIdentity.ensure(carried_item, possession_state)
+	ItemIdentity.ensure(inventory_item, possession_state)
+	local possession_actor = {
+		xt = 3,
+		yt = 3,
+		inv = { [1] = inventory_item },
+		invselect = 1,
+		iscarry = { b = 12, i = { carried_item } },
+	}
+	local projected_world = empty_world()
+	local existing_ground_item = { i = 33 }
+	ItemIdentity.ensure(existing_ground_item, possession_state)
+	projected_world[3][3] = {
+		b = 0,
+		w = 500,
+		room = 7,
+		i = { existing_ground_item },
+	}
+	local projected, projection_report = GuestPossessions.project(possession_actor, {
+		world = projected_world,
+		fallback_x = 1,
+		fallback_y = 1,
+	})
+	assert(projected and projection_report.items == 1 and projection_report.block,
+		"guest possessions were not projected into save world")
+	assert(possession_actor.inv[1] == inventory_item and possession_actor.iscarry,
+		"save projection mutated live guest possessions")
+	assert(projected_world[3][3].b == 12
+		and projected_world[3][3].w == 500
+		and projected_world[3][3].room == 7
+		and #projected_world[3][3].i == 3,
+		"carried block projection destroyed environmental data or ground items")
+	local dropped_world = empty_world()
+	local dropped, drop_report = GuestPossessions.drop(possession_actor, {
+		world = dropped_world,
+		fallback_x = 1,
+		fallback_y = 1,
+	})
+	assert(dropped and drop_report.items == 1 and drop_report.block,
+		"guest possessions were not dropped into live world")
+	assert(next(possession_actor.inv) == nil and possession_actor.iscarry == nil,
+		"dropped possessions remained attached to guest actor")
+
+	local snapshot_session_id = string.rep("4", 64)
+	local snapshot = NetworkSnapshot.capture({
+		world = { [1] = { [1] = { b = 12 } } },
+		game = { world_id = world_id, time = 123, pause = true },
+		host_actor = host,
+		guest_actor = GhostActor.new(host, { session_id = snapshot_session_id }),
+		tips = { a = true },
+		disp = {},
+		mobs = {},
+		tick = 77,
+		session_id = snapshot_session_id,
+	})
+	assert(snapshot.game.pause == nil, "network snapshot copied local pause state")
+	local stored, snapshot_meta = NetworkSnapshot.serialize(snapshot)
+	local snapshot_chunks, chunk_meta = NetworkSnapshot.chunks(stored, snapshot_meta, 1024)
+	local assembler = assert(NetworkSnapshot.new_assembler(chunk_meta))
+	for index = #snapshot_chunks, 1, -1 do
+		assert(assembler:add(snapshot_chunks[index]))
+	end
+	local restored_snapshot = assert(assembler:finish())
+	assert(restored_snapshot.header.tick == 77
+		and restored_snapshot.world[1][1].b == 12
+		and restored_snapshot.guest_actor.actor_role == "guest",
+		"fragmented network snapshot did not round-trip")
+	local malformed_meta = {}
+	for key, value in pairs(chunk_meta) do malformed_meta[key] = value end
+	malformed_meta.stored_size = tostring(malformed_meta.stored_size)
+	assert(not NetworkSnapshot.new_assembler(malformed_meta),
+		"snapshot assembler accepted string metadata sizes")
+	local wrong_tick_meta = {}
+	for key, value in pairs(chunk_meta) do wrong_tick_meta[key] = value end
+	wrong_tick_meta.tick = wrong_tick_meta.tick + 1
+	local wrong_tick_assembler = assert(NetworkSnapshot.new_assembler(wrong_tick_meta))
+	for _, packet in ipairs(snapshot_chunks) do assert(wrong_tick_assembler:add(packet)) end
+	local mismatched_snapshot, mismatch_error = wrong_tick_assembler:finish()
+	assert(not mismatched_snapshot and mismatch_error == "snapshot metadata mismatch",
+		"snapshot body was not matched to its metadata")
+	local malformed_chunk_assembler = assert(NetworkSnapshot.new_assembler(chunk_meta))
+	local chunk_ok, chunk_error = malformed_chunk_assembler:add(
+		snapshot_chunks[1] .. "x"
+	)
+	assert(not chunk_ok and chunk_error == "invalid snapshot chunk size",
+		"snapshot assembler accepted a malformed chunk size")
+
+	local replicated_actor = NetworkReplication.capture_actor(restored_snapshot.guest_actor)
+	local state_packet = NetworkReplication.encode_state({
+		tick = 78,
+		guest_actor = replicated_actor,
+		mobs = { [1] = { id = 4, truex = 32, truey = 64 } },
+	})
+	local restored_state, restored_kind = NetworkReplication.decode(state_packet)
+	assert(restored_kind == "state" and restored_state.tick == 78
+		and restored_state.guest_actor.actor_role == "guest"
+		and restored_state.mobs[1].truey == 64,
+		"authoritative state packet did not round-trip")
+	local InterpolationBuffer = require("src.network.interpolation_buffer")
+	local interpolation = InterpolationBuffer.new({ delay = 0.11 })
+	assert(interpolation:push(0, {
+		actors = { host = { x = 0, y = 20 } },
+	}, 10))
+	assert(interpolation:push(0.1, {
+		actors = { host = { x = 10, y = 30 } },
+	}, 10.1))
+	local interpolation_frame = assert(interpolation:frame(10.15))
+	local interpolated_x, interpolated_y = InterpolationBuffer.position(
+		interpolation_frame, "actors", "host"
+	)
+	assert(interpolated_x > 3.9 and interpolated_x < 4.1
+		and interpolated_y > 23.9 and interpolated_y < 24.1,
+		"remote render state did not interpolate between buffered snapshots")
+	assert(interpolation:seed_latest("projectiles", 7, 4, 5)
+		and interpolation.samples[#interpolation.samples]
+			.positions.projectiles[7].x == 4,
+		"a new projectile could not be seeded at its owner's position")
+	local journal = WorldJournal.new()
+	local delta_world = { [2] = { [3] = { b = 12, i = { { i = 31 } } } } }
+	assert(journal:record(3, 2) and journal:record(3, 2))
+	local delta = assert(journal:drain(delta_world, 64, 79))
+	assert(#delta.cells == 1 and delta.cells[1].cell.b == 12,
+		"world journal did not coalesce a changed cell")
+	local world_packet = NetworkReplication.encode_world(delta)
+	local restored_delta, delta_kind = NetworkReplication.decode(world_packet)
+	assert(delta_kind == "world" and restored_delta.cells[1].cell.i[1].i == 31,
+		"world delta packet did not round-trip")
+	local integrity_closed = false
+	local integrity_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		world_delta_applier = function()
+			return false, "invalid test delta"
+		end,
+	})
+	integrity_runtime.role = "client"
+	integrity_runtime.client_state = "playing"
+	integrity_runtime.peer = {}
+	integrity_runtime.transport = {
+		send = function() return true end,
+		flush = function() end,
+		disconnect = function()
+			integrity_closed = true
+			return true
+		end,
+	}
+	integrity_runtime:_receive({
+		channelID = Protocol.CHANNEL.WORLD,
+		data = world_packet,
+	})
+	assert(integrity_runtime.client_state == "failed"
+		and integrity_runtime.last_error == "invalid test delta"
+		and integrity_closed,
+		"client ignored an explicitly rejected authoritative delta")
+	local wrong_channel_closed = false
+	local wrong_channel_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		world_delta_applier = function() return true end,
+	})
+	wrong_channel_runtime.role = "client"
+	wrong_channel_runtime.client_state = "playing"
+	wrong_channel_runtime.peer = {}
+	wrong_channel_runtime.transport = {
+		send = function() return true end,
+		flush = function() end,
+		disconnect = function()
+			wrong_channel_closed = true
+			return true
+		end,
+	}
+	wrong_channel_runtime:_receive({
+		channelID = Protocol.CHANNEL.STATE,
+		data = world_packet,
+	})
+	assert(wrong_channel_runtime.client_state == "failed"
+		and wrong_channel_runtime.last_error == "replication received on invalid channel"
+		and wrong_channel_closed,
+		"client accepted replication on the wrong ENet channel")
+	local retry_sends = 0
+	local retry_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	retry_runtime.role = "client"
+	retry_runtime.client_state = "playing"
+	retry_runtime.peer = {}
+	retry_runtime.transport = {
+		send = function(_, _, kind)
+			if kind == "action" then retry_sends = retry_sends + 1 end
+			return true
+		end,
+		flush = function() end,
+		disconnect = function() return true end,
+	}
+	assert(retry_runtime:send_action({ action_id = 77, action = "retry-test" }))
+	assert(retry_sends == 1 and #retry_runtime.pending_action_order == 1,
+		"client did not retain an unconfirmed action")
+	retry_runtime.client_state = "resuming"
+	retry_runtime:_client_message({
+		kind = "welcome",
+		payload = {
+			resumed = true,
+			session_id = string.rep("6", 64),
+			reconnect_token = string.rep("7", 64),
+			actor_id = "guest",
+		},
+	})
+	assert(retry_runtime.client_state == "playing" and retry_sends == 2,
+		"client did not retry an unconfirmed action after reconnect")
+	retry_runtime:_client_message({
+		kind = "action_result",
+		payload = { action_id = 77, ok = true },
+	})
+	assert(#retry_runtime.pending_action_order == 0,
+		"client retained an acknowledged action")
+	local bounded_journal = WorldJournal.new({ max_pending = 1 })
+	assert(bounded_journal:record(1, 1))
+	local overflow_ok, overflow_error = bounded_journal:record(2, 1)
+	local catchup_ok, catchup_error = bounded_journal:ready()
+	assert(not overflow_ok and overflow_error == "world journal overflow"
+		and not catchup_ok and catchup_error == "snapshot_catchup_overflow",
+		"world catch-up overflow was not made explicit")
+	bounded_journal:clear()
+	assert(bounded_journal:ready(), "cleared catch-up journal stayed invalid")
+
+	finish(0,
+		"mode=network enet=true loopback=true socket=true discovery=true hash=true "
+			.. "protocol=true handshake=true "
+			.. "actions=true reconnect=true drop_once=true save_projection=true snapshot=true "
+			.. "replication=true journal=true runtime_loopback=true runtime_reconnect=true "
+			.. "runtime_reconnect_overflow=true timeouts=true rejection_cleanup=true")
+end
+
 local function validate_loaded_game(slot)
     assert(game_load(slot), "game_load returned false")
     assert(type(world) == "table" and next(world), "world is empty")
@@ -23,6 +1194,13 @@ local function validate_loaded_game(slot)
     assert(type(game) == "table", "game state is missing")
     assert(type(vi) == "table", "camera state is missing")
 	assert(type(mobs) == "table", "mob state is missing")
+	local item_uids = {}
+	for _, instance in pairs(pl.inv) do
+		assert(type(instance.uid) == "string",
+			"loaded inventory item has no stable uid")
+		assert(not item_uids[instance.uid], "loaded inventory contains duplicate item uid")
+		item_uids[instance.uid] = true
+	end
 
 	-- The normal draw callback initializes animation-frame globals before it
 	-- delegates to draw_gui; this direct HUD smoke test must do the same.
@@ -65,6 +1243,510 @@ local function validate_save_fixture(slot)
     end
 
     finish(0, result)
+end
+
+local function validate_multiplayer_gameplay()
+	local original_identity = love.filesystem.getIdentity()
+	local test_identity = "sarcophagus-multiplayer-gameplay-smoke"
+	love.filesystem.setIdentity(test_identity)
+	game_delete_save(9)
+	local ok, result = pcall(function()
+		local fixture, fixture_error = love.filesystem.read("tests/fixtures/9.sav")
+		assert(fixture, "cannot read multiplayer fixture: " .. tostring(fixture_error))
+		assert(love.filesystem.write("9.sav", fixture), "cannot stage multiplayer fixture")
+		assert(game_load(9), "cannot load multiplayer fixture")
+		actors:bind_host(pl, vi)
+		local gameplay_session_id = string.rep("5", 64)
+		local spawn = multiplayer_guest_spawn()
+		local guest = GhostActor.new(pl, {
+			actor_id = "guest",
+			session_id = gameplay_session_id,
+			x = spawn.x, y = spawn.y,
+			tx = spawn.tx, ty = spawn.ty,
+			xt = spawn.xt, yt = spawn.yt,
+			truex = spawn.truex, truey = spawn.truey,
+		})
+		actors:bind_guest(guest)
+		local runtime = assert(actors:runtime(guest))
+
+		multiplayer_reset_network_events(true)
+		local previous_role, previous_session = multiplayer.role, multiplayer.session
+		local previous_active_actor = ACTIVE_ACTOR_ID
+		multiplayer.role = "host"
+		multiplayer.session = { state = MultiplayerSession.STATE.PLAYING }
+		ACTIVE_ACTOR_ID = "guest"
+		-- gravel.ogg is stereo. Network presentation must gracefully fall back
+		-- to non-spatial playback because OpenAL only positions mono sources.
+		sound_add("smoke_network_sound", 5)
+		ACTIVE_ACTOR_ID = previous_active_actor
+		local sound_event = multiplayer_next_network_event()
+		multiplayer.role, multiplayer.session = previous_role, previous_session
+		assert(sound_event and sound_event.kind == "sound"
+			and sound_event.actor_id == "guest"
+			and sound_event.x == guest.xt and sound_event.y == guest.yt,
+			"guest sound was not captured as a spatial network event")
+		actors:set_local(guest)
+		assert(multiplayer_apply_network_event(sound_event),
+			"valid spatial sound event was rejected")
+		assert(allsounds["net:guest:smoke_network_sound"],
+			"spatial sound event was not presented on the client")
+		sound_kill("guest:smoke_network_sound")
+		sound_kill("net:guest:smoke_network_sound")
+		local unavailable_event = StateCopy.copy(sound_event)
+		unavailable_event.event_id = sound_event.event_id + 1
+		unavailable_event.name = "smoke_unavailable_sound"
+		local original_sound_add = sound_add
+		sound_add = function() error("simulated audio device failure") end
+		local audio_ok, audio_status = multiplayer_apply_network_event(
+			unavailable_event
+		)
+		sound_add = original_sound_add
+		assert(audio_ok and audio_status == "audio_unavailable",
+			"audio presentation failure broke authoritative synchronization")
+		actors:set_local(pl)
+		multiplayer_reset_network_events(true)
+
+		InputState.set_button(runtime.input, "d", true)
+		runtime.input.aim = {
+			world_x = guest.truex + 64,
+			world_y = guest.truey,
+			tile_x = guest.xt + 2,
+			tile_y = guest.yt,
+		}
+		local host_truex, host_truey = pl.truex, pl.truey
+		local guest_start_x, guest_start_y = guest.truex, guest.truey
+		for _ = 1, 45 do multiplayer_simulate_guest(guest, runtime.input, 1 / 30) end
+		assert(pl.truex == host_truex and pl.truey == host_truey,
+			"guest simulation moved the host actor")
+		assert(guest.truex ~= guest_start_x or guest.truey ~= guest_start_y,
+			"guest actor did not move under remote input")
+		assert(guest.animation and guest.animation.frame,
+			"guest animation was not simulated")
+		local food_before = guest.stats.food.hp
+		guest.network_recovery_time = game.time - 64
+		InputState.set_button(runtime.input, "d", false)
+		multiplayer_simulate_guest(guest, runtime.input, 1 / 30)
+		assert(guest.stats.food.hp < food_before,
+			"guest hunger did not follow shared world time")
+
+		local host_body_before = pl.stats.body.hp
+		local guest_body_before = guest.stats.body.hp
+		guest.stats.body.hp = 11
+		guest.stats.body.pc = 11
+		local damage_sound_add = sound_add
+		local heartbeat_calls = 0
+		local damage_text_count = #sct
+		sound_add = function(name)
+			if name == "heartbeat" then heartbeat_calls = heartbeat_calls + 1 end
+		end
+		ActorContext.run(actors, guest, {
+			input = runtime.input,
+			dt = 0,
+			camera = vi,
+		}, function()
+			assert(not actor_uses_local_presentation(pl),
+				"remote guest unexpectedly owned the host presentation")
+			player_hit(2)
+		end)
+		assert(pl.stats.body.hp == host_body_before
+			and guest.stats.body.hp == 9,
+			"guest damage changed the host body stat")
+		assert(heartbeat_calls == 0,
+			"guest critical health enabled the host heartbeat")
+		local damage_text = sct[#sct]
+		assert(#sct == damage_text_count + 1 and damage_text.truex
+			and math.abs(damage_text.truex - guest.truex) <= 8
+			and damage_text.truey == guest.truey - 32,
+			"guest damage text was projected through the host camera")
+		table.remove(sct)
+		actors:set_local(guest)
+		assert(actor_health_presentation_update(guest)
+			and heartbeat_calls == 1,
+			"guest critical health was not presented on its own client")
+		guest.stats.body.hp = guest_body_before
+		guest.stats.body.pc = math.floor(
+			guest_body_before / guest.stats.body.maxhp * 100
+		)
+		actor_health_presentation_update(guest)
+		actors:set_local(pl)
+		actor_health_presentation_update(pl)
+		sound_add = damage_sound_add
+
+		local host_fishing = { owner = "host" }
+		fishing = host_fishing
+		runtime.local_globals = runtime.local_globals or {}
+		runtime.local_globals.fishing = { owner = "guest" }
+		ActorContext.run(actors, guest, {
+			input = runtime.input,
+			dt = 0,
+			camera = vi,
+		}, function()
+			assert(fishing.owner == "guest", "guest fishing state was not activated")
+			fishing.changed = true
+		end)
+		assert(fishing == host_fishing and runtime.local_globals.fishing.changed,
+			"guest fishing state leaked into the host runtime")
+		runtime.local_globals.fishing = nil
+		fishing = nil
+
+		local pickup = item_make(31)
+		assert(inv_ground_add(guest.xt, guest.yt, pickup, { groundlast = true }))
+		local stale_ok = multiplayer_guest_action(guest, {
+			action = "pickup",
+			item_uid = "item:stale",
+		})
+		assert(stale_ok == false, "server accepted a stale ground item uid")
+		assert(multiplayer_guest_action(guest, {
+			action = "pickup",
+			item_uid = pickup.uid,
+		}), "server rejected the authoritative ground item uid")
+		local picked, picked_slot
+		for slot, instance in pairs(guest.inv) do
+			if instance.uid == pickup.uid then picked, picked_slot = true, slot end
+		end
+		assert(picked, "validated guest pickup did not reach guest inventory")
+		guest.invselect = picked_slot == 1 and 2 or 1
+		assert(multiplayer_guest_action(guest, {
+			action = "select",
+			slot = picked_slot,
+			item_uid = "item:stale",
+		}) == false, "server accepted a stale inventory selection uid")
+		assert(multiplayer_guest_action(guest, {
+			action = "select",
+			slot = picked_slot,
+			item_uid = pickup.uid,
+		}), "server rejected an authoritative inventory selection")
+		assert(guest.invselect == picked_slot,
+			"validated inventory selection did not reach the guest actor")
+
+		-- Eating is authoritative for the guest actor, but all of its HUD text
+		-- must be delivered to the guest client instead of redrawing the host's
+		-- shared text canvas.
+		local food_slot
+		for slot = 1, guest.invsize do
+			if guest.inv[slot] == nil then food_slot = slot; break end
+		end
+		assert(food_slot, "guest inventory has no slot for the eating regression")
+		local guest_food = assert(item_make(201))
+		guest.inv[food_slot] = guest_food
+		guest.invselect = food_slot
+		local guest_food_max = guest.stats.food.maxhp
+		guest.stats.food.hp = math.max(0, guest_food_max - 40)
+		guest.stats.food.pc = math.floor(
+			guest.stats.food.hp / guest_food_max * 100
+		)
+		local guest_food_before = guest.stats.food.hp
+		local host_food_before = pl.stats.food.hp
+		local host_food_pc_before = pl.stats.food.pc
+		local host_dishes_before = pl.dishes and pl.dishes[guest_food.i]
+		local host_inventory_before = {}
+		for slot, instance in pairs(pl.inv) do
+			host_inventory_before[slot] = instance
+		end
+		local host_log_before = #pl.log
+		local guest_log_before = #guest.log
+
+		multiplayer_reset_network_events(true)
+		previous_role, previous_session = multiplayer.role, multiplayer.session
+		multiplayer.role = "host"
+		multiplayer.session = { state = MultiplayerSession.STATE.PLAYING }
+		local smoke_keypressed = love.old_keypressed
+		love.old_keypressed = gameplay_keypressed
+		local ate, eat_error = multiplayer_guest_action(guest, {
+			action = "key",
+			key = "u",
+			scancode = "u",
+			selected_item_uid = guest_food.uid,
+		})
+		love.old_keypressed = smoke_keypressed
+		multiplayer.role, multiplayer.session = previous_role, previous_session
+		assert(ate, "guest could not eat authoritative food: " .. tostring(eat_error))
+		assert(guest.stats.food.hp > guest_food_before,
+			("guest eating did not recover guest hunger (%s -> %s)")
+				:format(tostring(guest_food_before), tostring(guest.stats.food.hp)))
+		for _, instance in pairs(guest.inv) do
+			assert(instance.uid ~= guest_food.uid,
+				"guest food was not removed after eating")
+		end
+		assert(pl.stats.food.hp == host_food_before
+			and pl.stats.food.pc == host_food_pc_before
+			and (pl.dishes and pl.dishes[guest_food.i]) == host_dishes_before,
+			"guest eating changed host hunger or food history")
+		for slot, instance in pairs(host_inventory_before) do
+			assert(pl.inv[slot] == instance,
+				"guest eating changed a host inventory slot")
+		end
+		for slot, instance in pairs(pl.inv) do
+			assert(host_inventory_before[slot] == instance,
+				"guest eating added an item to the host inventory")
+		end
+		assert(#pl.log == host_log_before and #guest.log == guest_log_before,
+			"guest eating wrote its message into a host-side HUD log")
+
+		local eating_events = {}
+		local eating_sound, eating_text = false, false
+		while true do
+			local event = multiplayer_next_network_event()
+			if not event then break end
+			eating_events[#eating_events + 1] = event
+			if event.kind == "sound" and event.name == "eating"
+				and event.actor_id == "guest"
+				and event.x == guest.xt and event.y == guest.yt then
+				eating_sound = true
+			elseif event.kind == "text" and event.actor_id == "guest" then
+				eating_text = true
+			end
+		end
+		assert(eating_sound,
+			"guest eating was not presented as a positional guest sound")
+		assert(eating_text, "guest eating message was not routed to the guest")
+
+		actors:set_local(guest)
+		local host_actor = pl
+		pl = guest -- model the client after multiplayer_apply_snapshot()
+		for _, event in ipairs(eating_events) do
+			assert(multiplayer_apply_network_event(event),
+				"guest eating presentation event was rejected")
+		end
+		pl = host_actor
+		actors:set_local(host_actor)
+		assert(#guest.log > guest_log_before and #pl.log == host_log_before,
+			"guest eating text did not appear exclusively in the guest log")
+		sound_kill("guest:eating")
+		sound_kill("net:guest:eating")
+		multiplayer_reset_network_events(true)
+
+		local client_pickup = item_make(31)
+		assert(inv_ground_add(guest.xt, guest.yt, client_pickup))
+		local original_network_client = game.network_client
+		local original_send_key_action = multiplayer_send_key_action
+		game.network_client = true
+		multiplayer_send_key_action = function() return true end
+		love.old_keypressed("q", "q")
+		multiplayer_send_key_action = original_send_key_action
+		game.network_client = original_network_client
+		local ground_cell = world[guest.yt][guest.xt]
+		local client_item_still_grounded = false
+		local client_item_in_inventory = false
+		for _, instance in ipairs(ground_cell.i or {}) do
+			client_item_still_grounded = client_item_still_grounded
+				or instance.uid == client_pickup.uid
+		end
+		for _, instance in pairs(guest.inv) do
+			client_item_in_inventory = client_item_in_inventory
+				or instance.uid == client_pickup.uid
+		end
+		assert(client_item_still_grounded and not client_item_in_inventory,
+			"network client applied an authoritative pickup locally")
+
+		local invalid_replication = multiplayer_replication_state({ guest = guest })
+		invalid_replication.guest_actor.truex = math.huge
+		local previous_server_tick = game.network_server_tick
+		local previous_game_time = game.time
+		local replication_ok, replication_error = multiplayer_apply_replication(
+			invalid_replication
+		)
+		assert(not replication_ok
+			and replication_error == "invalid replicated state shape"
+			and game.network_server_tick == previous_server_tick
+			and game.time == previous_game_time,
+			"malformed replication mutated authoritative client state")
+
+		local previous_sequence = tonumber(game.network_world_sequence) or 0
+		local original_first_cell = world[1][1]
+		local applied, apply_error = multiplayer_apply_world_delta({
+			sequence = previous_sequence + 1,
+			tick = tonumber(game.network_tick) or 0,
+			cells = {
+				{ x = 1, y = 1, cell = { b = 999 } },
+				{ x = cf.wmax + 1, y = 1, cell = { b = 999 } },
+			},
+		})
+		assert(not applied and apply_error == "invalid world cell delta"
+			and world[1][1] == original_first_cell
+			and (tonumber(game.network_world_sequence) or 0) == previous_sequence,
+			"malformed world delta was applied partially")
+		assert(multiplayer_mob_target({
+			truex = guest.truex,
+			truey = guest.truey,
+		}) == guest, "mob AI did not select the nearest guest actor")
+		local projectile_collider = {
+			x = guest.truex - 2,
+			y = guest.truey - 2,
+			w = guest.truex + 2,
+			h = guest.truey + 2,
+		}
+		local _, projectile_target = multiplayer_projectile_player_collision(
+			projectile_collider,
+			{ owner_id = "mob:test" }
+		)
+		assert(projectile_target == guest,
+			"hostile projectile did not collide with the guest")
+		assert(multiplayer_projectile_player_collision(
+			projectile_collider,
+			{ owner_id = guest.actor_id }
+		) == nil, "friendly projectile could hit a player")
+
+		local snapshot = NetworkSnapshot.capture(multiplayer_snapshot_state({
+			guest = guest,
+			session_id = gameplay_session_id,
+		}))
+		local stored = NetworkSnapshot.serialize(snapshot)
+		assert(type(stored) == "string" and #stored > 0,
+			"real-world multiplayer snapshot was not serializable")
+		local replication_started = love.timer.getTime()
+		local replication_state = multiplayer_replication_state({ guest = guest })
+		local state_packet = NetworkReplication.encode_state(replication_state)
+		local replication_ms = (love.timer.getTime() - replication_started) * 1000
+		local progress_state = multiplayer_replication_state({ guest = guest }, true)
+		local progress_packet = NetworkReplication.encode_state(progress_state)
+		local actor_packet = NetworkReplication.encode_state({
+			host_actor = replication_state.host_actor,
+			guest_actor = replication_state.guest_actor,
+		})
+		local entity_packet = NetworkReplication.encode_state({
+			mobs = replication_state.mobs,
+			projectiles = replication_state.projectiles,
+			world_animation = replication_state.world_animation,
+		})
+		local presentation_packet = NetworkReplication.encode_state({
+			guest_fishing = replication_state.guest_fishing,
+			tips = replication_state.tips,
+			disp = replication_state.disp,
+			shared_game = replication_state.shared_game,
+		})
+		assert(#state_packet < NetworkReplication.MAX_STORED_BYTES,
+			"real-world replication state exceeded its packet budget")
+		assert(#state_packet < 16 * 1024,
+			"frequent actor state regressed to a full progress payload")
+		assert(#progress_packet < NetworkReplication.MAX_STORED_BYTES,
+			"progress replication state exceeded its packet budget")
+		local decoded_state, decoded_kind = NetworkReplication.decode(state_packet)
+		assert(decoded_state and decoded_kind == "state"
+			and decoded_state.actor_schema == 2,
+			"fast LZ4 replication state did not round-trip")
+
+		local marker = "multiplayer_smoke_progress"
+		progress_state.shared_progress.visited[marker] = 7
+		progress_state.host_progress.quest = 3
+		progress_state.guest_progress.quest = 4
+		assert(multiplayer_apply_replication(progress_state),
+			"progress replication state was rejected")
+		assert(actors.host.visited == actors.guest.visited
+			and actors.host.visited[marker] == 7
+			and actors.host.quest == 3 and actors.guest.quest == 4,
+			"shared or personal actor progress was not applied correctly")
+
+		local saved_x, saved_y, saved_state = guest.truex, guest.truey, guest.state
+		actors:set_local(guest)
+		guest.state = "idle"
+		guest.network_target_truex = guest.truex + 5
+		guest.network_target_truey = guest.truey + 3.5
+		assert(multiplayer_reconcile_local_actor(1 / 60)
+			and guest.truex == saved_x
+			and guest.truey == saved_y + 3.5
+			and guest.network_target_truex == nil
+			and guest.network_target_truey == nil,
+			"local reconciliation dragged or vertically floated the ghost")
+		guest.truex, guest.truey, guest.state = saved_x, saved_y, saved_state
+		coord_true2screen(guest)
+		actors:set_local(pl)
+		local draw_x, draw_y = ActorRenderer.position(guest, {
+			camera = vi,
+			local_actor = pl,
+			tile_width = cf.w,
+			tile_height = cf.h,
+		})
+		assert(type(draw_x) == "number" and type(draw_y) == "number",
+			"remote guest could not be projected into the host camera")
+	assert(ghost_shader, "translucent white ghost shader did not compile")
+		assert(multiplayer_merge_time(100, 125, 40) == 140
+			and multiplayer_merge_time(100, 160, 40) == 160,
+			"shared time summed actor deltas instead of taking the maximum")
+		local decoded_snapshot = assert(NetworkSnapshot.deserialize(stored))
+		assert(multiplayer_apply_snapshot(decoded_snapshot)
+			and game.network_client == true
+			and pl.actor_id == "guest"
+			and actors.local_actor == pl,
+			"real multiplayer snapshot was not applied as a guest world")
+		assert(game.textinput == "" and game.textinputold == ""
+			and game.textinputinfo == "" and game.inputing == nil
+			and game.craft == false and game.escmenu == nil,
+			"network snapshot discarded local client UI defaults")
+		local aligned_cell_before = world[1][1]
+		local aligned_sample_time = (tonumber(game.network_server_time) or 0) + 0.2
+		local aligned_ok, aligned_status = multiplayer_apply_world_delta({
+			sequence = 1,
+			tick = tonumber(game.network_tick) or 0,
+			sample_time = aligned_sample_time,
+			cells = { { x = 1, y = 1, cell = { b = 77 } } },
+		})
+		assert(aligned_ok and aligned_status == "buffered"
+			and world[1][1] == aligned_cell_before,
+			"reliable world change appeared ahead of the render timeline")
+		assert(multiplayer_flush_world_deltas(aligned_sample_time - 0.01)
+			and world[1][1] == aligned_cell_before,
+			"world change ignored its interpolation timestamp")
+		assert(multiplayer_flush_world_deltas(aligned_sample_time)
+			and world[1][1].b == 77,
+			"world change was not applied on its render timestamp")
+		local aligned_log_before = #pl.log
+		local aligned_event_time = aligned_sample_time + 0.1
+		local event_ok, event_status = multiplayer_apply_network_event({
+			kind = "text",
+			event_id = 1,
+			tick = tonumber(game.network_tick) or 0,
+			sample_time = aligned_event_time,
+			actor_id = "guest",
+			text = "timeline smoke",
+			temporary = false,
+		})
+		assert(event_ok and event_status == "buffered" and #pl.log == aligned_log_before,
+			"presentation event appeared ahead of the render timeline")
+		assert(multiplayer_flush_network_events(aligned_event_time)
+			and #pl.log == aligned_log_before + 1,
+			"presentation event was not shown on its render timestamp")
+		local gameplay_key_handler = love.keypressed
+		esc_menu()
+		assert(game.escmenu == 1 and #msg.escmenu_guest == 2
+			and escmenu[1] and escmenu[2] and escmenu[4] == nil,
+			"guest Escape menu exposed host save or display settings")
+		esc_menu()
+		assert(game.escmenu == nil and love.keypressed == gameplay_key_handler,
+			"guest Escape menu did not restore gameplay input")
+		local original_esc_menu = esc_menu
+		local escape_opened = false
+		esc_menu = function()
+			escape_opened = true
+			game.inputing = true
+		end
+		pl.isdead = nil
+		local escape_ok, escape_error = pcall(
+			gameplay_keypressed,
+			"escape",
+			"escape"
+		)
+		esc_menu = original_esc_menu
+		assert(escape_ok and escape_opened and game.inputing == true,
+			("client Escape fell through into text input: %s (opened=%s input=%s)")
+				:format(tostring(escape_error), tostring(escape_opened),
+					tostring(game.inputing)))
+		game.inputing = nil
+		return ("mode=multiplayer-gameplay moved=%.1f snapshot=%d state=%d progress=%d actors=%d entities=%d presentation=%d encode_ms=%.2f white_ghost=true sound_event=true stereo_audio=true actor_text=true eating_isolated=true damage_isolated=true ui_defaults=true reconciliation=true"):format(
+			math.dist(guest_start_x, guest_start_y, guest.truex, guest.truey),
+			#stored,
+			#state_packet,
+			#progress_packet,
+			#actor_packet,
+			#entity_packet,
+			#presentation_packet,
+			replication_ms
+		)
+	end)
+	game_delete_save(9)
+	love.filesystem.setIdentity(original_identity)
+	if not ok then error(result) end
+	finish(0, result)
 end
 
 local function validate_persistence()
@@ -1725,14 +3407,31 @@ local function validate_smooth2x_filter()
 	love.graphics.setColor(red, green, blue, alpha)
 end
 
+local function wait_for_window_mode(predicate, timeout)
+	local deadline = love.timer.getTime() + (timeout or 2)
+	repeat
+		love.event.pump()
+		if predicate() then return true end
+		love.timer.sleep(0.01)
+	until love.timer.getTime() >= deadline
+	return predicate()
+end
+
 local function validate_display_modes()
 	local original_width, original_height, original_flags = love.window.getMode()
 	local original_fullscreen_setting = game.fullscreen
 	local original_double_setting = game.gr2x
+	local background = os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
 
 	local ok, result = pcall(function()
 		game.fullscreen = false
-		screen_full()
+		local windowed_ok, windowed_error = screen_full()
+		assert(windowed_ok ~= false,
+			"windowed mode request failed: " .. tostring(windowed_error))
+		assert(wait_for_window_mode(function()
+			local _, _, flags = love.window.getMode()
+			return not flags.fullscreen
+		end), "windowed mode transition timed out")
 		local width, height, flags = love.window.getMode()
 		assert(not flags.fullscreen, "windowed mode did not activate")
 		assert(width > 0 and height > 0, "windowed mode has invalid dimensions")
@@ -1757,15 +3456,44 @@ local function validate_display_modes()
 			and screen.y == math.ceil(normal_y / 2),
 			"double-size mode does not halve the logical viewport")
 
-		game.fullscreen = true
-		screen_full()
-		local fullscreen_width, fullscreen_height, fullscreen_flags = love.window.getMode()
-		assert(fullscreen_flags.fullscreen, "fullscreen mode did not activate")
-		assert(fullscreen_width > 0 and fullscreen_height > 0,
-			"fullscreen mode has invalid dimensions")
+		local fullscreen_width, fullscreen_height = width, height
+		local fullscreen_status = "skipped-background"
+		if not background then
+			game.fullscreen = true
+			local fullscreen_ok, fullscreen_error = screen_full()
+			fullscreen_status = "skipped-unfocused"
+			if fullscreen_ok == false then
+				assert(not love.window.hasFocus(),
+					"fullscreen mode request failed: " .. tostring(fullscreen_error)
+						.. " (focus=true)")
+			else
+				assert(wait_for_window_mode(function()
+					local _, _, current_flags = love.window.getMode()
+					return current_flags.fullscreen
+				end), "fullscreen mode transition timed out (focus="
+					.. tostring(love.window.hasFocus()) .. ")")
+				local fullscreen_flags
+				fullscreen_width, fullscreen_height, fullscreen_flags =
+					love.window.getMode()
+				assert(fullscreen_flags.fullscreen,
+					"fullscreen mode did not activate")
+				assert(fullscreen_width > 0 and fullscreen_height > 0,
+					"fullscreen mode has invalid dimensions")
+				fullscreen_status = ("%dx%d"):format(
+					fullscreen_width,
+					fullscreen_height
+				)
+			end
+		end
 
 		game.fullscreen = false
-		screen_full()
+		windowed_ok, windowed_error = screen_full()
+		assert(windowed_ok ~= false,
+			"windowed restore request failed: " .. tostring(windowed_error))
+		assert(wait_for_window_mode(function()
+			local _, _, current_flags = love.window.getMode()
+			return not current_flags.fullscreen
+		end), "windowed restore transition timed out")
 		local _, _, restored_window_flags = love.window.getMode()
 		assert(not restored_window_flags.fullscreen,
 			"windowed mode did not return after fullscreen")
@@ -1777,11 +3505,10 @@ local function validate_display_modes()
 			"world render targets were not resized with the Retina window")
 		validate_smooth2x_filter()
 
-		return ("mode=display-modes window=%dx%d fullscreen=%dx%d double=true"):format(
+		return ("mode=display-modes window=%dx%d fullscreen=%s double=true"):format(
 			width,
 			height,
-			fullscreen_width,
-			fullscreen_height
+			fullscreen_status
 		)
 	end)
 
@@ -1790,6 +3517,7 @@ local function validate_display_modes()
 	game.fullscreen = original_flags.fullscreen or false
 	game.gr2x = original_double_setting
 	love.window.setMode(original_width, original_height, original_flags)
+	if background and love.window.minimize then pcall(love.window.minimize) end
 	screen_res()
 	game.fullscreen = original_fullscreen_setting
 
@@ -1797,6 +3525,20 @@ local function validate_display_modes()
 		error(result)
 	end
 	finish(0, result)
+end
+
+local function begin_display_modes_test()
+	local frames = 0
+	love.draw = function() end
+	love.update = function()
+		frames = frames + 1
+		if frames < 2 then return end
+		love.update = function() end
+		local ok, err = pcall(validate_display_modes)
+		if not ok then
+			finish(1, "mode=display-modes " .. tostring(err))
+		end
+	end
 end
 
 local function begin_map_generation_test()
@@ -2007,7 +3749,36 @@ function smoke.install(specification)
 	-- partially initialized gameplay callbacks while a test is quitting.
 	ignore_real_input()
 
-    love.load = function(...)
+	love.load = function(...)
+		if os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
+			and love.window.minimize then
+			pcall(love.window.minimize)
+		end
+		if mode == "network-process-host" or mode == "network-process-client" then
+			local role = mode:match("network%-process%-(.+)")
+			local ok, err = pcall(install_process_network_test, role, value)
+			if not ok then
+				finish(1, "mode=" .. mode .. " " .. tostring(err))
+			end
+			return
+		end
+
+		if mode == "network" then
+			local ok, err = pcall(validate_network_core)
+			if not ok then
+				finish(1, "mode=network " .. tostring(err))
+			end
+			return
+		end
+
+		if mode == "actors" then
+			local ok, err = pcall(validate_actor_architecture)
+			if not ok then
+				finish(1, "mode=actors " .. tostring(err))
+			end
+			return
+		end
+
         if mode == "locales" then
             local ok, report = require("tests.locale_validator").validate()
             if ok then
@@ -2045,6 +3816,10 @@ function smoke.install(specification)
 		end
 
         original_load(...)
+		if os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
+			and love.window.minimize then
+			pcall(love.window.minimize)
+		end
 		-- love.load installs the menu callbacks, so suppress real events again.
 		-- Tests that need menu input call love.menu_keypressed directly.
 		ignore_real_input()
@@ -2065,11 +3840,16 @@ function smoke.install(specification)
 			return
 		end
 
-		if mode == "display-modes" then
-			local ok, err = pcall(validate_display_modes)
+		if mode == "multiplayer-gameplay" then
+			local ok, err = pcall(validate_multiplayer_gameplay)
 			if not ok then
-				finish(1, "mode=display-modes " .. tostring(err))
+				finish(1, "mode=multiplayer-gameplay " .. tostring(err))
 			end
+			return
+		end
+
+		if mode == "display-modes" then
+			begin_display_modes_test()
 			return
 		end
 

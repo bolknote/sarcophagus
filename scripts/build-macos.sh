@@ -131,6 +131,8 @@ info_plist="$application/Contents/Info.plist"
     "$plist_buddy" -c "Set :CFBundleVersion $version" "$info_plist"
 "$plist_buddy" -c "Add :NSMicrophoneUsageDescription string Audio input is available to the LÖVE runtime." "$info_plist" 2>/dev/null || \
     "$plist_buddy" -c "Set :NSMicrophoneUsageDescription Audio input is available to the LÖVE runtime." "$info_plist"
+"$plist_buddy" -c "Add :NSLocalNetworkUsageDescription string Sarcophagus discovers and hosts cooperative games on your local network." "$info_plist" 2>/dev/null || \
+    "$plist_buddy" -c "Set :NSLocalNetworkUsageDescription Sarcophagus discovers and hosts cooperative games on your local network." "$info_plist"
 plutil -lint "$info_plist" >/dev/null
 
 sign_code() {

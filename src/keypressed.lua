@@ -66,6 +66,9 @@ function love.wheelmoved(x, y)
 
 		if pl.inv_show[pl.inv_show_c+y] then
 			pl.invselect = pl.inv_show[pl.inv_show_c+y]
+			if game.network_client and not NETWORK_REMOTE_ACTION then
+				multiplayer_send_select_action(pl.invselect, pl.inv[pl.invselect])
+			end
 		end
 
 		inv_show ()
@@ -87,13 +90,21 @@ end
 
 
 function love.textinput(t)
-    
+	if game.menu_manual_ip ~= nil then
+		-- Manual network addresses are ASCII by definition here. Filtering the
+		-- input also prevents byte-wise editing from ever leaving invalid UTF-8
+		-- in the menu renderer.
+		local address_text = tostring(t or ""):gsub("[^%w%.:%-%[%]_%%]", "")
+		game.menu_manual_ip = (game.menu_manual_ip .. address_text):sub(1, 256)
+		return
+	end
+
     if game.inputing and t~='`' then
     	game.textinput = game.textinput or ""
     	game.textinputold = game.textinputold or ""
 		game.textinputold = game.textinput
     	game.textinput = game.textinput..t
-    	textwall (game.textinputinfo..game.textinput.."_",true)
+        textwall ((game.textinputinfo or "")..game.textinput.."_",true)
     end
 
 end
@@ -315,6 +326,9 @@ function inventory_gui_mousepressed(x, y)
 
 	row = gui_mouse_row(game.inventory_mouse_rows, gui_x, gui_y)
 	if row and pl.inv[row.slot] then
+		if game.network_client and not NETWORK_REMOTE_ACTION then
+			multiplayer_send_select_action(row.slot, pl.inv[row.slot])
+		end
 		pl.invselect = row.slot
 		inv_show ()
 		craft_ini ()
@@ -323,6 +337,10 @@ function inventory_gui_mousepressed(x, y)
 
 	row = gui_mouse_row(game.ground_mouse_rows, gui_x, gui_y)
 	if row then
+		if game.network_client and not NETWORK_REMOTE_ACTION then
+			multiplayer_send_pickup_action(row.ground_item)
+			return true
+		end
 		inventory_pick_ground_item(row.index, row.ground_item)
 		inv_show ()
 		craft_ini ()
@@ -411,6 +429,26 @@ local arrow_movement = {
 	left = "a",
 	right = "d",
 }
+
+local network_authoritative_keys = {
+	q = true,
+	z = true,
+	tab = true,
+	p = true,
+	r = true,
+	v = true,
+	m = true,
+	u = true,
+	["return"] = true,
+}
+
+function network_client_waits_for_authority(key)
+	if network_authoritative_keys[key] then return true end
+	local numeric = tonumber(key)
+	return numeric ~= nil and (
+		is_pressed("lshift") or is_pressed("rshift")
+	)
+end
 
 function normalize_gameplay_key(key, developer_arrow)
 	if arrow_movement[key] and not developer_arrow then
@@ -564,6 +602,8 @@ function development_reload_assets()
 end
 
 function love.keypressed(key,s)
+	if multiplayer_handle_approval_key(key, s) then return end
+	if multiplayer_handle_host_key(key, s) then return end
 
 	--print (s)
 	if exit then return end
@@ -572,6 +612,11 @@ function love.keypressed(key,s)
 	mousemoved_last = 0
 	
 	if pl.isdead then return end
+	if game and game.network_client and not NETWORK_REMOTE_ACTION then
+		local network_key = gameplay_key_from_event(key, s)
+		multiplayer_send_key_action(key, s)
+		if network_client_waits_for_authority(network_key) then return end
+	end
 
 	key = gameplay_key_from_event(key, s)
 
@@ -627,6 +672,7 @@ function love.keypressed(key,s)
 		end
 
 		esc_menu ()
+		return
 	end
 
 	if game.inputing then
@@ -640,7 +686,7 @@ function love.keypressed(key,s)
 
 		if key == "return" then
 			game.inputing = nil
-			textwall (game.textinputinfo..game.textinput.." ↵",true)
+			textwall ((game.textinputinfo or "")..game.textinput.." ↵",true)
 
 			local f,s = string.match (game.textinput, "([^ ]+) (.*)")
 
@@ -664,7 +710,7 @@ function love.keypressed(key,s)
 	        end
 		end
 
-		textwall (game.textinputinfo..game.textinput.."_",true)
+		textwall ((game.textinputinfo or "")..game.textinput.."_",true)
 		return
 
 	end

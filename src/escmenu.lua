@@ -3,6 +3,17 @@ function save_and_quit()
 	if exit or game.save_quitting then
 		return false, "quit already pending"
 	end
+	if multiplayer and multiplayer.role == "client" then
+		multiplayer:prepare_quit()
+		quit_after_save = true
+		exit = 1
+		return true
+	end
+	if multiplayer and multiplayer.role == "host" then
+		if multiplayer_finalize_shared_time then multiplayer_finalize_shared_time() end
+		local stopped, stop_error = multiplayer:prepare_quit()
+		if not stopped then return false, stop_error end
+	end
 
 	local target_game = game
 	local previous_pause = game.pause
@@ -44,9 +55,20 @@ end
 
 function esc_menu ()
 
-	
-	escmenu =
-	{
+	if game.network_client then
+		escmenu = {
+			[1] = {
+				f = function () esc_menu() end,
+			},
+			[2] = {
+				-- save_and_quit() deliberately performs no save for a client;
+				-- it only closes the network session and exits this copy.
+				f = function () save_and_quit() end,
+			},
+		}
+	else
+		escmenu =
+		{
 		[1] = {
 		f = function ()
 			esc_menu ()
@@ -128,7 +150,8 @@ function esc_menu ()
 		},
 
 	
-	}
+		}
+	end
 
 	if game.escmenu==nil then
 
@@ -158,7 +181,8 @@ function esc_menu_draw ()
 		return 
 	end
 
-	local he = #msg.escmenu+6 --menu height
+	local labels = game.network_client and msg.escmenu_guest or msg.escmenu
+	local he = #labels+6 --menu height
 	local we = 42 --menu weight
 	
 
@@ -171,7 +195,7 @@ function esc_menu_draw ()
 
 	local str = ""
 
-	for i,v in ipairs(msg.escmenu) do
+	for i,v in ipairs(labels) do
 		
 		if game.escmenu==i then
 			str = str.."{#f77622ff}» "
@@ -243,13 +267,16 @@ end
 
 
 function esc_menu_keypress (key,s)
+	if multiplayer_handle_approval_key(key, s) then return end
+	if multiplayer_handle_host_key(key, s) then return end
 	if game.save_quitting then
 		return
 	end
 
 	s = normalize_esc_menu_key(key, s)
 	
-	local max = #msg.escmenu
+	local labels = game.network_client and msg.escmenu_guest or msg.escmenu
+	local max = #labels
 
 	if s=='escape' then
 		esc_menu ()
@@ -259,7 +286,7 @@ function esc_menu_keypress (key,s)
 
 		sound_add ('button',4,{kill = 1})
 		game.escmenu = game.escmenu - 1
-		if msg.escmenu[game.escmenu]==nil or msg.escmenu[game.escmenu] == "" then game.escmenu = game.escmenu - 1 end
+		if labels[game.escmenu]==nil or labels[game.escmenu] == "" then game.escmenu = game.escmenu - 1 end
 		if game.escmenu<1 then game.escmenu = max end
 
 	end
@@ -268,7 +295,7 @@ function esc_menu_keypress (key,s)
 		
 		sound_add ('button',4,{kill = 1})
 		game.escmenu = game.escmenu + 1
-		if msg.escmenu[game.escmenu]==nil or msg.escmenu[game.escmenu] == "" then game.escmenu = game.escmenu + 1 end
+		if labels[game.escmenu]==nil or labels[game.escmenu] == "" then game.escmenu = game.escmenu + 1 end
 		if game.escmenu>max then game.escmenu = 1 end
 	
 	end

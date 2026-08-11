@@ -98,6 +98,16 @@ function love.load()
 
 
 	shader2 = love.graphics.newShader('assets/shaders/noise.glsl')
+	local ghost_ok, loaded_ghost_shader = pcall(
+		love.graphics.newShader,
+		'assets/shaders/ghost.glsl'
+	)
+	if ghost_ok then
+		ghost_shader = loaded_ghost_shader
+	else
+		ghost_shader = nil
+		GHOST_SHADER_ERROR = tostring(loaded_ghost_shader)
+	end
 	load_optional_smooth2x_shaders()
 
 	mouse_x = love.mouse.getX()
@@ -113,6 +123,9 @@ function love.load()
 	
 	--load menu
 	game_loadinfo ()
+	if multiplayer and not os.getenv("SARCOPHAGUS_SMOKE_TEST") then
+		multiplayer:start_browsing({ game_version = game_version })
+	end
 
 	
 	love.old_keypressed = love.keypressed

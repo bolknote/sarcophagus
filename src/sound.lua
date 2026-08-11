@@ -500,6 +500,12 @@ function sound_killall ()
 	end
 end
 
+local function sound_spatial_call(source, method, ...)
+	local callback = source and source[method]
+	if type(callback) ~= "function" then return false end
+	return pcall(callback, source, ...)
+end
+
 function sound_add (name,id, arr)
 	--{x,y,play,dur}
 
@@ -512,6 +518,24 @@ function sound_add (name,id, arr)
 	--print ('add '..name)
 
 	arr = arr or {}
+	local event_name = name
+	local event_actor_id = ACTIVE_ACTOR_ID
+	local source_actor = event_actor_id and actors and actors:get(event_actor_id) or nil
+	if multiplayer and multiplayer.role == "host" and event_actor_id == "guest"
+		and source_actor then
+		local copied = {}
+		for key, value in pairs(arr) do copied[key] = value end
+		arr = copied
+		arr.x = tonumber(source_actor.xt or source_actor.tx)
+		arr.y = tonumber(source_actor.yt or source_actor.ty)
+		arr.force_spatial = true
+		name = "guest:" .. tostring(name)
+	end
+	if multiplayer_queue_sound_event and (
+		event_actor_id == "guest" or (arr.x ~= nil and arr.y ~= nil)
+	) then
+		multiplayer_queue_sound_event(event_name, id, arr, event_actor_id)
+	end
 
 	if arr.kill then
 		sound_kill (name)
@@ -561,25 +585,26 @@ function sound_add (name,id, arr)
 			local Source = allsounds[name].s
 
 
-			if sounds[id].rolloff then
-				Source:setRolloff((arr.rolloff or 0.4))
+				if sounds[id].rolloff then
+					sound_spatial_call(Source, "setRolloff", (arr.rolloff or 0.4))
 			end
 
 			if sounds[id].loop then
 				Source:setLooping(true)
 			end
 
-			if sounds[id].relative then
-				Source:setRelative(true)
+				if sounds[id].relative then
+					sound_spatial_call(Source, "setRelative", true)
 				--Source:setPosition (0, 0, 0)
 			end
 
-			if sounds[id].aa then
-				Source:setAirAbsorption(sounds[id].aa)
-			end
+				if sounds[id].aa then
+					sound_spatial_call(Source, "setAirAbsorption", sounds[id].aa)
+				end
 
-			if sounds[id].ad then
-				Source:setAttenuationDistances(sounds[id].ad[1], sounds[id].ad[2])
+				if sounds[id].ad then
+					sound_spatial_call(Source, "setAttenuationDistances",
+						sounds[id].ad[1], sounds[id].ad[2])
 			end
 
 			if arr.play or sounds[id].autoplay then
@@ -588,7 +613,13 @@ function sound_add (name,id, arr)
 			
 	end
 
- 	local Source = allsounds[name].s
+	local Source = allsounds[name].s
+	local spatial_source = true
+	if arr.force_spatial then
+		spatial_source = sound_spatial_call(Source, "setRelative", false)
+	elseif arr.force_relative or sounds[id].relative then
+		spatial_source = sound_spatial_call(Source, "setRelative", true)
+	end
 
 	if Source:isPlaying()==false then
 		Source:play()
@@ -607,10 +638,11 @@ function sound_add (name,id, arr)
 		Source:setVolume (arr.volume)
 	end
 
-	if arr.x then
-		allsounds[name].x = arr.x
-		allsounds[name].y = arr.y
-		Source:setPosition (arr.x, arr.y, 0)
+	if arr.x and spatial_source then
+		if sound_spatial_call(Source, "setPosition", arr.x, arr.y, 0) then
+			allsounds[name].x = arr.x
+			allsounds[name].y = arr.y
+		end
 	end
 
 	if arr.dur or sounds[id].dur then

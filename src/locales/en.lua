@@ -121,6 +121,11 @@ msg.escmenu = {
 	[11] = "Language: _1_",
 	}
 
+msg.escmenu_guest = {
+	[1] = "Resume",
+	[2] = "Disconnect and quit",
+}
+
 msg.language = {
 	name = "English",
 }
@@ -149,6 +154,71 @@ msg.menu = {
 	version = "{#aaaaaaff}Version _1_\n",
 	update = "{#aaaaaaff}Version _1_ {#fee761ff}\n\n» _2_ is available! «\n",
 	etymology = "{#3a4466ff}— from the Greek sarx meaning “flesh”, and phagein - “to eat”{#ffffffff}",
+	lan_title = "\n\n{#63c74dff}Worlds found on the local network:{#ffffffff}\n",
+	lan_entry = "_1_  _2_  [_3_/_4_]",
+	lan_join = "\nPress {#fee761ff}Tab{#ffffffff} to select a world and {#fee761ff}J{#ffffffff} to join it.",
+	lan_searching = "\n\n{#8b9bb4ff}Searching the local network automatically…{#ffffffff}",
+	lan_error = "\n\n{#ff0044ff}LAN discovery is unavailable: _1_{#ffffffff}",
+	lan_manual = "\nPress {#fee761ff}I{#ffffffff} to connect by IP address.",
+	lan_incompatible = "incompatible",
+	lan_not_joinable = "occupied",
+	lan_none = "No LAN world is selected.",
+	manual_prompt = "Enter host or host:port, then press Enter: ",
+	connecting = "Connecting to _1_...",
+}
+
+msg.network = {
+	join_request = "A ghost wants to enter this world. Press Y to allow or N to reject.",
+	join_approved = "The ghost is entering the world. Press K to expel it.",
+	join_rejected = "The connection was rejected.",
+	guest_kicked = "The ghost was expelled; its possessions remain in the world.",
+	host_status = "LAN: ghost connected · K — expel",
+	client_status = "LAN: connected as the ghost",
+	quality = "RTT _1_ ms · loss _2_% · _3_",
+	quality_unknown = "Network quality: measuring…",
+	quality_labels = {
+		excellent = "excellent",
+		good = "good",
+		poor = "unstable",
+		bad = "bad",
+		unknown = "unknown",
+	},
+	exit_hint = "Open Esc menu to leave the session.",
+	states = {
+		catching_up = "Synchronizing recent world changes…",
+		reconnecting = "Reconnecting to the host…",
+		resuming = "Restoring the session…",
+		disconnected = "Disconnected from the host.",
+		rejected = "Connection rejected.",
+		failed = "Network synchronization failed.",
+	},
+	errors = {
+		protocol_mismatch = "The host uses an incompatible network protocol.",
+		game_version_mismatch = "The game versions do not match.",
+		invalid_content_hash = "The remote build sent an invalid content signature.",
+		invalid_client_nonce = "The connection request has an invalid identity token.",
+		invalid_reconnect_token = "The previous ghost session cannot be restored.",
+		invalid_protocol_message = "The remote copy sent an invalid network message.",
+		content_mismatch = "The game files or mods do not match.",
+		missing_capability = "This build lacks a required multiplayer feature.",
+		session_not_joinable = "That world already has a guest.",
+		approval_timeout = "The host did not answer the join request.",
+		rejected_by_host = "The host rejected the connection.",
+		connection_timeout = "The host did not answer the connection attempt.",
+		reconnect_timeout = "The connection to the host was lost.",
+		snapshot_timeout = "The initial world transfer timed out.",
+		catchup_timeout = "The host timed out while synchronizing recent world changes.",
+		host_quit = "The host ended the game.",
+		host_closed_connection = "The host closed the connection.",
+		kicked_by_host = "The host expelled the ghost.",
+		snapshot_catchup_overflow = "The world changed too much while joining. Please try again.",
+		snapshot_journal_failed = "The host could not start world synchronization.",
+		snapshot_failed = "The host could not prepare the initial world state.",
+		snapshot_send_failed = "The host could not send the initial world state.",
+		snapshot_state_failed = "The host could not finish initial synchronization.",
+		snapshot_event_reset_failed = "The host could not prepare multiplayer events.",
+		start_send_failed = "The host could not finish entering the world.",
+	},
 }
 
 msg.persistence = {

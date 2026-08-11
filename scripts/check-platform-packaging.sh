@@ -16,6 +16,7 @@ shared_icon="$project_root/packaging/icon.png"
 macos_icon="$project_root/packaging/macos/Sarcophagus.icns"
 windows_icon="$project_root/packaging/windows/Sarcophagus.ico"
 icon_generator="$script_directory/generate-platform-icons.sh"
+release_manifest_checker="$script_directory/check-release-manifest.sh"
 
 for required_file in \
     "$windows_manifest" \
@@ -29,7 +30,8 @@ for required_file in \
     "$shared_icon" \
     "$macos_icon" \
     "$windows_icon" \
-    "$icon_generator"; do
+    "$icon_generator" \
+    "$release_manifest_checker"; do
     if [[ ! -f "$required_file" ]]; then
         echo "Platform packaging file is missing: $required_file" >&2
         exit 1
@@ -39,6 +41,7 @@ done
 bash -n "$macos_builder"
 bash -n "$linux_builder"
 bash -n "$icon_generator"
+bash -n "$release_manifest_checker"
 sh -n "$linux_apprun"
 
 for executable_file in \
@@ -98,6 +101,11 @@ for entitlement in \
         exit 1
     fi
 done
+
+if ! grep -Fq 'NSLocalNetworkUsageDescription' "$macos_builder"; then
+    echo "macOS build does not describe local-network access." >&2
+    exit 1
+fi
 
 for desktop_entry in \
     'Type=Application' \

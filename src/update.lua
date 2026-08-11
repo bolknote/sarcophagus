@@ -109,6 +109,25 @@ function love.update(d)
 	if save_manager then
 		save_manager.update()
 	end
+	if not game.network_client then
+		game.network_clock = (tonumber(game.network_clock) or 0)
+			+ math.max(0, math.min(0.25, tonumber(d) or 0))
+	end
+	if multiplayer_finalize_shared_time then multiplayer_finalize_shared_time() end
+	if multiplayer then multiplayer:update(d) end
+	if multiplayer and multiplayer:pending_approval() then
+		local pending = multiplayer:pending_approval()
+		if game.multiplayer_prompt_session ~= pending.session_id then
+			game.multiplayer_prompt_session = pending.session_id
+			textwall(msg.network.join_request, true)
+		end
+	else
+		game.multiplayer_prompt_session = nil
+	end
+	if game.network_client and multiplayer and multiplayer.role == "client" then
+		multiplayer_client_update(d)
+		return
+	end
 
 	--love.audio.setVolume(0.1)
 
@@ -197,14 +216,24 @@ function love.update(d)
 		return
 	end
 
+	local multiplayer_host_paused = false
 	if not love.window.hasFocus() then
-		return
+		if multiplayer_session_active and multiplayer_session_active() then
+			multiplayer_host_paused = true
+		else
+			return
+		end
 	end
 
 	if game.pause then
-		sound_update ()
-		return
+		if multiplayer_session_active and multiplayer_session_active() then
+			multiplayer_host_paused = true
+		else
+			sound_update ()
+			return
+		end
 	end
+	game.network_tick = (game.network_tick or 0) + 1
 
 
 	if game.shaken then
@@ -458,6 +487,7 @@ function love.update(d)
 			lights.p.l = {item[v.i].light[2],item[v.i].light[3],item[v.i].light[4]}		
 		end
 	end
+	multiplayer_refresh_actor_lights(false)
 
 
 
@@ -477,13 +507,13 @@ function love.update(d)
 		return 
 	end
 
-	if pl.dying==2 and pl.oldstate=='dying' and currentFrame == 5 then
+	if pl.dying==2 and pl.oldstate=='dying' and pl.animation.frame == 5 then
 		sound_add ('cello', 29)
 		pl.dying=3
 	end
 
 
-	if pl.dying==3 and pl.oldstate=='dying' and currentFrame == 8 then
+	if pl.dying==3 and pl.oldstate=='dying' and pl.animation.frame == 8 then
 		game.fadeout = 0.1
 		game.fadein = 0.2
 		game.stayfade = 7
@@ -494,7 +524,7 @@ function love.update(d)
 	if pl.dying==4 then
 
 		if pl.stats.power.hp<99 then
-			game.time = game.time + time.h
+			if not multiplayer_session_active() then game.time = game.time + time.h end
 			stat_recovery ("power",time.h * cf.rec.powerdead)
 		else
 			pl.dying = 5
@@ -511,7 +541,7 @@ function love.update(d)
 		
 		if pl.spenddead > 0 then
 			pl.spenddead = pl.spenddead - time.h
-			game.time = game.time + time.h
+			if not multiplayer_session_active() then game.time = game.time + time.h end
 			stat_recovery ("power",time.h * cf.rec.powerdead)
 		else
 			pl.spenddead = 0
@@ -544,7 +574,7 @@ function love.update(d)
 	if pl.unrest>0 then
 		local recovery = 100
 		pl.unrest = pl.unrest - recovery
-		game.time = game.time + recovery
+		if not multiplayer_session_active() then game.time = game.time + recovery end
 		game.recovery = game.time
 		stat_spend ("water",recovery * 0.001)
 		stat_spend ("food",recovery * cf.rec.food)
@@ -580,7 +610,7 @@ function love.update(d)
 
 			pl.rest = pl.rest - recovery
 
-			game.time = game.time + recovery
+			if not multiplayer_session_active() then game.time = game.time + recovery end
 			game.recovery = game.time
 			--stat_spend ("heat",recovery * 0.0005)
 
@@ -685,7 +715,7 @@ function love.update(d)
 	end
 
 	-- moving
-	if pl.dying == nil then
+	if pl.dying == nil and not multiplayer_host_paused then
 
 		if game.craft == false and game.achishow==nil then
 			if is_pressed("\\") and IS_DEVELOPMENT then
@@ -842,110 +872,14 @@ function love.update(d)
 
 		local cola = mobs[i].coltype or 'mob'
 		col_add (cola..'_'..i,v,v.ani_status,(v.colname or v.type),cola,i)
-		creature[v.id].ai (v,i)
+		multiplayer_run_mob_ai(v, i)
 
 	end
 
 
 	fishing_update ()
 
-
-	-- animation
-	-- new state
-
-	--print (pl.state..currentFrame)
-	--love.timer.sleep(0.1)
-
-	frameTime = frameTime + dt * 100 * (pl.anispeed or 1)
-	cycleTime = cycleTime + frameTime
-
-	-- out of bounds
-	if gr[pl.state]['dur'][currentFrame] == nil then
-		currentFrame = 1
-		cycleTime = 0
-		frameTime = 0
-	end
-
-	if pl.oldstate ~= pl.state then
-		currentFrame = 1
-		cycleTime = 0
-		frameTime = 0
-	end
-
-	-- new frame
-	if frameTime >= gr[pl.state]['dur'][currentFrame] then
-		if gr[pl.state]['dur'][currentFrame] > 0 then
-
-			frameTime = frameTime - gr[pl.state]['dur'][currentFrame]
-
-
-			local rt
-
-			if aniReverce and gr[pl.state].reversable then
-
-				aniReverceStart = aniReverceStart or currentFrame
-				aniReverce = aniReverce + 1
-				currentFrame = aniReverceStart - aniReverce
-				
-				--print ('frame..'..currentFrame)
-
-				if currentFrame>0 then
-
-					if gr[pl.state]['add'] and gr[pl.state]['add'][currentFrame] then
-						pl.x = pl.x - gr[pl.state]['add'][currentFrame][1]*pl.flip
-						pl.y = pl.y - gr[pl.state]['add'][currentFrame][2]
-					end
-				else
-					rt = true
-				end
-
-			else
-
-				currentFrame = gr[pl.state]['ani'][currentFrame]
-
-				if gr[pl.state]['add'] and gr[pl.state]['add'][currentFrame] then
-					pl.x = pl.x + gr[pl.state]['add'][currentFrame][1]*pl.flip
-					pl.y = pl.y + gr[pl.state]['add'][currentFrame][2]
-				end
-
-			end
-
-				if type(currentFrame) == "string" or rt then
-				
-				local exitfr = 1
-				if gr[pl.state]['exitfr'] then
-					exitfr = gr[pl.state]['exitfr']
-				end
-
-				pl.state = currentFrame
-				currentFrame = exitfr
-
-				if rt then
-					pl.state = 'idle'
-					currentFrame = 1
-				end
-
-				frameTime = 0
-				cycleTime = 0
-				aniReverce = nil
-				aniReverceStart = nil
-			end
-
-		else
-			currentFrame = 1
-			frameTime = 0
-			cycleTime = 0
-		end
-	end
-
-	-- out of bounds
-	if currentFrame > gr[pl.state]['cnt'] then
-		currentFrame = 1
-		frameTime = 0
-		cycleTime = 0
-	end
-
-	pl.oldstate = pl.state
+	PlayerAnimation.update(pl, dt, gr)
 
 
 --x,y,ttl,text,vs,xs
@@ -979,15 +913,19 @@ end
 game.checked = false
 game.fchecked = false
 
-for ix=-1,screen.x+1 do
-for iy=-1,screen.y+1 do
-	x = vi.xtile+ix+1
-	y = vi.ytile+iy+1
-	--writemap (x,y,4)
-	checks (x,y,{real = true})
-
-
-end
+local checked_active_cells = {}
+for _, active_camera in ipairs(multiplayer_active_cameras()) do
+	for ix=-1,screen.x+1 do
+	for iy=-1,screen.y+1 do
+		x = active_camera.xtile+ix+1
+		y = active_camera.ytile+iy+1
+		local active_key = x .. ":" .. y
+		if not checked_active_cells[active_key] then
+			checked_active_cells[active_key] = true
+			checks (x,y,{real = true})
+		end
+	end
+	end
 end
 
 if game.checked then game.ttlcheck = game.dt + game.deltacheck end

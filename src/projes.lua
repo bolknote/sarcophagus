@@ -557,7 +557,12 @@ if proj then
 
 			for ii,vv in ipairs(coll) do
 
-				local m = collide_check (p,vv)
+				local m, target_actor
+				if vv == 'player' and multiplayer_session_active() then
+					m, target_actor = multiplayer_projectile_player_collision(p, v)
+				else
+					m = collide_check (p,vv)
+				end
 
 				if m and proj[k] then
 
@@ -573,12 +578,22 @@ if proj then
 
 						if v.inv and v.inv.t then v.inv.t = v.inv.t - hit end
 
-						if projes[v.proj].onhit then
-							projes[v.proj].onhit (v.x, v.y, vv, m, v.inv, v)
-						end
+						local function apply_projectile_hit()
+							if projes[v.proj].onhit then
+								projes[v.proj].onhit (v.x, v.y, vv, m, v.inv, v)
+							end
 
-						if v.inv and item[v.inv.i].onhit then
-							item[v.inv.i].onhit (v.x, v.y, vv, m, v.inv, v)
+							if v.inv and item[v.inv.i].onhit then
+								item[v.inv.i].onhit (v.x, v.y, vv, m, v.inv, v)
+							end
+						end
+						if target_actor then
+							multiplayer_apply_projectile_player_hit(
+								target_actor,
+								apply_projectile_hit
+							)
+						else
+							apply_projectile_hit()
 						end
 
 						if projes[v.proj].dest then

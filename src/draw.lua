@@ -36,6 +36,94 @@ function water_render_colors(dirtiness)
 		0.72
 end
 
+local function visible_player_actors()
+	local result = {}
+	if actors and actors.host then result[#result + 1] = actors.host end
+	if actors and actors.guest and actors.guest ~= actors.host then
+		result[#result + 1] = actors.guest
+	end
+	if #result == 0 and pl then result[1] = pl end
+	return result
+end
+
+local function actor_draw_options()
+	return {
+		camera = vi,
+		local_actor = actors and actors.local_actor or pl,
+		tile_width = cf.w,
+		tile_height = cf.h,
+		definitions = gr,
+		atlas = quad,
+		blocks = stone,
+		ghost_shader = ghost_shader,
+	}
+end
+
+local function draw_player_layer(behind_world)
+	local options = actor_draw_options()
+	for _, actor in ipairs(visible_player_actors()) do
+		local definition = gr[actor.state] or gr.idle
+		local actor_behind = definition.z
+			or (actor == pl and haswater)
+			or (actor ~= pl and actor.buffs and actor.buffs[18])
+		if not not actor_behind == not not behind_world then
+			ActorRenderer.draw_body(actor, options)
+		end
+	end
+end
+
+local function draw_multiplayer_status()
+	if not multiplayer or multiplayer.role == "offline" then return end
+	local text
+	local status = multiplayer:status()
+	if multiplayer.role == "host" and multiplayer.session
+		and multiplayer.session.guest then
+		text = msg.network.host_status
+	elseif multiplayer.role == "client" then
+		if multiplayer.client_state == "playing" then
+			text = msg.network.client_status
+		else
+			local state = msg.network.states[multiplayer.client_state]
+				or multiplayer.client_state
+			local reason = multiplayer.last_error
+				and (msg.network.errors[tostring(multiplayer.last_error)]
+					or tostring(multiplayer.last_error))
+			text = state .. (reason and ("\n" .. reason) or "")
+				.. "\n" .. msg.network.exit_hint
+		end
+	end
+	if text and status.transport and (
+		(multiplayer.role == "client" and multiplayer.client_state == "playing")
+		or (multiplayer.role == "host" and multiplayer.session
+			and multiplayer.session.guest)
+	) then
+		local rtt = tonumber(status.transport.rtt_ms)
+		local loss = tonumber(status.transport.packet_loss_percent)
+		if rtt or loss then
+			local quality_label = msg.network.quality_labels[status.quality]
+				or msg.network.quality_labels.unknown
+			text = text .. "\n" .. message(msg.network.quality, {
+				[1] = math.floor((rtt or 0) + 0.5),
+				[2] = string.format("%.1f", math.max(0, loss or 0)),
+				[3] = quality_label,
+			})
+		else
+			text = text .. "\n" .. msg.network.quality_unknown
+		end
+	end
+	if not text then return end
+	text = MultiplayerProtocol.sanitize_utf8(text)
+	local width = math.min(520, screen.width - 40)
+	local x = (screen.width - width) / 2
+	local _, line_count = text:gsub("\n", "\n")
+	local height = 24 + (line_count + 1) * 14
+	love.graphics.setColor(0.04, 0.06, 0.10, 0.88)
+	love.graphics.rectangle("fill", x, 18, width, height)
+	love.graphics.setColor(0.82, 0.90, 1, 1)
+	love.graphics.printf(text, x + 10, 25, width - 20, "center")
+	love.graphics.setColor(1, 1, 1, 1)
+end
+
 function draw_smooth2x_world(source)
 	if not smooth2x_available() or not source then
 		return false
@@ -257,7 +345,7 @@ end
 
 	for i,mob in pairs(mobs) do
 
-		if mob.x and mob.z==nil then
+		if mob.x and mob.z==nil and multiplayer_entity_visible(mob) then
 			ani_draw (mob, dt)
 		end
 
@@ -269,10 +357,12 @@ end
 		if game.start.ani_status == 'born' and game.start.ani_frame<12 then
 
 		else
-			if gr[pl.state]['spr'][math.floor (currentFrame)] then
-				love.graphics.draw (quad, gr[pl.state]['spr'][math.floor (currentFrame)], math.floor(pl.x), math.floor(pl.y), 0, 2*pl.flip, 2, 15, 16)
-			end
+			draw_player_layer(true)
 		end
+	else
+		-- Remote actors can be in a depth-layer animation even when the local
+		-- actor is not, so the layer must still be visited.
+		draw_player_layer(true)
 	end
 
 
@@ -588,27 +678,9 @@ end
 	love.graphics.draw (block_canvas, 0,0,0,1,1)
 
 
-	if pl.iscarry and pl.iscarry.b>0 then
-
-		local ya = 0
-		local xa = 0
-
-			--love.graphics.printf(pl.state,100,100,10000)
-
-
-			if gr[pl.state].stoneadd and gr[pl.state].stoneadd[currentFrame] then
-				xa = gr[pl.state].stoneadd[currentFrame][1]*pl.flip
-				ya = gr[pl.state].stoneadd[currentFrame][2]
-			end 
-
-			if stone[pl.iscarry.b].br then
-				love.graphics.setColor (0,0,0,1)
-				love.graphics.rectangle("fill", math.floor(pl.x+pl.flip*10+13+xa)-32, math.floor(pl.y-3+ya)-34, 36, 36)
-				love.graphics.setColor (1,1,1,1)
-			end
-
-			love.graphics.draw (quad, stone[pl.iscarry.b].spr, math.floor(pl.x+pl.flip*10+13+xa), math.floor(pl.y-3+ya), 0, 2, 2, 15, 16)
-
+	local carried_options = actor_draw_options()
+	for _, actor in ipairs(visible_player_actors()) do
+		ActorRenderer.draw_carried(actor, carried_options)
 	end
 
 	if pl.digcount > 0 then
@@ -628,10 +700,10 @@ end
 		if game.start.ani_status == 'born' and game.start.ani_frame<12 then
 
 		else
-		 	if gr[pl.state]['spr'][math.floor (currentFrame)] then
-		 		love.graphics.draw (quad, gr[pl.state]['spr'][math.floor (currentFrame)], math.floor(pl.x), math.floor(pl.y), 0, 2*pl.flip, 2, 15, 16)
-		 	end
+			draw_player_layer(false)
 		end
+	else
+		draw_player_layer(false)
 	end
 
 
@@ -648,7 +720,7 @@ end
 
 	for i,mob in pairs(mobs) do
 
-		if mob.x and mob.z==1 then
+		if mob.x and mob.z==1 and multiplayer_entity_visible(mob) then
 			ani_draw (mob, dt)
 		end
 
@@ -658,15 +730,17 @@ end
 
 	--world ani
 	for k,v in pairs(worldani) do
-		coord_true2screen (v)
-		ani_draw (v, dt)
+		if multiplayer_entity_visible(v) then
+			coord_true2screen (v)
+			ani_draw (v, dt)
+		end
 	end
 	
 
 	-- projectiles
 	if proj then
 		for k,v in pairs(proj) do
-				if v.f then
+			if v.f and multiplayer_entity_visible(v) then
 					love.graphics.draw (quad, projes[v.proj].spt, v.x, v.y, v.d, v.f*(projes[v.proj].size or 2), (projes[v.proj].size or 2), 3, 3)
 				end
 		end
@@ -957,6 +1031,7 @@ end
 
 	-- end
 
+	draw_multiplayer_status()
 	esc_menu_draw ()
 
 	

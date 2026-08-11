@@ -11,18 +11,19 @@
 		end
 	end
 
-	function pl_state (name, force)
+	function pl_state (name, force, actor)
+		actor = ActorState.ensure(actor or pl)
 		if gr[name].unbr==nil or force then
-			pl.oldstate = pl.state
-			pl.state = name
-			currentFrame = 1
-			frameTime = 0
+			actor.oldstate = actor.state
+			actor.state = name
+			ActorState.reset_animation(actor, nil, { preserve_reverse = true })
 			return true
 		end
 	end
 
-	function pl_getstate (name)
-		return gr[pl.state][name]
+	function pl_getstate (name, actor)
+		actor = actor or pl
+		return gr[actor.state][name]
 	end
 
 	gr = {}
@@ -1715,4 +1716,3 @@
 			return ani
 		end
 	end
-

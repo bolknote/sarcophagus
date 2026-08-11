@@ -967,10 +967,18 @@ function textwall (text, tmp, repl)
 	--if (game.oldtextwall or "")==text then return end
 	--game.oldtextwall = text
 
-	if repl then
-		for k,v in pairs(repl) do
-			text = string.gsub(text, "_"..k.."_", v)
+	text = message(text, repl)
+
+	-- The host simulates the guest in the same Lua state. Its log belongs to
+	-- the remote player's HUD, while text_canvas belongs to the host window.
+	-- Send the raw, localised line as a reliable actor event and do not redraw
+	-- the host canvas from inside the guest actor context.
+	if not NETWORK_TEXT_EVENT_APPLY and ACTIVE_ACTOR_ID == "guest"
+		and multiplayer and multiplayer.role == "host" then
+		if multiplayer_queue_text_event then
+			multiplayer_queue_text_event(text, tmp, ACTIVE_ACTOR_ID)
 		end
+		return true
 	end
 
 	text = text_color ("{#ffffffff}"..text)

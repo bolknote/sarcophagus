@@ -201,7 +201,7 @@ function fishing_draw ()
 
 		local xo,yo
 
-		if currentFrame == 1 then
+		if pl.animation.frame == 1 then
 			xo = 35
 			yo = 22
 		else

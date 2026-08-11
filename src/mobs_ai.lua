@@ -4385,7 +4385,11 @@ function mob_destory (m,killed)
 	
 	-- kill count
 	if killed then
-		pl.killed[mobs[m].id] = (pl.killed[mobs[m].id] or 0) + 1
+		local credited = mobs[m].last_attacker_id
+			and actors and actors:get(mobs[m].last_attacker_id) or pl
+		credited = credited or pl
+		credited.killed = credited.killed or {}
+		credited.killed[mobs[m].id] = (credited.killed[mobs[m].id] or 0) + 1
 		if game.dbg[1] then print ("killed "..mobs[m].id) end
 	end
 
@@ -4410,6 +4414,9 @@ function mob_hit (m,d, gate)
 	if mob==nil then return end
 
 	mob.hostile = (mob.hostile or 0) + 32
+	if ACTIVE_ACTOR_ID and actors and actors:get(ACTIVE_ACTOR_ID) then
+		mob.last_attacker_id = ACTIVE_ACTOR_ID
+	end
 	mob.save.hostile = game.time + mob.hostile
 
 	--mobs[m].stick = nil

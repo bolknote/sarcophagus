@@ -30,6 +30,13 @@ local imgData = love.image.newImageData('packaging/icon.png')
 love.window.setIcon(imgData)
 love.window.setTitle('Sarcophagus v.'..game_version)
 
+-- Automated LÖVE checks still need a real graphics context, but they do not
+-- need to steal focus or cover the user's desktop.
+if os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
+	and love.window.minimize then
+	pcall(love.window.minimize)
+end
+
 love.graphics.setDefaultFilter("nearest", "nearest", 1)
 --love.window.maximize ()
 
@@ -42,6 +49,30 @@ if IS_DEVELOPMENT then
 end
 
 binser = require "src.binser"
+ActorState = require("src.actor_state")
+ActorRegistry = require("src.actor_registry")
+InputState = require("src.input_state")
+ActorContext = require("src.actor_context")
+ActorRenderer = require("src.actor_renderer")
+PlayerAnimation = require("src.player_animation")
+ItemIdentity = require("src.item_identity")
+StateCopy = require("src.state_copy")
+ActorInventory = require("src.actor_inventory")
+GhostActor = require("src.ghost_actor")
+GuestPossessions = require("src.guest_possessions")
+MultiplayerProtocol = require("src.network.protocol")
+MultiplayerSession = require("src.network.session")
+MultiplayerContentHash = require("src.network.content_hash")
+NetworkIdentity = require("src.network.identity")
+EnetTransport = require("src.network.enet_transport")
+NetworkSnapshot = require("src.network.snapshot")
+NetworkReplication = require("src.network.replication")
+NetworkInterpolationBuffer = require("src.network.interpolation_buffer")
+WorldJournal = require("src.network.world_journal")
+LANDiscovery = require("src.network.discovery")
+MultiplayerRuntime = require("src.network.runtime")
+actors = ActorRegistry.new()
+network_world_journal = WorldJournal.new()
 require ("src.mainlib")
 save_manager = require("src.save_manager")
 
@@ -57,6 +88,8 @@ require ("src.update")
 require ("src.draw")
 
 require ("src.vars")
+NetworkIdentity.ensure_world(game)
+actors:bind_host(pl, vi)
 require ("src.menu")
 require ("src.items")
 require ("src.stones")
@@ -80,6 +113,32 @@ require ("src.escmenu")
 require ("src.joystick")
 require ("src.achievements")
 require ("src.draw_gui")
+
+multiplayer = MultiplayerRuntime.new({
+	registry = actors,
+	state_provider = multiplayer_snapshot_state,
+	state_applier = multiplayer_apply_snapshot,
+	spawn_provider = multiplayer_guest_spawn,
+	dropper = multiplayer_drop_guest,
+	action_handler = multiplayer_guest_action,
+	action_rejection_handler = multiplayer_reject_guest_action,
+	simulation_handler = multiplayer_simulate_guest,
+	replication_provider = multiplayer_replication_state,
+	replication_applier = multiplayer_apply_replication,
+	world_delta_provider = multiplayer_world_delta,
+	world_delta_applier = multiplayer_apply_world_delta,
+	world_delta_reset = function()
+		network_world_journal:clear()
+		return true
+	end,
+	catchup_validator = function()
+		return network_world_journal:ready()
+	end,
+	event_provider = multiplayer_next_network_event,
+	event_handler = multiplayer_apply_network_event,
+	event_reset = multiplayer_reset_network_events,
+	action_result_handler = multiplayer_action_result,
+})
 
 utf8 = require("utf8")
 

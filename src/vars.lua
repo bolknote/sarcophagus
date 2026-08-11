@@ -1,3 +1,4 @@
+	local ActorState = require("src.actor_state")
 	
 
 
@@ -42,7 +43,7 @@
 
 	
 	--player
-	pl = {}	
+	pl = ActorState.new({ actor_id = "host", actor_role = "host" })
 
 
 	-- config
@@ -325,6 +326,3 @@
 
 	currentBlock = 1
 	currentItem = 1
-	currentFrame = 1
-	frameTime = 0
-	cycleTime = 0

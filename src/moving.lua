@@ -160,7 +160,8 @@ function moving ()
 
 	
 	-- pick mob
-	if is_pressed("space") and pl.digcount==0 then
+	if not NETWORK_CLIENT_PREDICTION
+		and is_pressed("space") and pl.digcount==0 then
 		local col = col_add ('',pl,'pick','player')
 		local col = col_add ('pick',pl,'pick','player')--(id,obj,state,name,t,num)
 		local m = collide_check (col,'mob') or collide_check (col,'critter')
@@ -169,7 +170,7 @@ function moving ()
 
 			pl.state = "pick"
 
-			if currentFrame==4 and pl.oldstate=='pick' then
+			if pl.animation.frame==4 and pl.oldstate=='pick' then
 				inv_add (item_make(mobs[m.n].toid))
 				mob_destory (m.n)
 				pl.digcount = -1
@@ -187,7 +188,8 @@ function moving ()
 
 
 	-- drop brick 
-	if is_pressed("space") and pl.candrop == 1 and pl.iscarry
+	if not NETWORK_CLIENT_PREDICTION
+		and is_pressed("space") and pl.candrop == 1 and pl.iscarry
 		--and ((stone[pl.iscarry.b].coby and pl.cob) or stone[pl.iscarry.b].coby==nil)
 		then
 
@@ -289,6 +291,7 @@ function moving ()
 				end
 
 				world[br.y][br.x].i = i
+				multiplayer_record_cell(br.x, br.y)
 
 				writemap (br.x, br.y, 0, "f")
 
@@ -312,7 +315,9 @@ function moving ()
 
 	-- throwing item
 	--and type(pl.invselect)=='number'
-	if (is_pressed("r") or love.mouse.isDown(2) or game.gui_throw_down)
+	if not NETWORK_CLIENT_PREDICTION then
+	if (is_pressed("r") or (ACTIVE_INPUT_STATE and is_pressed("mouse2"))
+		or (not ACTIVE_INPUT_STATE and love.mouse.isDown(2)) or game.gui_throw_down)
 		and pl.inv[pl.invselect] and item[pl.inv[pl.invselect].i].throw~=nil then
 
 		local ithrow = pl.inv[pl.invselect]
@@ -395,7 +400,8 @@ function moving ()
 					xspeed = pl.throw * (ya) * -1,
 					yspeed = pl.throw * (ya2) * -1,
 					bounce = b,
-					proj = 15
+					proj = 15,
+					owner_id = pl.actor_id,
 				}
 
 				if oxth and oxth~=xth and oyth~=yth then
@@ -450,7 +456,8 @@ function moving ()
 					yspeed = pl.throw * (ya2) * -1,
 					bounce = item[i.i].bounce,
 					inv = i,
-					proj = p
+					proj = p,
+					owner_id = pl.actor_id,
 				}
 
 				proj[next_numeric_id(proj)] = m
@@ -463,6 +470,7 @@ function moving ()
 			end
 
 		end
+	end
 	end
 
 
@@ -812,7 +820,7 @@ function moving ()
 
 	if pl.yspeed<0 then
 		pl.state = "jump"
-		--if (currentFrame>1 and pl.state=='jump') or pl.state~="jump" then
+		--if (pl.animation.frame>1 and pl.state=='jump') or pl.state~="jump" then
 			local l = math.min((-1)*pl.yspeed,togo.up)
 			pl.y = pl.y - l 
 		--end
@@ -917,12 +925,14 @@ function moving ()
 
 			local dmg = math.floor (pl.fell/20)
 
-			if dmg>50 then
-				buff_add (7)
-			end
+			if not NETWORK_CLIENT_PREDICTION then
+				if dmg>50 then
+					buff_add (7)
+				end
 
-			if dmg>0 then
-				player_hit (dmg)
+				if dmg>0 then
+					player_hit (dmg)
+				end
 			end
 
 			pl.fell = 0
@@ -931,7 +941,8 @@ function moving ()
 
 
 		local mul = 1
-		local gameplay_mouse_down = love.mouse.isDown(1) and not game.gui_mouse_down
+		local gameplay_mouse_down = (ACTIVE_INPUT_STATE and is_pressed("mouse1"))
+			or (not ACTIVE_INPUT_STATE and love.mouse.isDown(1) and not game.gui_mouse_down)
 		--if cclimb==1 and maptile (r.x,r.y+1,'col')==0 then mul = 0.5 end
 
 		-- walk right
@@ -1107,22 +1118,22 @@ function moving ()
 				if pl.x > mouse_x+16 and pl.flip~=-1 then 
 					pl.flip = -1 
 					currentTime = 0
-					currentFrame = 2
+					pl.animation.frame = 2
 				end
 				
 				if pl.x < mouse_x-16 and pl.flip~=1 then 
 					pl.flip = 1 
 					currentTime = 0
-					currentFrame = 2
+					pl.animation.frame = 2
 				end
 
 			else
 
-				if currentFrame < 3 and is_pressed ('d') then
+				if pl.animation.frame < 3 and is_pressed ('d') then
 					pl.flip = 1
 				end
 
-				if currentFrame < 3 and is_pressed ('a') then
+				if pl.animation.frame < 3 and is_pressed ('a') then
 					pl.flip = -1
 				end
 
@@ -1146,31 +1157,31 @@ function moving ()
 
 			if pl.oldstate == 'kick' then
 
-				if currentFrame == 5 then
+				if pl.animation.frame == 5 then
 					sound_add ('whoosh',21, {x = pl.flip*0.5, y = 1})
 				end
 
 			
-				if currentFrame == 10 then
+				if pl.animation.frame == 10 then
 					sound_add ('whoosh2',22, {x = pl.flip*0.5, y = -1})
 				end
 
-				if currentFrame == 7 then
+				if pl.animation.frame == 7 then
 					sound_add ("step1",30)
 				end
 
-				-- if currentFrame == 11 then
+				-- if pl.animation.frame == 11 then
 				-- 	sound_add ("step2",30)
 				-- end
 
 
-				if currentFrame == 12 then
+				if pl.animation.frame == 12 then
 					sound_add ('whoosh3',23, {x = pl.flip*0.5, y = 0})
 				end
 			end
 
 			--autopick right tool
-			if currentFrame == 4 and pl.state == "kick" and (it==nil or it.tool==nil or it.tool.dmgmin==nil) then
+			if pl.animation.frame == 4 and pl.state == "kick" and (it==nil or it.tool==nil or it.tool.dmgmin==nil) then
 			
 				local mins = 0
 				for ii=1,pl.invsize do
@@ -1192,13 +1203,13 @@ function moving ()
 			game.attackcursor = 1
 			game.attackcd = (game.attackcd or 0) + dt
 
-			if currentFrame>5 then
+			if pl.animation.frame>5 then
 				game.attackcd = 0
 				--game.attacked=nil
 			end
 
 			if pl.oldstate == 'kick' then
-				game.attackcursor = currentFrame
+				game.attackcursor = pl.animation.frame
 				if game.attackcursor>3 then game.attackcursor=3 end
 				if game.attackcursor<1 then game.attackcursor=1 end
 			else
@@ -1207,18 +1218,18 @@ function moving ()
 			--if pc>3 then pc = 3 end
 			
 		
-			--print (currentFrame.." "..dumpvar(game.attacked))
+			--print (pl.animation.frame.." "..dumpvar(game.attacked))
 
 			if pl.oldstate == 'kick' and 
-				((currentFrame==5 and game.attacked~=5) or
-				(currentFrame==10 and game.attacked~=10))
+				((pl.animation.frame==5 and game.attacked~=5) or
+				(pl.animation.frame==10 and game.attacked~=10))
 				then
 
-				game.attacked = currentFrame
+				game.attacked = pl.animation.frame
 
-				--print (currentFrame.." "..game.attacked)
+				--print (pl.animation.frame.." "..game.attacked)
 
-				--print (cycleTime)
+				--print (pl.animation.cycle)
 				--print (game.attackcd)
 
 				game.attackcd = nil
@@ -1239,7 +1250,7 @@ function moving ()
 					stat_spend ("arms",spend)
 					local dmg = love.math.random (inv_itemstat (id,'dmgmin') or 1,inv_itemstat (id,'dmgmax') or 1)
 
-					if currentFrame == 5 then
+					if pl.animation.frame == 5 then
 						dmg = math.ceil (dmg * 0.5)
 					end
 
@@ -1281,7 +1292,8 @@ function moving ()
 
 	-- digging
 
-	if is_pressed("space") and pl.digcount > -1 and pl.iscarry == nil and pl.isjump == 0 and pl.state ~= 'pick' 
+	if not NETWORK_CLIENT_PREDICTION
+		and is_pressed("space") and pl.digcount > -1 and pl.iscarry == nil and pl.isjump == 0 and pl.state ~= 'pick'
 		and (pl.state =='idle' or pl.state == 'dig') then
 
 		--print (pl.state..' dig'..game.dt)
@@ -1624,11 +1636,11 @@ function moving ()
 	-- 	sound_stop ('walk')
 	-- end
 
-	if pl.oldstate == 'walk' and (currentFrame==2) then
+	if pl.oldstate == 'walk' and (pl.animation.frame==2) then
 		sound_add ("step1",30)
 	end
 
-	if pl.oldstate == 'walk' and (currentFrame==8) then
+	if pl.oldstate == 'walk' and (pl.animation.frame==8) then
 		sound_add ("step2",31)
 	end
 
@@ -1640,37 +1652,37 @@ function moving ()
 
 	--print (pl.y..' '..pl.x)
 
-	if pl.state == "pullup" and currentFrame<3 then
+	if pl.state == "pullup" and pl.animation.frame<3 then
 		
 		if pl.flip==1 and (is_pressed ('d')==false and is_pressed ('w')==false) then
-			aniReverce = aniReverce or 0
+			pl.animation.reverse = pl.animation.reverse or 0
 			pl.hangcancel = true
 		end
 
 		if pl.flip==-1 and (is_pressed ('a')==false and is_pressed ('w')==false)  then
-			aniReverce = aniReverce or 0
+			pl.animation.reverse = pl.animation.reverse or 0
 			pl.hangcancel = true
 		end
 	end
 
 
 
-	if (pl.state == "stepup" or pl.state == "stepupb") and currentFrame<3 then
+	if (pl.state == "stepup" or pl.state == "stepupb") and pl.animation.frame<3 then
 
 		if pl.flip==1 and is_pressed ('d')==false then
-			if aniReverce==nil then
+			if pl.animation.reverse==nil then
 				--dump (togo.x)
 			end
-			aniReverce = aniReverce or 0
+			pl.animation.reverse = pl.animation.reverse or 0
 		end
 
 		if pl.flip==-1 and is_pressed ('a')==false then
-			aniReverce = aniReverce or 0
+			pl.animation.reverse = pl.animation.reverse or 0
 		end
 		
 	end
 
-	if (pl.state == "stepup" or pl.state == "stepupb") and currentFrame>2 then
+	if (pl.state == "stepup" or pl.state == "stepupb") and pl.animation.frame>2 then
 		sound_add ('stepup',5)
 	else
 		--sound_stop ('climb')
@@ -1734,7 +1746,7 @@ function moving ()
 	end
 
 	--nausea
-	if pl.state=='pullup' and pl.buffs[17] and currentFrame==1 
+	if pl.state=='pullup' and pl.buffs[17] and pl.animation.frame==1
 		and math.random (0,100)<5 then
 		pl.jumpleft = 0
 		pl.state = 'fall'

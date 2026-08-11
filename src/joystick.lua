@@ -1,3 +1,5 @@
+local InputState = require("src.input_state")
+
 function love.joy_keypressed (key,scan,value,what,num)
 
 	if value and type(value)=='number' and math.abs(value)~=1 then
@@ -212,6 +214,10 @@ end
 
 --(love.keyboard.isScancodeDown('rctrl')
 function is_pressed (str)
+	if ACTIVE_INPUT_STATE then
+		return InputState.is_down(ACTIVE_INPUT_STATE, str)
+	end
+
 	-- Arrow keys are permanent secondary movement controls. In development
 	-- builds Ctrl+arrow remains reserved for the old item/block selector.
 	local arrow = movement_arrow[str]

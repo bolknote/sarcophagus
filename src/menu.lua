@@ -42,6 +42,78 @@ local function ensure_menu_selection()
 	stradd = stradd or ""
 end
 
+local function lan_servers()
+	return multiplayer and multiplayer:servers() or {}
+end
+
+local function selected_lan_server()
+	local servers = lan_servers()
+	if #servers == 0 then
+		game.network_server_select = 1
+		return nil, servers
+	end
+	game.network_server_select = ((tonumber(game.network_server_select) or 1) - 1)
+		% #servers + 1
+	return servers[game.network_server_select], servers
+end
+
+local function lan_server_compatible(record)
+	return record
+		and tostring(record.protocol_version) == tostring(MultiplayerProtocol.VERSION)
+		and record.game_version == (game_version or ""):match("^%s*(.-)%s*$")
+		and (not multiplayer.content_hash
+			or record.content_hash == multiplayer.content_hash)
+end
+
+local function localized_network_error(value)
+	value = MultiplayerProtocol.sanitize_utf8(value)
+	return msg.network.errors[value] or value
+end
+
+local function remove_last_utf8_character(value)
+	value = MultiplayerProtocol.sanitize_utf8(value)
+	if value == "" then return value end
+	local offset = utf8 and utf8.offset and utf8.offset(value, -1)
+	if not offset then return "" end
+	return value:sub(1, offset - 1)
+end
+
+local function reset_menu_client()
+	if multiplayer and multiplayer.role == "client" then
+		return multiplayer:prepare_quit()
+	end
+	return true
+end
+
+local function connect_to_lan_server(record)
+	if not record then return false, msg.menu.lan_none end
+	if not record.joinable then return false, msg.menu.lan_not_joinable end
+	if not lan_server_compatible(record) then
+		return false, msg.menu.lan_incompatible
+	end
+	local reset, reset_error = reset_menu_client()
+	if not reset then return false, reset_error end
+	return multiplayer:connect({
+		host = record.address,
+		port = record.gameplay_port,
+		game_version = game_version,
+	})
+end
+
+local function parse_manual_address(value)
+	value = (value or ""):match("^%s*(.-)%s*$")
+	if value == "" then return nil, nil end
+	local host, port = value:match("^%[([^]]+)%]:(%d+)$")
+	if not host then
+		local colon_count = select(2, value:gsub(":", ""))
+		if colon_count == 1 then host, port = value:match("^([^:]+):(%d+)$") end
+	end
+	if not host then host = value:gsub("^%[([^]]+)%]$", "%1") end
+	port = tonumber(port) or MultiplayerProtocol.DEFAULT_GAMEPLAY_PORT
+	if host == "" or port < 1 or port > 65535 then return nil, nil end
+	return host, port
+end
+
 local generation_started_at = 0
 local generation_progress = 0
 local generation_stage = 1
@@ -209,6 +281,7 @@ local function finish_map_generation()
 	game.menu = nil
 	game.mapgenning = nil
 	game.moved = true
+	multiplayer_world_started()
 	return true
 end
 
@@ -303,10 +376,67 @@ function love.menu_keypressed(key, scan)
 		return
 	end
 
+	if game.menu_manual_ip ~= nil then
+		if scan == "escape" then
+			game.menu_manual_ip = nil
+			love.keyboard.setTextInput(false)
+			stradd = ""
+		elseif scan == "backspace" then
+			game.menu_manual_ip = remove_last_utf8_character(game.menu_manual_ip)
+		elseif scan == "return" then
+			local host, port = parse_manual_address(game.menu_manual_ip)
+			if host then
+				local reset, reset_error = reset_menu_client()
+				if not reset then
+					stradd = localized_network_error(reset_error)
+					return
+				end
+				local connected, connect_error = multiplayer:connect({
+					host = host,
+					port = port,
+					game_version = game_version,
+				})
+				if connected then
+					stradd = menu_message(msg.menu.connecting, { [1] = host })
+					game.menu_manual_ip = nil
+					love.keyboard.setTextInput(false)
+				else
+					stradd = localized_network_error(connect_error)
+				end
+			end
+		end
+		return
+	end
+
 	-- A queued key event can be delivered after love.load and before the first
 	-- menu_update.  Prepare the slot state here as well, so early arrows,
 	-- Enter, and save deletion cannot operate on nil fields.
 	ensure_menu_selection()
+
+	if scan == "tab" then
+		local _, servers = selected_lan_server()
+		if #servers > 0 then
+			game.network_server_select = game.network_server_select % #servers + 1
+		end
+		return
+	end
+
+	if scan == "j" then
+		local record = selected_lan_server()
+		local connected, connect_error = connect_to_lan_server(record)
+		if connected then
+			stradd = menu_message(msg.menu.connecting, { [1] = record.display_name })
+		else
+			stradd = localized_network_error(connect_error)
+		end
+		return
+	end
+
+	if scan == "i" then
+		game.menu_manual_ip = ""
+		love.keyboard.setTextInput(true)
+		return
+	end
 
 	if scan == "q" then
 		love.event.quit()
@@ -333,6 +463,9 @@ function love.menu_keypressed(key, scan)
 	end
 
 	if scan == "return" then
+		if multiplayer and multiplayer.role == "client" then
+			multiplayer:prepare_quit()
+		end
 		sound_add("button", 20, {kill = 1})
 
 		if game.files[game.savepos] ~= "-----------------" then
@@ -349,6 +482,7 @@ function love.menu_keypressed(key, scan)
 				love.draw = love.old_draw
 				screen_full()
 				game.moved = true
+				multiplayer_world_started()
 			else
 				stradd = msg.persistence.load_failed
 				if oldprint then
@@ -457,6 +591,11 @@ local function initialize_menu()
 end
 
 function love.menu_update(d)
+	if multiplayer then multiplayer:update(d) end
+	if multiplayer and multiplayer.role == "client"
+		and multiplayer.client_state == "playing" then
+		return
+	end
 	dt = d
 	sound_update()
 
@@ -494,6 +633,45 @@ function love.menu_update(d)
 	end
 
 	game.menu = game.menu .. msg.menu.switch_worlds .. "\n\n{#feae34ff}"
+	local selected_server, servers = selected_lan_server()
+	if #servers > 0 then
+		game.menu = game.menu .. msg.menu.lan_title
+		for index, record in ipairs(servers) do
+			local marker = index == game.network_server_select
+				and "{#f77622ff}>" or "{#ffffffff} "
+			local status = record.joinable and record.address or msg.menu.lan_not_joinable
+			if not lan_server_compatible(record) then
+				status = msg.menu.lan_incompatible
+			end
+			game.menu = game.menu .. marker .. " " .. menu_message(msg.menu.lan_entry, {
+				[1] = record.display_name,
+				[2] = status,
+				[3] = record.players,
+				[4] = record.capacity,
+			}) .. "\n"
+		end
+		game.menu = game.menu .. msg.menu.lan_join
+	elseif multiplayer and multiplayer.discovery_error then
+		game.menu = game.menu .. menu_message(msg.menu.lan_error, {
+			[1] = tostring(multiplayer.discovery_error),
+		})
+	else
+		game.menu = game.menu .. msg.menu.lan_searching
+	end
+	game.menu = game.menu .. msg.menu.lan_manual
+	if game.menu_manual_ip ~= nil then
+		game.menu = game.menu .. "\n" .. msg.menu.manual_prompt
+			.. "{#fee761ff}" .. game.menu_manual_ip .. "_{#ffffffff}"
+	end
+	if multiplayer and multiplayer.role == "client"
+		and multiplayer.client_state ~= "playing" then
+		game.menu = game.menu .. "\n" .. menu_message(msg.menu.connecting, {
+			[1] = multiplayer.client_state,
+		})
+		if multiplayer.last_error then
+			stradd = localized_network_error(multiplayer.last_error)
+		end
+	end
 	if stradd ~= "" then
 		game.menu = game.menu .. "\n\n{#ff0044ff}" .. stradd .. "{#ffffffff}"
 	end
@@ -555,5 +733,6 @@ function love.menu_draw()
 	love.graphics.setFont(font2)
 	love.graphics.printf(text_color(msg.menu.etymology), 35, 105, 700)
 	love.graphics.setFont(font)
-	love.graphics.printf(text_color(game.menu or ""), 100, 150, 700)
+	local safe_menu = MultiplayerProtocol.sanitize_utf8(game.menu or "")
+	love.graphics.printf(text_color(safe_menu), 100, 150, 700)
 end

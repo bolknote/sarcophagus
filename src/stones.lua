@@ -1779,6 +1779,7 @@ return z,0
 end,
 onstay = function (x,y)
 	world[y][x].t = world[y][x].t - 100
+	multiplayer_record_cell(x, y)
 end
 }
 

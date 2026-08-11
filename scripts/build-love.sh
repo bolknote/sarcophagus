@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export SARCOPHAGUS_TEST_BACKGROUND="${SARCOPHAGUS_TEST_BACKGROUND:-1}"
+
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 love_binary="${LOVE_BIN:-$project_root/.tools/love-11.5/runtime/love.app/Contents/MacOS/love}"
@@ -53,6 +55,8 @@ if [[ ! -f "$release_manifest" ]]; then
     exit 1
 fi
 
+bash "$script_directory/check-release-manifest.sh"
+
 while IFS= read -r runtime_file; do
     if [[ -z "$runtime_file" || ! -f "$project_root/$runtime_file" ]]; then
         echo "Release manifest entry is missing: $runtime_file" >&2
@@ -79,8 +83,8 @@ mkdir -p "$staging_directory/tests"
 cp "$project_root/tests/smoke.lua" "$staging_directory/tests/smoke.lua"
 
 printf '%s\n' 'return { build_mode = "release" }' > "$staging_directory/release_config.lua"
-cp "$generated_directory/quad.png" "$staging_directory/quad.png"
-cp "$generated_directory/quad.table" "$staging_directory/quad.table"
+cp "$generated_directory/quad.png" "$staging_directory/sprite-atlas-v1.png"
+cp "$generated_directory/quad.table" "$staging_directory/sprite-atlas-v1.table"
 
 make_archive() {
     local target="$1"

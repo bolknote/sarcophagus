@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export SARCOPHAGUS_TEST_BACKGROUND="${SARCOPHAGUS_TEST_BACKGROUND:-1}"
+
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 love_binary="${LOVE_BIN:-$project_root/.tools/love-11.5/runtime/love.app/Contents/MacOS/love}"
@@ -25,7 +27,32 @@ fi
 
 LOVE_BIN="$love_binary" "$script_directory/check-locales.sh"
 LOVE_BIN="$love_binary" "$script_directory/check-ui-strings.sh"
+bash "$script_directory/check-release-manifest.sh"
 "$script_directory/check-platform-packaging.sh"
+
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_SMOKE_TEST=actors \
+    "$love_binary" "$project_root"
+
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_SMOKE_TEST=network \
+    "$love_binary" "$project_root"
+
+SARCOPHAGUS_PROCESS_DISCOVERY=multicast \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
+SARCOPHAGUS_NET_LATENCY_MS=25 \
+SARCOPHAGUS_NET_JITTER_MS=15 \
+SARCOPHAGUS_NET_LOSS_PERCENT=20 \
+SARCOPHAGUS_NET_DUPLICATION_PERCENT=15 \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
+SARCOPHAGUS_NET_DISCONNECT_AFTER=0.35 \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_SMOKE_TEST=multiplayer-gameplay \
+    "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=display \

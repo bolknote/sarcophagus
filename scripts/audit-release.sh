@@ -33,7 +33,7 @@ fi
 
 {
     LC_ALL=C sort -u "$manifest"
-    printf '%s\n' quad.png quad.table release_config.lua
+    printf '%s\n' sprite-atlas-v1.png sprite-atlas-v1.table release_config.lua
 } | LC_ALL=C sort -u > "$expected_files"
 
 /usr/bin/unzip -tqq "$archive"
