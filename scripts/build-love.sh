@@ -7,6 +7,7 @@ export SARCOPHAGUS_TEST_BACKGROUND="${SARCOPHAGUS_TEST_BACKGROUND:-1}"
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 love_binary="${LOVE_BIN:-$project_root/.tools/love-11.5/runtime/love.app/Contents/MacOS/love}"
+love_test="$script_directory/run-love-test.sh"
 build_root="$project_root/build"
 generated_directory="$build_root/generated"
 staging_directory="$build_root/staging"
@@ -74,7 +75,7 @@ find "$staging_directory" -mindepth 1 -delete
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=atlas \
 SARCOPHAGUS_ATLAS_OUTPUT="$generated_directory" \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 rsync -a --files-from="$release_manifest" \
     "$project_root/" "$staging_directory/"
@@ -100,7 +101,7 @@ make_archive "$smoke_archive"
 
 /usr/bin/env -u SARCOPHAGUS_BUILD_MODE \
     SARCOPHAGUS_SMOKE_TEST=mapgen \
-    "$love_binary" "$smoke_archive"
+    "$love_test" "$love_binary" "$smoke_archive"
 
 find "$staging_directory/tests" -mindepth 1 -delete
 rmdir "$staging_directory/tests"

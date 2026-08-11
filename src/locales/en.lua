@@ -154,17 +154,10 @@ msg.menu = {
 	version = "{#aaaaaaff}Version _1_\n",
 	update = "{#aaaaaaff}Version _1_ {#fee761ff}\n\n» _2_ is available! «\n",
 	etymology = "{#3a4466ff}— from the Greek sarx meaning “flesh”, and phagein - “to eat”{#ffffffff}",
-	lan_title = "\n\n{#63c74dff}Worlds found on the local network:{#ffffffff}\n",
-	lan_entry = "_1_  _2_  [_3_/_4_]",
-	lan_join = "\nPress {#fee761ff}Tab{#ffffffff} to select a world and {#fee761ff}J{#ffffffff} to join it.",
+	lan_found = "\n\n{#63c74dff}A game was found on the local network.{#ffffffff}\nPress {#fee761ff}J{#ffffffff} to join.",
 	lan_searching = "\n\n{#8b9bb4ff}Searching the local network automatically…{#ffffffff}",
-	lan_error = "\n\n{#ff0044ff}LAN discovery is unavailable: _1_{#ffffffff}",
-	lan_manual = "\nPress {#fee761ff}I{#ffffffff} to connect by IP address.",
-	lan_incompatible = "incompatible",
-	lan_not_joinable = "occupied",
-	lan_none = "No LAN world is selected.",
-	manual_prompt = "Enter host or host:port, then press Enter: ",
-	connecting = "Connecting to _1_...",
+	lan_unavailable = "\n\n{#8b9bb4ff}The game found on the local network is unavailable.{#ffffffff}",
+	lan_discovery_unavailable = "\n\n{#8b9bb4ff}Local-network game discovery is unavailable.{#ffffffff}",
 }
 
 msg.network = {
@@ -185,6 +178,9 @@ msg.network = {
 	},
 	exit_hint = "Open Esc menu to leave the session.",
 	states = {
+		connecting = "Connecting to the game…",
+		awaiting_approval = "Waiting for the host's permission…",
+		receiving_snapshot = "Loading the world…",
 		catching_up = "Synchronizing recent world changes…",
 		reconnecting = "Reconnecting to the host…",
 		resuming = "Restoring the session…",
@@ -193,6 +189,7 @@ msg.network = {
 		failed = "Network synchronization failed.",
 	},
 	errors = {
+		generic = "Could not connect to the game found on the local network.",
 		protocol_mismatch = "The host uses an incompatible network protocol.",
 		game_version_mismatch = "The game versions do not match.",
 		invalid_content_hash = "The remote build sent an invalid content signature.",

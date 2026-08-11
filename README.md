@@ -177,6 +177,11 @@ Run the automated compatibility checks:
 ./scripts/test.sh
 ```
 
+On macOS, LÖVE smoke-test processes are launched hidden through `open -j`.
+The launcher still waits for completion and verifies the test's own success
+marker. Set `SARCOPHAGUS_TEST_HIDDEN=0` to run them directly when visually
+debugging a window or display-mode test.
+
 The suite also performs an actual windowed → fullscreen → windowed transition,
 checks double-size rendering, and exercises the complete ten-minute autosave
 path (incremental serialization, worker-thread compression and writing, backup,
@@ -475,6 +480,11 @@ love /абсолютный/путь/к/Sarcophagus
 ```sh
 ./scripts/test.sh
 ```
+
+В macOS процессы smoke-тестов запускаются скрыто через `open -j`. Launcher всё
+равно ждёт завершения и проверяет собственный маркер успеха теста. Для визуальной
+отладки окна или видеорежима можно вернуть прямой запуск переменной
+`SARCOPHAGUS_TEST_HIDDEN=0`.
 
 Набор тестов также реально переключает окно → полный экран → окно, проверяет
 двойной масштаб и весь путь десятиминутного autosave: постановку в очередь,

@@ -90,15 +90,6 @@ end
 
 
 function love.textinput(t)
-	if game.menu_manual_ip ~= nil then
-		-- Manual network addresses are ASCII by definition here. Filtering the
-		-- input also prevents byte-wise editing from ever leaving invalid UTF-8
-		-- in the menu renderer.
-		local address_text = tostring(t or ""):gsub("[^%w%.:%-%[%]_%%]", "")
-		game.menu_manual_ip = (game.menu_manual_ip .. address_text):sub(1, 256)
-		return
-	end
-
     if game.inputing and t~='`' then
     	game.textinput = game.textinput or ""
     	game.textinputold = game.textinputold or ""

@@ -2677,6 +2677,40 @@ local function validate_display()
 		"an immediate up-arrow cannot wrap from the first save slot")
 	assert(menu_move_save_position(nil, 1, nil) == 2,
 		"an immediate down-arrow cannot move from the first save slot")
+	local compatible_lan_server = {
+		protocol_version = MultiplayerProtocol.VERSION,
+		game_version = (game_version or ""):match("^%s*(.-)%s*$"),
+		content_hash = multiplayer and multiplayer.content_hash,
+		joinable = true,
+	}
+	local prompt_state, prompt_server = menu_lan_prompt_state({
+		{
+			protocol_version = MultiplayerProtocol.VERSION + 1,
+			game_version = compatible_lan_server.game_version,
+			content_hash = compatible_lan_server.content_hash,
+			joinable = true,
+		},
+		compatible_lan_server,
+	})
+	assert(prompt_state == "found" and prompt_server == compatible_lan_server,
+		"LAN menu does not offer the first compatible discovered game")
+	assert(menu_lan_prompt_state({
+		{
+			protocol_version = compatible_lan_server.protocol_version,
+			game_version = compatible_lan_server.game_version,
+			content_hash = compatible_lan_server.content_hash,
+			joinable = false,
+		},
+	}) == "unavailable", "LAN menu offers an occupied game")
+	assert(menu_lan_prompt_state({}, "multicast unavailable")
+		== "discovery_unavailable", "LAN discovery failure has no friendly menu state")
+	assert(menu_lan_prompt_state({}) == "searching",
+		"empty LAN discovery does not leave the menu in its searching state")
+	assert(msg.menu.lan_manual == nil and msg.menu.manual_prompt == nil,
+		"main menu still exposes manual IP entry")
+	assert(msg.menu.lan_found:find("J", 1, true)
+		and not msg.menu.lan_found:find("_1_", 1, true),
+		"discovered-game prompt exposes technical data instead of the J action")
 	assert(tool_damage_per_second({ dmgmin = 2, dmgmax = 6, digspeed = 2 }) == 2,
 		"weapon DPS does not use the average of minimum and maximum damage")
 	assert(next_numeric_id({ [1] = true, [3] = true }) == 4,

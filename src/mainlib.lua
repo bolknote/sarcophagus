@@ -1919,7 +1919,6 @@ function multiplayer_apply_snapshot(snapshot)
 	end
 	multiplayer_project_dynamic_entities()
 	inv_show()
-	game.menu_manual_ip = nil
 	love.keyboard.setTextInput(false)
 	love.keypressed = love.old_keypressed
 	love.update = love.old_update
@@ -1942,7 +1941,7 @@ function multiplayer_world_started()
 	local started, port_or_error = multiplayer:start_host({
 		game_version = game_version,
 		world_id = game.world_id,
-		display_name = "Sarcophagus #" .. tostring(game.savepos or 1),
+		display_name = "Sarcophagus",
 	})
 	if started then
 		game.multiplayer_port = port_or_error

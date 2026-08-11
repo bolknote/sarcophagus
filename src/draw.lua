@@ -84,10 +84,10 @@ local function draw_multiplayer_status()
 			text = msg.network.client_status
 		else
 			local state = msg.network.states[multiplayer.client_state]
-				or multiplayer.client_state
+				or msg.network.states.connecting
 			local reason = multiplayer.last_error
 				and (msg.network.errors[tostring(multiplayer.last_error)]
-					or tostring(multiplayer.last_error))
+					or msg.network.errors.generic)
 			text = state .. (reason and ("\n" .. reason) or "")
 				.. "\n" .. msg.network.exit_hint
 		end

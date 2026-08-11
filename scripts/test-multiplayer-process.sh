@@ -7,6 +7,7 @@ export SARCOPHAGUS_TEST_BACKGROUND="${SARCOPHAGUS_TEST_BACKGROUND:-1}"
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 love_binary="${LOVE_BIN:-$project_root/.tools/love-11.5/runtime/love.app/Contents/MacOS/love}"
+love_test="$script_directory/run-love-test.sh"
 
 if [[ ! -x "$love_binary" ]]; then
     echo "LÖVE 11.5 executable not found: $love_binary" >&2
@@ -17,6 +18,8 @@ test_directory="$(mktemp -d "${TMPDIR:-/tmp}/sarcophagus-multiplayer.XXXXXX")"
 host_log="$test_directory/host.log"
 client_log="$test_directory/client.log"
 host_pid=""
+: > "$host_log"
+: > "$client_log"
 
 cleanup() {
     if [[ -n "$host_pid" ]] && kill -0 "$host_pid" 2>/dev/null; then
@@ -37,7 +40,8 @@ fi
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST="network-process-host:$test_specification" \
-    "$love_binary" "$project_root" >"$host_log" 2>&1 &
+SARCOPHAGUS_TEST_LOG="$host_log" \
+    "$love_test" "$love_binary" "$project_root" &
 host_pid=$!
 
 host_ready=false
@@ -61,7 +65,8 @@ fi
 set +e
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST="network-process-client:$test_specification" \
-    "$love_binary" "$project_root" >"$client_log" 2>&1
+SARCOPHAGUS_TEST_LOG="$client_log" \
+    "$love_test" "$love_binary" "$project_root"
 client_status=$?
 wait "$host_pid"
 host_status=$?

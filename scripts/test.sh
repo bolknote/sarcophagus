@@ -7,6 +7,7 @@ export SARCOPHAGUS_TEST_BACKGROUND="${SARCOPHAGUS_TEST_BACKGROUND:-1}"
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 love_binary="${LOVE_BIN:-$project_root/.tools/love-11.5/runtime/love.app/Contents/MacOS/love}"
+love_test="$script_directory/run-love-test.sh"
 
 if [[ ! -x "$love_binary" ]]; then
     echo "LÖVE 11.5 executable not found: $love_binary" >&2
@@ -32,11 +33,11 @@ bash "$script_directory/check-release-manifest.sh"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=actors \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=network \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_PROCESS_DISCOVERY=multicast \
 LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
@@ -52,39 +53,39 @@ LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=multiplayer-gameplay \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=display \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=display-modes \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 /usr/bin/env -u SARCOPHAGUS_LANGUAGE \
     SARCOPHAGUS_BUILD_MODE=development \
     SARCOPHAGUS_SMOKE_TEST=settings \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 for language in en ru; do
     SARCOPHAGUS_BUILD_MODE=development \
     SARCOPHAGUS_LANGUAGE="$language" \
     SARCOPHAGUS_SMOKE_TEST=load:9 \
-        "$love_binary" "$project_root"
+        "$love_test" "$love_binary" "$project_root"
 done
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_LANGUAGE=ru \
 SARCOPHAGUS_SMOKE_TEST=persistence \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_LANGUAGE=ru \
 SARCOPHAGUS_SMOKE_TEST=autosave \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_LANGUAGE=ru \
 SARCOPHAGUS_SMOKE_TEST=mapgen \
-    "$love_binary" "$project_root"
+    "$love_test" "$love_binary" "$project_root"
