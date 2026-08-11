@@ -196,15 +196,27 @@ function EnetTransport:_drain_outgoing(force)
 	local remaining = {}
 	local remaining_bytes = 0
 	local first_error
+	local blocked_channels = {}
 	for _, packet in ipairs(self.outgoing_queue) do
-		if force or packet.due <= current then
+		if blocked_channels[packet.channel] then
+			remaining[#remaining + 1] = packet
+			remaining_bytes = remaining_bytes + #packet.data
+		elseif force or packet.due <= current then
 			local sent, send_error = self:_actual_send(
 				packet.peer,
 				packet.data,
 				packet.channel,
 				packet.reliable
 			)
-			if not sent and not first_error then first_error = send_error end
+			if not sent then
+				-- A delayed reliable packet is still owned by the transport until
+				-- peer.send succeeds. Dropping it here used to create silent gaps in
+				-- the world stream whenever a transient send error occurred.
+				remaining[#remaining + 1] = packet
+				remaining_bytes = remaining_bytes + #packet.data
+				blocked_channels[packet.channel] = true
+				if not first_error then first_error = send_error end
+			end
 		else
 			remaining[#remaining + 1] = packet
 			remaining_bytes = remaining_bytes + #packet.data
@@ -273,7 +285,8 @@ function EnetTransport:poll(timeout)
 		end
 	end
 	if not event then return nil end
-	if event and event.peer and event.type == "connect" then
+	if event and event.peer and event.type == "connect"
+		and (not self.peer or event.peer == self.peer) then
 		self.peer = event.peer
 		self.connected_at = clock()
 	end
@@ -356,23 +369,30 @@ function EnetTransport:flush()
 	if not self.closed and self.host and self.host.flush then self.host:flush() end
 end
 
-function EnetTransport:disconnect(data, immediate)
-	if not self.peer then return true end
+function EnetTransport:disconnect_peer(peer, data, immediate)
+	peer = peer or self.peer
+	if not peer then return true end
 	self:_drain_outgoing(true)
 	local disconnected, disconnect_error
-	if immediate and self.peer.disconnect_now then
-		disconnected, disconnect_error = pcall(self.peer.disconnect_now, self.peer, data or 0)
+	if immediate and peer.disconnect_now then
+		disconnected, disconnect_error = pcall(peer.disconnect_now, peer, data or 0)
 	else
-		disconnected, disconnect_error = pcall(self.peer.disconnect, self.peer, data or 0)
+		disconnected, disconnect_error = pcall(peer.disconnect, peer, data or 0)
 		self:flush()
 	end
 	if not disconnected then return false, tostring(disconnect_error) end
-	self.peer = nil
-	self.connected_at = nil
-	self.outgoing_queue = {}
-	self.outgoing_bytes = 0
-	self.last_due_by_channel = {}
+	if peer == self.peer then
+		self.peer = nil
+		self.connected_at = nil
+		self.outgoing_queue = {}
+		self.outgoing_bytes = 0
+		self.last_due_by_channel = {}
+	end
 	return true
+end
+
+function EnetTransport:disconnect(data, immediate)
+	return self:disconnect_peer(self.peer, data, immediate)
 end
 
 function EnetTransport:close()

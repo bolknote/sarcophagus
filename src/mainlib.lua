@@ -84,7 +84,8 @@ local network_sound_event_ticks = {}
 local network_event_id = 0
 local network_client_event_id = 0
 local network_client_event_received_id = 0
-local NETWORK_EVENT_QUEUE_LIMIT = 256
+local NETWORK_EVENT_QUEUE_LIMIT = 4096
+local network_event_queue_overflowed = false
 local network_pending_world_deltas = {}
 local network_pending_presentation_events = {}
 
@@ -137,9 +138,60 @@ local function network_valid_actor_snapshot(actor, expected_id, expected_role)
 	return math.abs(actor.truex) <= limit and math.abs(actor.truey) <= limit
 end
 
+local replicated_shared_game_fields = {
+	time = true,
+	state = true,
+	start = true,
+	disaster = true,
+	ambient = true,
+	ambient_sound = true,
+}
+
+local function network_valid_shared_game(shared)
+	if type(shared) ~= "table" then return false end
+	for field in pairs(shared) do
+		if not replicated_shared_game_fields[field] then return false end
+	end
+	return true
+end
+
+local function network_valid_entity_collection(collection)
+	if type(collection) ~= "table" then return false end
+	local count = 0
+	local tile_size = math.max(1, tonumber(cf and cf.w) or 32,
+		tonumber(cf and cf.h) or 32)
+	local coordinate_limit = math.max(1, tonumber(cf and cf.wmax) or 1)
+		* tile_size * 4
+	for id, entity in pairs(collection) do
+		count = count + 1
+		if count > 65536 or type(entity) ~= "table" then return false end
+		local id_kind = type(id)
+		if (id_kind ~= "number" and id_kind ~= "string")
+			or (id_kind == "number" and not network_finite_number(id))
+			or (id_kind == "string" and (#id > 128 or id:find("%z"))) then
+			return false
+		end
+		for _, field in ipairs({ "truex", "truey", "x", "y", "tx", "ty" }) do
+			local value = entity[field]
+			if value ~= nil and (not network_finite_number(value)
+				or math.abs(value) > coordinate_limit) then
+				return false
+			end
+		end
+		if entity.light ~= nil then
+			if type(entity.light) ~= "table" then return false end
+			for index = 1, 4 do
+				if not network_finite_number(entity.light[index]) then return false end
+			end
+		end
+	end
+	return true
+end
+
 function multiplayer_reset_network_events(reset_sequence)
 	network_outgoing_events = {}
 	network_sound_event_ticks = {}
+	network_event_queue_overflowed = false
 	if reset_sequence then
 		network_event_id = 0
 		network_client_event_id = 0
@@ -152,7 +204,8 @@ end
 
 function multiplayer_queue_sound_event(name, sound_id, options, actor_id)
 	if not multiplayer or multiplayer.role ~= "host" or not multiplayer.session
-		or multiplayer.session.state ~= MultiplayerSession.STATE.PLAYING then
+		or (multiplayer.session.state ~= MultiplayerSession.STATE.PLAYING
+			and multiplayer.session.state ~= MultiplayerSession.STATE.RECONNECT_GRACE) then
 		return false
 	end
 	if NETWORK_SOUND_EVENT_APPLY then return false end
@@ -181,6 +234,10 @@ function multiplayer_queue_sound_event(name, sound_id, options, actor_id)
 	local tick = math.max(0, math.floor(tonumber(game and game.network_tick) or 0))
 	local event_key = table.concat({ actor_id or "world", name, tostring(sound_id) }, ":")
 	if network_sound_event_ticks[event_key] == tick then return true, "coalesced" end
+	if #network_outgoing_events >= NETWORK_EVENT_QUEUE_LIMIT then
+		network_event_queue_overflowed = true
+		return false, "network event queue overflow"
+	end
 	network_sound_event_ticks[event_key] = tick
 
 	network_event_id = network_event_id + 1
@@ -200,16 +257,14 @@ function multiplayer_queue_sound_event(name, sound_id, options, actor_id)
 		play = options.play and true or false,
 		kill = options.kill and true or false,
 	}
-	if #network_outgoing_events >= NETWORK_EVENT_QUEUE_LIMIT then
-		table.remove(network_outgoing_events, 1)
-	end
 	network_outgoing_events[#network_outgoing_events + 1] = event
 	return true, event.event_id
 end
 
 function multiplayer_queue_text_event(text, temporary, actor_id)
 	if not multiplayer or multiplayer.role ~= "host" or not multiplayer.session
-		or multiplayer.session.state ~= MultiplayerSession.STATE.PLAYING then
+		or (multiplayer.session.state ~= MultiplayerSession.STATE.PLAYING
+			and multiplayer.session.state ~= MultiplayerSession.STATE.RECONNECT_GRACE) then
 		return false
 	end
 	if NETWORK_TEXT_EVENT_APPLY then return false end
@@ -219,6 +274,10 @@ function multiplayer_queue_text_event(text, temporary, actor_id)
 	end
 	actor_id = actor_id or ACTIVE_ACTOR_ID
 	if actor_id ~= "host" and actor_id ~= "guest" then return false end
+	if #network_outgoing_events >= NETWORK_EVENT_QUEUE_LIMIT then
+		network_event_queue_overflowed = true
+		return false, "network event queue overflow"
+	end
 
 	network_event_id = network_event_id + 1
 	local event = {
@@ -231,9 +290,6 @@ function multiplayer_queue_text_event(text, temporary, actor_id)
 		text = text,
 		temporary = temporary and true or false,
 	}
-	if #network_outgoing_events >= NETWORK_EVENT_QUEUE_LIMIT then
-		table.remove(network_outgoing_events, 1)
-	end
 	network_outgoing_events[#network_outgoing_events + 1] = event
 	return true, event.event_id
 end
@@ -241,6 +297,14 @@ end
 function multiplayer_next_network_event()
 	if #network_outgoing_events == 0 then return nil end
 	return table.remove(network_outgoing_events, 1)
+end
+
+function multiplayer_network_catchup_ready()
+	if network_event_queue_overflowed then
+		return false, "event_catchup_overflow"
+	end
+	if network_world_journal then return network_world_journal:ready() end
+	return true
 end
 
 function multiplayer_apply_network_event(event)
@@ -425,6 +489,18 @@ function multiplayer_session_active()
 	return multiplayer and multiplayer.role == "host" and multiplayer.session
 		and multiplayer.session.guest ~= nil
 		and multiplayer.session.state ~= MultiplayerSession.STATE.SHUTDOWN
+end
+
+function multiplayer_run_as_actor(actor_id, callback, ...)
+	if type(callback) ~= "function" then error("actor callback is required", 2) end
+	local actor = actors and actors:get(actor_id)
+	if not actor then return callback(...) end
+	local previous_actor_id = ACTIVE_ACTOR_ID
+	ACTIVE_ACTOR_ID = actor.actor_id
+	local called, first, second, third, fourth = pcall(callback, ...)
+	ACTIVE_ACTOR_ID = previous_actor_id
+	if not called then error(first, 0) end
+	return first, second, third, fourth
 end
 
 function multiplayer_merge_time(base, host_time, guest_delta)
@@ -1038,9 +1114,7 @@ function multiplayer_replace_entities(target, source, options)
 		end
 	end
 	for id, snapshot in pairs(source or {}) do
-		if type(snapshot) ~= "table" then
-			target[id] = snapshot
-		else
+		if type(snapshot) == "table" then
 			local existed = type(target[id]) == "table"
 			local entity = existed and target[id] or {}
 			local current_x, current_y = entity.truex, entity.truey
@@ -1073,6 +1147,10 @@ function multiplayer_replace_entities(target, source, options)
 				entity.network_target_truey = snapshot.truey
 			end
 			target[id] = entity
+		else
+			-- Replication validation rejects this before mutation; keep this
+			-- defensive guard because render/update code assumes table entities.
+			target[id] = nil
 		end
 	end
 	return target
@@ -1300,10 +1378,11 @@ function multiplayer_apply_replication(state)
 		or state.actor_schema ~= 2
 		or not network_valid_actor_snapshot(state.host_actor, "host", "host")
 		or not network_valid_actor_snapshot(state.guest_actor, "guest", "guest")
-		or type(state.mobs) ~= "table" or type(state.projectiles) ~= "table"
-		or type(state.world_animation) ~= "table"
+		or not network_valid_entity_collection(state.mobs)
+		or not network_valid_entity_collection(state.projectiles)
+		or not network_valid_entity_collection(state.world_animation)
 		or type(state.tips) ~= "table" or type(state.disp) ~= "table"
-		or type(state.shared_game) ~= "table"
+		or not network_valid_shared_game(state.shared_game)
 		or (progress_present and (type(state.shared_progress) ~= "table"
 			or type(state.host_progress) ~= "table"
 			or type(state.guest_progress) ~= "table"))
@@ -1343,7 +1422,7 @@ function multiplayer_apply_replication(state)
 	game.network_server_time = state.sample_time
 	game.network_tick = tick
 	game.time = state.time
-	for field, value in pairs(state.shared_game or {}) do
+	for field, value in pairs(state.shared_game) do
 		if value == false then
 			game[field] = nil
 		else
@@ -1822,7 +1901,7 @@ local function multiplayer_validate_snapshot(snapshot)
 	if type(snapshot) ~= "table" or type(snapshot.header) ~= "table"
 		or type(snapshot.world) ~= "table" or type(snapshot.game) ~= "table"
 		or type(snapshot.tips) ~= "table" or type(snapshot.disp) ~= "table"
-		or type(snapshot.mobs) ~= "table"
+		or not network_valid_entity_collection(snapshot.mobs)
 		or snapshot.header.version ~= MultiplayerProtocol.SNAPSHOT_VERSION
 		or not MultiplayerProtocol.validate_nonnegative_integer(
 			snapshot.header.tick, 9007199254740991
@@ -2024,6 +2103,10 @@ function new_worldani (name, id, add)
 
 	for k,v in pairs(add) do
 		worldani[name][k] = v
+	end
+	if worldani[name].owner_id == nil
+		and (ACTIVE_ACTOR_ID == "host" or ACTIVE_ACTOR_ID == "guest") then
+		worldani[name].owner_id = ACTIVE_ACTOR_ID
 	end
 
 	return worldani[name]

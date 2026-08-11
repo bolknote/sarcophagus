@@ -519,10 +519,17 @@ if proj then
 			-- writemap (r.x,r.y,1)
 
 
-			if v.inv then 
+			if v.inv then
 				local d = true
 				if item[v.inv.i].onland then
-					d = item[v.inv.i].onland (v.x,v.y,v.xo,v.yo,v.inv)
+					local function apply_item_landing()
+						return item[v.inv.i].onland (v.x,v.y,v.xo,v.yo,v.inv)
+					end
+					if v.owner_id == "host" or v.owner_id == "guest" then
+						d = multiplayer_run_as_actor(v.owner_id, apply_item_landing)
+					else
+						d = apply_item_landing()
+					end
 				end
 
 				if d then				
@@ -535,9 +542,16 @@ if proj then
 				end
 
 			end
-			
+
 			if projes[v.proj].onland then
-				projes[v.proj].onland (v.x,v.y,v.xo,v.yo,v.inv)
+				local function apply_projectile_landing()
+					return projes[v.proj].onland (v.x,v.y,v.xo,v.yo,v.inv)
+				end
+				if v.owner_id == "host" or v.owner_id == "guest" then
+					multiplayer_run_as_actor(v.owner_id, apply_projectile_landing)
+				else
+					apply_projectile_landing()
+				end
 			end
 
 			proj[k] = nil
@@ -592,6 +606,8 @@ if proj then
 								target_actor,
 								apply_projectile_hit
 							)
+						elseif v.owner_id == "host" or v.owner_id == "guest" then
+							multiplayer_run_as_actor(v.owner_id, apply_projectile_hit)
 						else
 							apply_projectile_hit()
 						end

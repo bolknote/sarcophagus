@@ -71,7 +71,10 @@ function Protocol.sanitize_utf8(value, maximum)
 	return table.concat(output)
 end
 
-Protocol.VERSION = 1
+-- Version 2 adds application-level acknowledgements and reconnect stream
+-- synchronization. Keeping the old version number would let an older host
+-- accept a newer client and then disconnect it on the first stream_ack.
+Protocol.VERSION = 2
 Protocol.SNAPSHOT_VERSION = 1
 Protocol.DEFAULT_GAMEPLAY_PORT = 22122
 Protocol.CHANNEL = {
@@ -87,6 +90,7 @@ Protocol.REQUIRED_CAPABILITIES = {
 	"snapshot-v1",
 	"input-v1",
 	"actions-v1",
+	"reliable-streams-v1",
 }
 
 local message_kinds = {
@@ -99,6 +103,9 @@ local message_kinds = {
 	action = true,
 	action_result = true,
 	event = true,
+	stream_ack = true,
+	resume_ready = true,
+	resume_synced = true,
 	snapshot_meta = true,
 	snapshot_chunk = true,
 	snapshot_done = true,

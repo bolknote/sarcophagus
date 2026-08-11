@@ -521,20 +521,27 @@ function sound_add (name,id, arr)
 	local event_name = name
 	local event_actor_id = ACTIVE_ACTOR_ID
 	local source_actor = event_actor_id and actors and actors:get(event_actor_id) or nil
-	if multiplayer and multiplayer.role == "host" and event_actor_id == "guest"
-		and source_actor then
+	local network_arr = arr
+	if multiplayer and multiplayer.role == "host" and source_actor
+		and (event_actor_id == "host" or event_actor_id == "guest") then
 		local copied = {}
 		for key, value in pairs(arr) do copied[key] = value end
-		arr = copied
-		arr.x = tonumber(source_actor.xt or source_actor.tx)
-		arr.y = tonumber(source_actor.yt or source_actor.ty)
-		arr.force_spatial = true
-		name = "guest:" .. tostring(name)
+		copied.x = tonumber(source_actor.xt or source_actor.tx)
+		copied.y = tonumber(source_actor.yt or source_actor.ty)
+		copied.force_spatial = true
+		network_arr = copied
+		if event_actor_id == "guest" then
+			-- Guest simulation runs inside the host process, so its local copy must
+			-- also be positioned at the remote actor instead of the host listener.
+			arr = copied
+			name = "guest:" .. tostring(name)
+		end
 	end
 	if multiplayer_queue_sound_event and (
-		event_actor_id == "guest" or (arr.x ~= nil and arr.y ~= nil)
+		event_actor_id == "host" or event_actor_id == "guest"
+		or (network_arr.x ~= nil and network_arr.y ~= nil)
 	) then
-		multiplayer_queue_sound_event(event_name, id, arr, event_actor_id)
+		multiplayer_queue_sound_event(event_name, id, network_arr, event_actor_id)
 	end
 
 	if arr.kill then

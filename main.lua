@@ -33,6 +33,11 @@ love.window.setTitle('Sarcophagus v.'..game_version)
 -- Automated LÖVE checks still need a real graphics context, but they do not
 -- need to steal focus or cover the user's desktop.
 if os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
+	and os.getenv("SARCOPHAGUS_TEST_NO_MINIMIZE") ~= "1"
+	-- On macOS, minimizing before a smoke test toggles fullscreen can invalidate
+	-- Metal render targets. The test launcher already opens it without focus.
+	and (not love.system
+		or (love.system.getOS() ~= "OS X" and love.system.getOS() ~= "macOS"))
 	and love.window.minimize then
 	pcall(love.window.minimize)
 end
@@ -132,7 +137,7 @@ multiplayer = MultiplayerRuntime.new({
 		return true
 	end,
 	catchup_validator = function()
-		return network_world_journal:ready()
+		return multiplayer_network_catchup_ready()
 	end,
 	event_provider = multiplayer_next_network_event,
 	event_handler = multiplayer_apply_network_event,

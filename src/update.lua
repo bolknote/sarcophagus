@@ -722,7 +722,7 @@ function love.update(d)
 				moving_editor()
 			else
 				if pl.rest<=0 then
-					moving()
+					multiplayer_run_as_actor(pl.actor_id, moving)
 				else
 					game.moved = true
 				end
@@ -967,33 +967,29 @@ for k,v in pairs(worldani) do
 	if ani[v.ani_name].walk.cnt == v.ani_frame then
 
 		if k=='boom' or k=='shrapnel' then
-
-			
-			if k=='shrapnel' then
-				--
-			else
-				grenade (v.tx+1, v.ty+1)
-			end
-
-			local anvil = tile2px (v.tx+1, v.ty+1)
-			coord_screen2true (anvil)
-			col_add ('boom',anvil,'','boom','props')
-			
-			local m = collide_check ('boom','mob',{arr=1})
-
-			if m and #m>0 then
-				local dmg = 50/#m
-
-				for i,v in ipairs(m) do
-					mob_hit (v.n, dmg)	
+			local function apply_world_animation_impact()
+				if k~='shrapnel' then
+					grenade (v.tx+1, v.ty+1)
 				end
-				
+
+				local anvil = tile2px (v.tx+1, v.ty+1)
+				coord_screen2true (anvil)
+				col_add ('boom',anvil,'','boom','props')
+
+				local hit_mobs = collide_check ('boom','mob',{arr=1})
+				if hit_mobs and #hit_mobs>0 then
+					local dmg = 50/#hit_mobs
+					for _, hit_mob in ipairs(hit_mobs) do
+						mob_hit (hit_mob.n, dmg)
+					end
+				end
+
+				if collide_check ('boom','player') then player_hit (50) end
 			end
-
-			local m = collide_check ('boom','player')
-
-			if m then
-				player_hit (50)
+			if v.owner_id == "host" or v.owner_id == "guest" then
+				multiplayer_run_as_actor(v.owner_id, apply_world_animation_impact)
+			else
+				apply_world_animation_impact()
 			end
 
 		end

@@ -20,6 +20,10 @@ local channels_from_guest = {
 	hello = Protocol.CHANNEL.CONTROL,
 	ready = Protocol.CHANNEL.CONTROL,
 	disconnect = Protocol.CHANNEL.CONTROL,
+	stream_ack = Protocol.CHANNEL.CONTROL,
+	resume_ready = Protocol.CHANNEL.CONTROL,
+	ping = Protocol.CHANNEL.CONTROL,
+	pong = Protocol.CHANNEL.CONTROL,
 	input = Protocol.CHANNEL.INPUT,
 	action = Protocol.CHANNEL.WORLD,
 }
@@ -34,6 +38,9 @@ local channels_from_host = {
 	disconnect = Protocol.CHANNEL.CONTROL,
 	action_result = Protocol.CHANNEL.WORLD,
 	event = Protocol.CHANNEL.WORLD,
+	resume_synced = Protocol.CHANNEL.WORLD,
+	ping = Protocol.CHANNEL.CONTROL,
+	pong = Protocol.CHANNEL.CONTROL,
 }
 
 local function valid_message_channel(role, kind, channel)
@@ -73,6 +80,21 @@ local function valid_action_result(payload)
 		and valid_reason(payload.error)
 end
 
+local function valid_stream_position(value)
+	return Protocol.validate_nonnegative_integer(value, 9007199254740991)
+end
+
+local function valid_stream_ack(payload)
+	return type(payload) == "table"
+		and valid_stream_position(payload.world_sequence)
+		and valid_stream_position(payload.event_id)
+end
+
+local function valid_ping(payload)
+	return type(payload) == "table"
+		and Protocol.validate_nonnegative_integer(payload.nonce, 2147483647)
+end
+
 local function action_key(action_id)
 	return type(action_id) .. ":" .. tostring(action_id)
 end
@@ -103,6 +125,21 @@ function Runtime.new(options)
 		pending_actions = {},
 		pending_action_order = {},
 		max_pending_actions = 256,
+		action_retry_accumulator = 0,
+		action_retry_interval = math.max(0.1,
+			tonumber(options.action_retry_interval) or 0.75),
+		world_outbox = {},
+		world_acked_sequence = 0,
+		world_highest_sequence = 0,
+		max_world_outbox = math.max(32,
+			math.floor(tonumber(options.max_world_outbox) or 512)),
+		event_outbox = {},
+		event_acked_id = 0,
+		event_highest_id = 0,
+		max_event_outbox = math.max(64,
+			math.floor(tonumber(options.max_event_outbox) or 1024)),
+		received_world_sequence = 0,
+		received_event_id = 0,
 		role = "offline",
 		transport = nil,
 		session = nil,
@@ -145,6 +182,18 @@ function Runtime.new(options)
 		connect_timeout = math.max(1, tonumber(options.connect_timeout) or 10),
 		approval_timeout = math.max(1, tonumber(options.approval_timeout) or 35),
 		snapshot_timeout = math.max(1, tonumber(options.snapshot_timeout) or 60),
+		hello_timeout = math.max(1, tonumber(options.hello_timeout) or 8),
+		reconnect_timeout = math.max(5, tonumber(options.reconnect_timeout) or 20),
+		heartbeat_interval = math.max(0.5,
+			tonumber(options.heartbeat_interval) or 2),
+		heartbeat_timeout = math.max(4,
+			tonumber(options.heartbeat_timeout) or 12),
+		heartbeat_nonce = 0,
+		next_heartbeat = nil,
+		last_peer_activity = nil,
+		host_hello_deadline = nil,
+		resume_phase = nil,
+		resume_deadline = nil,
 		reconnect_deadline = nil,
 		next_reconnect_attempt = nil,
 	}, Runtime)
@@ -153,6 +202,173 @@ end
 local function clock()
 	if love and love.timer then return love.timer.getTime() end
 	return os.clock()
+end
+
+function Runtime:_reset_outboxes()
+	self.world_outbox = {}
+	self.world_acked_sequence = 0
+	self.world_highest_sequence = 0
+	self.event_outbox = {}
+	self.event_acked_id = 0
+	self.event_highest_id = 0
+end
+
+function Runtime:_reset_received_streams()
+	self.received_world_sequence = 0
+	self.received_event_id = 0
+end
+
+local function discard_acknowledged(outbox, field, acknowledged)
+	while outbox[1] and outbox[1][field] <= acknowledged do
+		table.remove(outbox, 1)
+	end
+end
+
+function Runtime:_acknowledge_streams(payload)
+	if not valid_stream_ack(payload) then return false, "invalid stream acknowledgement" end
+	if payload.world_sequence > self.world_highest_sequence
+		or payload.event_id > self.event_highest_id then
+		return false, "stream acknowledgement is ahead of host"
+	end
+	if payload.world_sequence > self.world_acked_sequence then
+		self.world_acked_sequence = payload.world_sequence
+		discard_acknowledged(self.world_outbox, "sequence", payload.world_sequence)
+	end
+	if payload.event_id > self.event_acked_id then
+		self.event_acked_id = payload.event_id
+		discard_acknowledged(self.event_outbox, "event_id", payload.event_id)
+	end
+	return true
+end
+
+function Runtime:_mark_outboxes_for_replay()
+	for _, item in ipairs(self.world_outbox) do item.sent = false end
+	for _, item in ipairs(self.event_outbox) do item.sent = false end
+end
+
+function Runtime:_neutralize_guest_input()
+	local guest = self.session and self.session.guest
+	local runtime = guest and self.registry:runtime(guest)
+	local input = runtime and runtime.input
+	if not input then return end
+	-- Keep the sequence so the next client snapshot remains monotonic, but never
+	-- simulate held movement or actions from the instant before a disconnect.
+	input.held = {}
+	input.pressed = {}
+	input.released = {}
+	input.aim = {}
+end
+
+function Runtime:_send_stream_ack()
+	if self.role ~= "client" or not self.transport or not self.peer then
+		return false, "peer is not connected"
+	end
+	local sent, send_error = self.transport:send(self.peer, "stream_ack", {
+		world_sequence = self.received_world_sequence,
+		event_id = self.received_event_id,
+	}, Protocol.CHANNEL.CONTROL, true)
+	if not sent then self.last_error = tostring(send_error) end
+	return sent, send_error
+end
+
+function Runtime:_queue_world_delta(delta)
+	if type(delta) ~= "table"
+		or not valid_stream_position(delta.sequence)
+		or delta.sequence ~= self.world_highest_sequence + 1 then
+		return false, "invalid host world sequence"
+	end
+	if #self.world_outbox >= self.max_world_outbox then
+		return false, "world acknowledgement backlog overflow"
+	end
+	self.world_highest_sequence = delta.sequence
+	self.world_outbox[#self.world_outbox + 1] = {
+		sequence = delta.sequence,
+		delta = delta,
+		packet = nil,
+		sent = false,
+	}
+	return true
+end
+
+function Runtime:_send_world_outbox(limit)
+	local sent_count = 0
+	for _, item in ipairs(self.world_outbox) do
+		if not item.sent then
+			if not item.packet then
+				local built, packet = pcall(Replication.encode_world, item.delta)
+				if not built then return false, tostring(packet), sent_count end
+				item.packet = packet
+			end
+			local sent, send_error = self.transport:send_raw(
+				self.peer, item.packet, Protocol.CHANNEL.WORLD, true
+			)
+			if not sent then return false, tostring(send_error), sent_count end
+			item.sent = true
+			sent_count = sent_count + 1
+			if sent_count >= limit then break end
+		end
+	end
+	return true, nil, sent_count
+end
+
+function Runtime:_queue_event(event)
+	if type(event) ~= "table" or not valid_stream_position(event.event_id)
+		or event.event_id ~= self.event_highest_id + 1 then
+		return false, "invalid host event sequence"
+	end
+	if #self.event_outbox >= self.max_event_outbox then
+		return false, "event acknowledgement backlog overflow"
+	end
+	self.event_highest_id = event.event_id
+	self.event_outbox[#self.event_outbox + 1] = {
+		event_id = event.event_id,
+		event = event,
+		sent = false,
+	}
+	return true
+end
+
+function Runtime:_send_event_outbox(limit)
+	local sent_count = 0
+	for _, item in ipairs(self.event_outbox) do
+		if not item.sent then
+			local sent, send_error = self.transport:send(
+				self.peer,
+				"event",
+				item.event,
+				Protocol.CHANNEL.WORLD,
+				true
+			)
+			if not sent then return false, tostring(send_error), sent_count end
+			item.sent = true
+			sent_count = sent_count + 1
+			if sent_count >= limit then break end
+		end
+	end
+	return true, nil, sent_count
+end
+
+function Runtime:_complete_resume_sync()
+	if self.role ~= "host" or self.resume_phase ~= "sending_sync"
+		or not self.peer or not self.session then return false end
+	local sent, send_error = self.transport:send(
+		self.peer,
+		"resume_synced",
+		{ session_id = self.session.session_id },
+		-- This confirmation and all replayed deltas share a reliable channel,
+		-- which makes their ordering explicit across an ENet reconnect.
+		Protocol.CHANNEL.WORLD,
+		true
+	)
+	if not sent then
+		self.last_error = tostring(send_error)
+		return false, send_error
+	end
+	self.transport:flush()
+	self.resume_phase = nil
+	self.resume_deadline = nil
+	self.last_error = nil
+	return true
 end
 
 function Runtime:_set_client_state(state)
@@ -191,12 +407,83 @@ function Runtime:_send_peer_and_close(kind, payload, peer)
 	local closed, close_error = true
 	local close_data = self.role == "host" and 1 or 0
 	if self.transport then
-		closed, close_error = self.transport:disconnect(close_data, false)
+		if self.transport.disconnect_peer then
+			closed, close_error = self.transport:disconnect_peer(target, close_data, false)
+		else
+			closed, close_error = self.transport:disconnect(close_data, false)
+		end
 	end
-	self.peer = nil
+	if target == self.peer then self.peer = nil end
 	if not sent then return false, send_error end
 	if not closed then return false, close_error end
 	return true
+end
+
+function Runtime:_close_lost_peer(peer)
+	local target = peer or self.peer
+	if self.transport and target then
+		if self.transport.disconnect_peer then
+			self.transport:disconnect_peer(target, 0, true)
+		else
+			self.transport:disconnect(0, true)
+		end
+	end
+	if target == self.peer then self.peer = nil end
+end
+
+function Runtime:_handle_transport_loss(reason, peer)
+	reason = tostring(reason or "transport_disconnect")
+	local target = peer or self.peer
+	if target and self.peer and target ~= self.peer then return false, "stale peer" end
+	self.last_error = reason
+	self.last_peer_activity = nil
+	self.next_heartbeat = nil
+	self.host_hello_deadline = nil
+	self.resume_phase = nil
+	self.resume_deadline = nil
+	self:_close_lost_peer(target)
+	if self.role == "host" then
+		self.approval_request = nil
+		self:_neutralize_guest_input()
+		if self.session then self.session:disconnect(reason, false) end
+		self:_mark_outboxes_for_replay()
+		return true
+	end
+	local reconnectable = self.client_welcome
+		and self.client_welcome.reconnect_token
+		and (self.client_state == "playing"
+			or self.client_state == "catching_up"
+			or self.client_state == "resuming"
+			or self.client_state == "resuming_sync"
+			or self.client_state == "reconnecting")
+	if reconnectable then
+		self:_set_client_state("reconnecting")
+		self.reconnect_deadline = clock() + self.reconnect_timeout
+		self.next_reconnect_attempt = clock() + 0.1
+	else
+		self:_set_client_state("disconnected")
+	end
+	return true
+end
+
+function Runtime:_update_heartbeat()
+	if not self.peer or not self.transport or not self.last_peer_activity then return end
+	local current = clock()
+	if self.last_peer_activity and current - self.last_peer_activity > self.heartbeat_timeout then
+		self:_handle_transport_loss("heartbeat_timeout", self.peer)
+		return
+	end
+	if current < (self.next_heartbeat or 0) then return end
+	self.heartbeat_nonce = (self.heartbeat_nonce + 1) % 2147483648
+	local sent, send_error = self.transport:send(
+		self.peer,
+		"ping",
+		{ nonce = self.heartbeat_nonce },
+		Protocol.CHANNEL.CONTROL,
+		true
+	)
+	if not sent then self.last_error = tostring(send_error) end
+	self.next_heartbeat = current + self.heartbeat_interval
 end
 
 function Runtime:_content_hash(value)
@@ -248,11 +535,21 @@ function Runtime:start_host(options)
 	self.state_accumulator = 0
 	self.progress_accumulator = 0
 	self.world_accumulator = 0
+	self.action_retry_accumulator = 0
+	self:_reset_outboxes()
+	self:_reset_received_streams()
+	self.host_hello_deadline = nil
+	self.resume_phase = nil
+	self.resume_deadline = nil
+	self.last_peer_activity = nil
+	self.next_heartbeat = nil
 	self.session = Session.new({
 		registry = self.registry,
 		dropper = self.dropper,
 		approval_timeout = options.approval_timeout,
-		reconnect_timeout = options.reconnect_timeout,
+		-- The host keeps grace slightly longer than the client's retry window so
+		-- a final reconnect attempt cannot lose a race with session cleanup.
+		reconnect_timeout = options.reconnect_timeout or (self.reconnect_timeout + 5),
 		snapshot_timeout = options.snapshot_timeout,
 		catchup_timeout = options.catchup_timeout,
 	})
@@ -282,7 +579,7 @@ function Runtime:advertisement()
 		gameplay_port = self.transport.port,
 		players = self.session and self.session.guest and 2 or 1,
 		capacity = 2,
-		joinable = self.session and self.session:is_joinable() or false,
+		joinable = self.session and self.session:is_joinable() and self.peer == nil or false,
 		display_name = self.display_name,
 	}
 end
@@ -339,12 +636,19 @@ function Runtime:connect(options)
 	self.client_hello = Protocol.hello({
 		game_version = self.game_version,
 		content_hash = self.content_hash,
-		capabilities = { "snapshot-v1", "input-v1", "actions-v1" },
+		capabilities = {
+			"snapshot-v1",
+			"input-v1",
+			"actions-v1",
+			"reliable-streams-v1",
+		},
 		client_nonce = Identity.token("client"),
 	})
 	self.client_welcome = nil
 	self.pending_actions = {}
 	self.pending_action_order = {}
+	self.action_retry_accumulator = 0
+	self:_reset_received_streams()
 	self.assembler = nil
 	self.early_snapshot_chunks = {}
 	self.early_snapshot_bytes = 0
@@ -355,6 +659,8 @@ function Runtime:connect(options)
 	self.connection_port = options.port or Protocol.DEFAULT_GAMEPLAY_PORT
 	self.reconnect_deadline = nil
 	self.next_reconnect_attempt = nil
+	self.last_peer_activity = nil
+	self.next_heartbeat = nil
 	if self.browser then self.browser:close(); self.browser = nil end
 	return true
 end
@@ -429,6 +735,7 @@ function Runtime:approve_guest()
 		})
 		return false, self.last_error
 	end
+	self:_reset_outboxes()
 
 	local sent, send_error = self.transport:send(
 		self.peer,
@@ -485,12 +792,22 @@ function Runtime:approve_guest()
 end
 
 local host_messages_by_state = {
-	[Session.STATE.LISTENING] = { hello = true },
-	[Session.STATE.AWAITING_APPROVAL] = { disconnect = true },
-	[Session.STATE.SENDING_SNAPSHOT] = { disconnect = true },
-	[Session.STATE.CATCHING_UP] = { ready = true, disconnect = true },
-	[Session.STATE.PLAYING] = { input = true, action = true, disconnect = true },
-	[Session.STATE.RECONNECT_GRACE] = { hello = true },
+	[Session.STATE.LISTENING] = { hello = true, ping = true, pong = true },
+	[Session.STATE.AWAITING_APPROVAL] = { disconnect = true, ping = true, pong = true },
+	[Session.STATE.SENDING_SNAPSHOT] = { disconnect = true, ping = true, pong = true },
+	[Session.STATE.CATCHING_UP] = {
+		ready = true, disconnect = true, ping = true, pong = true,
+	},
+	[Session.STATE.PLAYING] = {
+		input = true,
+		action = true,
+		disconnect = true,
+		stream_ack = true,
+		resume_ready = true,
+		ping = true,
+		pong = true,
+	},
+	[Session.STATE.RECONNECT_GRACE] = { hello = true, ping = true, pong = true },
 }
 
 function Runtime:_host_message(event, message)
@@ -498,7 +815,28 @@ function Runtime:_host_message(event, message)
 	if not allowed or not allowed[message.kind] then
 		return self:_fail_host_peer("unexpected guest message", event.peer)
 	end
+	if self.resume_phase and message.kind ~= "ping" and message.kind ~= "pong"
+		and message.kind ~= "resume_ready" and message.kind ~= "disconnect" then
+		return self:_fail_host_peer("guest message received during resume", event.peer)
+	end
+	if message.kind == "ping" or message.kind == "pong" then
+		if not valid_ping(message.payload) then
+			return self:_fail_host_peer("invalid heartbeat", event.peer)
+		end
+		if message.kind == "ping" then
+			local sent, send_error = self.transport:send(
+				event.peer,
+				"pong",
+				{ nonce = message.payload.nonce },
+				Protocol.CHANNEL.CONTROL,
+				true
+			)
+			if not sent then self.last_error = tostring(send_error) end
+		end
+		return
+	end
 	if message.kind == "hello" then
+		self.host_hello_deadline = nil
 		if self.session.state == Session.STATE.RECONNECT_GRACE
 			and message.payload.reconnect_token then
 			local compatible, compatibility_error = Protocol.validate_hello(
@@ -521,6 +859,8 @@ function Runtime:_host_message(event, message)
 			end
 			if resumed then
 				self.peer = event.peer
+				self.resume_phase = "waiting_ready"
+				self.resume_deadline = clock() + self.connect_timeout
 				local sent, send_error = self.transport:send(event.peer, "welcome", {
 					resumed = true,
 					session_id = self.session.session_id,
@@ -528,9 +868,8 @@ function Runtime:_host_message(event, message)
 					actor_id = self.session.guest.actor_id,
 				}, Protocol.CHANNEL.CONTROL, true)
 				if not sent then
-					self.last_error = tostring(send_error)
-					self.session:disconnect("resume_send_failed", false)
-					self:_send_peer_and_close()
+					self:_handle_transport_loss("resume_send_failed: "
+						.. tostring(send_error), event.peer)
 				end
 			else
 				if invalid_catchup then
@@ -556,6 +895,30 @@ function Runtime:_host_message(event, message)
 			end
 			self:_send_peer_and_close("reject", { reason = response }, event.peer)
 		end
+		return
+	end
+	if message.kind == "stream_ack" then
+		local acknowledged, acknowledge_error = self:_acknowledge_streams(message.payload)
+		if not acknowledged then
+			return self:_fail_host_peer(acknowledge_error, event.peer)
+		end
+		return
+	end
+	if message.kind == "resume_ready" then
+		if self.resume_phase ~= "waiting_ready" then
+			return self:_fail_host_peer("unexpected resume synchronization", event.peer)
+		end
+		if not valid_stream_ack(message.payload)
+			or message.payload.world_sequence < self.world_acked_sequence
+			or message.payload.event_id < self.event_acked_id then
+			return self:_fail_host_peer("client lost acknowledged stream state", event.peer)
+		end
+		local acknowledged, acknowledge_error = self:_acknowledge_streams(message.payload)
+		if not acknowledged then
+			return self:_fail_host_peer(acknowledge_error, event.peer)
+		end
+		self:_mark_outboxes_for_replay()
+		self.resume_phase = "sending_sync"
 		return
 	end
 	if message.kind == "ready" then
@@ -645,6 +1008,9 @@ function Runtime:_host_message(event, message)
 			return self:_fail_host_peer("invalid disconnect reason", event.peer)
 		end
 		self.session:disconnect(message.payload.reason, true)
+		self.approval_request = nil
+		self.resume_phase = nil
+		self.resume_deadline = nil
 		self:_send_peer_and_close()
 	end
 end
@@ -681,6 +1047,22 @@ function Runtime:_resend_pending_actions()
 end
 
 function Runtime:_client_message(message)
+	if message.kind == "ping" or message.kind == "pong" then
+		if not valid_ping(message.payload) then
+			return self:_fail_client("invalid heartbeat")
+		end
+		if message.kind == "ping" then
+			local sent, send_error = self.transport:send(
+				self.peer,
+				"pong",
+				{ nonce = message.payload.nonce },
+				Protocol.CHANNEL.CONTROL,
+				true
+			)
+			if not sent then self.last_error = tostring(send_error) end
+		end
+		return
+	end
 	if message.kind == "reject" then
 		if not valid_reason(message.payload.reason) then
 			return self:_fail_client("invalid rejection reason")
@@ -700,14 +1082,37 @@ function Runtime:_client_message(message)
 		self.client_welcome = message.payload
 		if resumed then
 			self.snapshot_ready_tick = nil
-			self:_set_client_state("playing")
-			self.reconnect_deadline = nil
-			self.next_reconnect_attempt = nil
-			local resent, resend_error = self:_resend_pending_actions()
-			if not resent then return self:_fail_client(resend_error) end
+			self:_set_client_state("resuming_sync")
+			local sent, send_error = self.transport:send(
+				self.peer,
+				"resume_ready",
+				{
+					world_sequence = self.received_world_sequence,
+					event_id = self.received_event_id,
+				},
+				Protocol.CHANNEL.CONTROL,
+				true
+			)
+			if not sent then
+				return self:_handle_transport_loss(send_error, self.peer)
+			end
+			self.transport:flush()
 		else
 			self:_set_client_state("receiving_snapshot")
 		end
+		return
+	end
+	if message.kind == "resume_synced" then
+		if self.client_state ~= "resuming_sync" or not self.client_welcome
+			or message.payload.session_id ~= self.client_welcome.session_id then
+			return self:_fail_client("invalid resume synchronization")
+		end
+		self:_set_client_state("playing")
+		self.reconnect_deadline = nil
+		self.next_reconnect_attempt = nil
+		self.last_error = nil
+		local resent, resend_error = self:_resend_pending_actions()
+		if not resent then self.last_error = tostring(resend_error) end
 		return
 	end
 	if message.kind == "snapshot_meta" then
@@ -760,6 +1165,7 @@ function Runtime:_client_message(message)
 		end
 		self.snapshot_ready_tick = nil
 		self:_set_client_state("playing")
+		self.last_error = nil
 		return
 	end
 	if message.kind == "shutdown" then
@@ -789,6 +1195,17 @@ function Runtime:_client_message(message)
 		if self.client_state ~= "playing" and self.client_state ~= "catching_up" then
 			return self:_fail_client("event received before playing")
 		end
+		local event_id = message.payload and message.payload.event_id
+		if not valid_stream_position(event_id) or event_id < 1 then
+			return self:_fail_client("invalid network event sequence")
+		end
+		if event_id <= self.received_event_id then
+			self:_send_stream_ack()
+			return
+		end
+		if event_id ~= self.received_event_id + 1 then
+			return self:_handle_transport_loss("network event sequence gap", self.peer)
+		end
 		if type(self.event_handler) ~= "function" then
 			return self:_fail_client("network event handler is not configured")
 		end
@@ -797,6 +1214,8 @@ function Runtime:_client_message(message)
 			return self:_fail_client(not called and accepted
 				or event_error or "network event was rejected")
 		end
+		self.received_event_id = event_id
+		self:_send_stream_ack()
 		return
 	end
 	return self:_fail_client("unexpected host message")
@@ -829,6 +1248,7 @@ function Runtime:_finish_client_snapshot()
 		return self:_fail_client(not called and accepted
 			or apply_error or "snapshot state was rejected")
 	end
+	self:_reset_received_streams()
 	self.world_id = snapshot.header.world_id
 	self.snapshot_ready_tick = snapshot.header.tick
 	self:_set_client_state("catching_up")
@@ -853,6 +1273,9 @@ function Runtime:_fail_host_peer(reason, peer)
 		self.session:disconnect(reason, true)
 	end
 	self.approval_request = nil
+	self.host_hello_deadline = nil
+	self.resume_phase = nil
+	self.resume_deadline = nil
 	self:_send_peer_and_close("reject", {
 		reason = "invalid_protocol_message",
 	}, peer)
@@ -888,6 +1311,11 @@ function Runtime:_receive(event)
 
 	local packet_kind = Replication.packet_kind(event.data)
 	if self.role == "client" and packet_kind then
+		if self.client_state == "resuming_sync" and packet_kind == "state" then
+			-- State snapshots are transient. A packet queued on the old connection
+			-- is allowed to expire while the reliable world stream is synchronized.
+			return
+		end
 		if self.client_state ~= "playing" and self.client_state ~= "catching_up" then
 			return self:_fail_client("replication received before playing")
 		end
@@ -898,6 +1326,18 @@ function Runtime:_receive(event)
 		end
 		local payload, decode_error = Replication.decode(event.data)
 		if not payload then return self:_fail_client(decode_error) end
+		if packet_kind == "world" then
+			if not valid_stream_position(payload.sequence) or payload.sequence < 1 then
+				return self:_fail_client("invalid world stream sequence")
+			end
+			if payload.sequence <= self.received_world_sequence then
+				self:_send_stream_ack()
+				return
+			end
+			if payload.sequence ~= self.received_world_sequence + 1 then
+				return self:_handle_transport_loss("world stream sequence gap", self.peer)
+			end
+		end
 		local applier = packet_kind == "state" and self.replication_applier
 			or self.world_delta_applier
 		if type(applier) ~= "function" then
@@ -907,6 +1347,10 @@ function Runtime:_receive(event)
 		if not called or accepted == false then
 			return self:_fail_client(not called and accepted
 				or apply_error or "replicated state was rejected")
+		end
+		if packet_kind == "world" and valid_stream_position(payload.sequence) then
+			self.received_world_sequence = payload.sequence
+			self:_send_stream_ack()
 		end
 		return
 	end
@@ -933,7 +1377,8 @@ end
 
 function Runtime:_publish(dt)
 	if self.role ~= "host" or not self.peer or not self.session
-		or self.session.state ~= Session.STATE.PLAYING then return end
+		or self.session.state ~= Session.STATE.PLAYING
+		or self.resume_phase ~= nil then return end
 	local catchup_ready, catchup_error = self:_catchup_status()
 	if not catchup_ready then
 		self.last_error = catchup_error
@@ -972,23 +1417,32 @@ function Runtime:_publish(dt)
 	end
 
 	if self.world_accumulator >= self.world_interval
-		and type(self.world_delta_provider) == "function" then
+		and (#self.world_outbox > 0
+			or type(self.world_delta_provider) == "function") then
 		self.world_accumulator = self.world_accumulator % self.world_interval
-		for _ = 1, 4 do
+		local sent, send_error, sent_count = self:_send_world_outbox(4)
+		if not sent then
+			self.last_error = tostring(send_error)
+			return
+		end
+		for _ = sent_count + 1, 4 do
+			if type(self.world_delta_provider) ~= "function" then break end
+			if #self.world_outbox >= self.max_world_outbox then
+				self.last_error = "world acknowledgement backlog overflow"
+				break
+			end
 			local provided, delta = pcall(self.world_delta_provider, self.session)
 			if not provided then
 				self.last_error = tostring(delta)
 				break
 			end
 			if not delta then break end
-			local built, packet = pcall(Replication.encode_world, delta)
-			if not built then
-				self.last_error = tostring(packet)
+			local queued, queue_error = self:_queue_world_delta(delta)
+			if not queued then
+				self.last_error = tostring(queue_error)
 				break
 			end
-			local sent, send_error = self.transport:send_raw(
-				self.peer, packet, Protocol.CHANNEL.WORLD, true
-			)
+			sent, send_error = self:_send_world_outbox(1)
 			if not sent then
 				self.last_error = tostring(send_error)
 				break
@@ -996,8 +1450,18 @@ function Runtime:_publish(dt)
 		end
 	end
 
-	if type(self.event_provider) == "function" then
-		for _ = 1, 32 do
+	if #self.event_outbox > 0 or type(self.event_provider) == "function" then
+		local sent, send_error, sent_count = self:_send_event_outbox(32)
+		if not sent then
+			self.last_error = tostring(send_error)
+			return
+		end
+		for _ = sent_count + 1, 32 do
+			if type(self.event_provider) ~= "function" then break end
+			if #self.event_outbox >= self.max_event_outbox then
+				self.last_error = "event acknowledgement backlog overflow"
+				break
+			end
 			local provided, event = pcall(self.event_provider, self.session)
 			if not provided then
 				self.last_error = tostring(event)
@@ -1008,13 +1472,12 @@ function Runtime:_publish(dt)
 				self.last_error = "invalid network event"
 				break
 			end
-			local sent, send_error = self.transport:send(
-				self.peer,
-				"event",
-				event,
-				Protocol.CHANNEL.WORLD,
-				true
-			)
+			local queued, queue_error = self:_queue_event(event)
+			if not queued then
+				self.last_error = tostring(queue_error)
+				break
+			end
+			sent, send_error = self:_send_event_outbox(1)
 			if not sent then
 				self.last_error = tostring(send_error)
 				break
@@ -1025,14 +1488,16 @@ end
 
 function Runtime:_update_reconnect()
 	if self.role ~= "client"
-		or (self.client_state ~= "reconnecting" and self.client_state ~= "resuming") then
+		or (self.client_state ~= "reconnecting"
+			and self.client_state ~= "resuming"
+			and self.client_state ~= "resuming_sync") then
 		return
 	end
 	local current = clock()
 	if current >= (self.reconnect_deadline or 0) then
 		self:_set_client_state("disconnected")
 		self.last_error = self.last_error or "reconnect_timeout"
-		self:_send_peer_and_close()
+		self:_close_lost_peer(self.peer)
 		return
 	end
 	if self.client_state == "reconnecting" and not self.peer
@@ -1043,10 +1508,10 @@ function Runtime:_update_reconnect()
 		)
 		if peer then
 			self.peer = peer
-			self.next_reconnect_attempt = current + 1
+			self.next_reconnect_attempt = current + 0.75
 		else
 			self.last_error = tostring(connect_error)
-			self.next_reconnect_attempt = current + 1
+			self.next_reconnect_attempt = current + 0.75
 		end
 	end
 end
@@ -1088,23 +1553,50 @@ function Runtime:update(dt)
 		if not event then break end
 		self.last_event = event.type
 		if event.type == "connect" then
-			self.peer = event.peer
-			if self.role == "client" then
+			if self.peer and event.peer ~= self.peer then
+				if self.transport.disconnect_peer then
+					self.transport:disconnect_peer(event.peer, 1, true)
+				end
+			else
+				self.peer = event.peer
+				self.last_peer_activity = clock()
+				self.next_heartbeat = clock() + self.heartbeat_interval
+			end
+			if self.peer == event.peer and self.role == "client" then
 				local reconnecting = self.client_state == "reconnecting"
+					or self.client_state == "resuming"
+					or self.client_state == "resuming_sync"
 				self:_set_client_state(reconnecting and "resuming" or "awaiting_approval")
 				if reconnecting and self.client_welcome then
 					self.client_hello.reconnect_token = self.client_welcome.reconnect_token
 				end
-				self.transport:send(event.peer, "hello", self.client_hello,
+				local sent, send_error = self.transport:send(event.peer, "hello", self.client_hello,
 					Protocol.CHANNEL.CONTROL, true)
-				self.transport:flush()
+				if sent then
+					self.transport:flush()
+				else
+					self:_handle_transport_loss(send_error, event.peer)
+				end
+			elseif self.peer == event.peer then
+				self.host_hello_deadline = clock() + self.hello_timeout
 			end
 		elseif event.type == "receive" then
-			self:_receive(event)
+			if self.peer and (not event.peer or event.peer == self.peer) then
+				self.last_peer_activity = clock()
+				self:_receive(event)
+			elseif self.transport.disconnect_peer then
+				self.transport:disconnect_peer(event.peer, 1, true)
+			end
 		elseif event.type == "disconnect" then
-			if self.role == "host" and self.session then
+			local current_peer = not event.peer or event.peer == self.peer
+			if current_peer and self.role == "host" and self.session then
+				self:_neutralize_guest_input()
 				self.session:disconnect("transport_disconnect", false)
-			else
+				self.approval_request = nil
+				self.resume_phase = nil
+				self.resume_deadline = nil
+				self:_mark_outboxes_for_replay()
+			elseif current_peer then
 				local terminal = self.client_state == "rejected"
 					or self.client_state == "failed"
 					or self.client_state == "disconnected"
@@ -1115,20 +1607,38 @@ function Runtime:update(dt)
 					self:_set_client_state("disconnected")
 				elseif (self.client_state == "playing"
 					or self.client_state == "catching_up"
-					or self.client_state == "resuming")
+					or self.client_state == "resuming"
+					or self.client_state == "resuming_sync")
 					and self.client_welcome
 					and self.client_welcome.reconnect_token then
 					self:_set_client_state("reconnecting")
-					self.reconnect_deadline = self.reconnect_deadline or (clock() + 15)
-					self.next_reconnect_attempt = clock() + 0.25
+					self.reconnect_deadline = clock() + self.reconnect_timeout
+					self.next_reconnect_attempt = clock() + 0.1
 				else
 					self:_set_client_state("disconnected")
 				end
 			end
-			self.peer = nil
+			if current_peer then
+				self.peer = nil
+				self.last_peer_activity = nil
+				self.next_heartbeat = nil
+				self.host_hello_deadline = nil
+			end
 		end
 	end
+	self:_update_heartbeat()
 	if self.role == "host" and self.session then
+		local current = clock()
+		if self.peer and self.host_hello_deadline
+			and current >= self.host_hello_deadline then
+			self:_fail_host_peer("hello_timeout", self.peer)
+		end
+		if self.peer and self.resume_phase and self.resume_deadline
+			and current >= self.resume_deadline then
+			self:_handle_transport_loss("resume_sync_timeout", self.peer)
+		elseif self.resume_phase == "sending_sync" then
+			self:_complete_resume_sync()
+		end
 		local previous_state = self.session.state
 		local updated, update_error = self.session:update()
 		if not updated then self.last_error = tostring(update_error) end
@@ -1148,7 +1658,7 @@ function Runtime:update(dt)
 			self:_send_peer_and_close("reject", { reason = reason })
 			self.approval_request = nil
 		end
-		if self.session.state == Session.STATE.PLAYING
+		if self.session.state == Session.STATE.PLAYING and self.resume_phase == nil
 			and self.session.guest and type(self.simulation_handler) == "function" then
 			local simulated, simulation_error = pcall(
 				self.simulation_handler,
@@ -1162,6 +1672,17 @@ function Runtime:update(dt)
 	end
 	self:_update_client_timeout()
 	self:_update_reconnect()
+	if self.role == "client" and self.client_state == "playing"
+		and #self.pending_action_order > 0 then
+		self.action_retry_accumulator = self.action_retry_accumulator
+			+ math.max(0, tonumber(dt) or 0)
+		if self.action_retry_accumulator >= self.action_retry_interval then
+			self.action_retry_accumulator = self.action_retry_accumulator
+				% self.action_retry_interval
+			local resent, resend_error = self:_resend_pending_actions()
+			if not resent then self.last_error = tostring(resend_error) end
+		end
+	end
 end
 
 function Runtime:send_input(input_state)
@@ -1195,6 +1716,8 @@ function Runtime:send_action(action)
 		return false, "too many pending actions"
 	end
 	local copy = Replication.copy_serializable(action)
+	self.pending_actions[key] = copy
+	self.pending_action_order[#self.pending_action_order + 1] = key
 	local sent, send_error = self.transport:send(
 		nil,
 		"action",
@@ -1202,9 +1725,12 @@ function Runtime:send_action(action)
 		Protocol.CHANNEL.WORLD,
 		true
 	)
-	if not sent then return false, send_error end
-	self.pending_actions[key] = copy
-	self.pending_action_order[#self.pending_action_order + 1] = key
+	if not sent then
+		-- The action is now an application-level reliable transaction. Keep it
+		-- queued and retry until action_result arrives, including after reconnect.
+		self.last_error = tostring(send_error)
+		return true, "queued"
+	end
 	return true
 end
 
@@ -1241,6 +1767,9 @@ function Runtime:prepare_quit()
 	self.client_welcome = nil
 	self.pending_actions = {}
 	self.pending_action_order = {}
+	self.action_retry_accumulator = 0
+	self:_reset_outboxes()
+	self:_reset_received_streams()
 	self.assembler = nil
 	self.early_snapshot_chunks = {}
 	self.early_snapshot_bytes = 0
@@ -1248,6 +1777,11 @@ function Runtime:prepare_quit()
 	self.snapshot_ready_tick = nil
 	self.reconnect_deadline = nil
 	self.next_reconnect_attempt = nil
+	self.last_peer_activity = nil
+	self.next_heartbeat = nil
+	self.host_hello_deadline = nil
+	self.resume_phase = nil
+	self.resume_deadline = nil
 	return true
 end
 

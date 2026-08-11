@@ -189,7 +189,7 @@ function checks(x,y,mode)
 
 
 			if map.fish and map.w<6000 then
-				map.fish = nil
+				writemap (x,y,nil,'fish')
 			end
 
 			--print (watercd)
@@ -211,6 +211,7 @@ function checks(x,y,mode)
 					writemap (x,y,map.w,str)
 					writemap (x-1,y,w,str)
 					map.dr = dirt_eq (x-1,y, map.dr,2,'dr')
+					writemap (x,y,map.dr,'dr')
 				end
 
 				if r==0 then
@@ -220,6 +221,7 @@ function checks(x,y,mode)
 					writemap (x,y,map.w,str)
 					writemap (x+1,y,w,str)
 					map.dr = dirt_eq (x+1,y, map.dr,2,'dr')
+					writemap (x,y,map.dr,'dr')
 				end
 
 				if l~=0 and r~=0 and w==0 then
@@ -229,6 +231,7 @@ function checks(x,y,mode)
 					writemap (x,y,map.w,str)
 					writemap (x,y-1,w,str)
 					map.dr = dirt_eq (x,y-1, map.dr,2,'dr')
+					writemap (x,y,map.dr,'dr')
 				end
 
 			else
@@ -250,7 +253,10 @@ function checks(x,y,mode)
 						writemap (x,y,l,str)
 						map.w = l
 
-						if map.dr then map.dr = dirt_eq (x,y+1, map.dr,2,'dr') end
+						if map.dr then
+							map.dr = dirt_eq (x,y+1, map.dr,2,'dr')
+							writemap (x,y,map.dr,'dr')
+						end
 					
 					end
 				else
@@ -262,6 +268,7 @@ function checks(x,y,mode)
 							a = a - wt
 							if a>map.w then a = map.w end
 							map.w = map.w - a
+							writemap (x,y,map.w,str)
 
 
 							--watering count
@@ -284,13 +291,19 @@ function checks(x,y,mode)
 					local r = maptile (x+1,y)
 					
 					if l==0 then
-						if map.dr then map.dr = dirt_eq (x-1,y, map.dr,1,'dr') end
+						if map.dr then
+							map.dr = dirt_eq (x-1,y, map.dr,1,'dr')
+							writemap (x,y,map.dr,'dr')
+						end
 						map.w = water_eq (x-1,y, map.w,1)
 						writemap (x,y,map.w,str)
 					end
 
 					if r==0 then
-						if map.dr then map.dr = dirt_eq (x+1,y, map.dr,-1,'dr') end
+						if map.dr then
+							map.dr = dirt_eq (x+1,y, map.dr,-1,'dr')
+							writemap (x,y,map.dr,'dr')
+						end
 						map.w = water_eq (x+1,y, map.w,-1)
 						writemap (x,y,map.w,str)
 					end
@@ -344,7 +357,6 @@ function checks(x,y,mode)
 					writemap (x,y,0)
 				else
 					writemap (x,y,0,'f')
-					map.f = 0
 				end
 		end
 
@@ -360,13 +372,12 @@ function checks(x,y,mode)
 			local bottomcol = maptile (x,y+1,'solid')
 
 			if map.f and bottomcol==0 then
-				map.f = map.f + cf.blockfallspeed
+				writemap (x,y,map.f + cf.blockfallspeed,'f')
 			end
 
 			--checking next block
 			if map.f==0 and bottomcol==1 then
-				map.f = readmap(x,y+1,"f")
-				writemap (x,y,map.f,"f")
+				writemap (x,y,readmap(x,y+1,"f"),"f")
 				
 				if not map.f then
 					sound_add ('drop', 26, {x = x, y = y})
@@ -448,7 +459,7 @@ function checks(x,y,mode)
 			if map.w==nil and map.dr then
 				--local dr = readmap (x,y+1,'dr') or 0
 				--writemap (x,y+1,map.dr + dr,'dr')
-				map.dr = map.dr - 10
+				writemap (x,y,map.dr - 10,'dr')
 				if map.dr<0 then
 					writemap (x,y,nil,'dr')
 				end
@@ -475,6 +486,7 @@ function checks(x,y,mode)
 										if map.dr>100 then
 											map.dr = 100
 										end
+										writemap (x,y,map.dr,'dr')
 										writemap (x+i,y+ii,map.dr,'dr')
 									end
 								end

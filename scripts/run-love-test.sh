@@ -59,8 +59,15 @@ trap cleanup EXIT
 
 use_hidden_open=false
 love_app=""
+background_safe=false
+case "$SARCOPHAGUS_SMOKE_TEST" in
+    actors | network | network-process-*)
+        background_safe=true
+        ;;
+esac
 if [[ "$(uname -s)" == "Darwin"
     && "$SARCOPHAGUS_TEST_BACKGROUND" == "1"
+    && "$background_safe" == true
     && "${SARCOPHAGUS_TEST_HIDDEN:-1}" != "0"
     && "$love_binary" == */Contents/MacOS/* ]]; then
     love_app="${love_binary%/Contents/MacOS/*}"
@@ -85,6 +92,7 @@ if [[ "$use_hidden_open" == true ]]; then
                 ;;
         esac
     done < <(env)
+    open_environment+=(--env "SARCOPHAGUS_TEST_NO_MINIMIZE=1")
 
     /usr/bin/open -j -g -W -n -a "$love_app" \
         --stdout "$stdout_log" \
@@ -92,8 +100,16 @@ if [[ "$use_hidden_open" == true ]]; then
         "${open_environment[@]}" \
         --args "$game_path" "$@" || run_status=$?
 else
-    "$love_binary" "$game_path" "$@" \
-        >"$stdout_log" 2>"$stderr_log" || run_status=$?
+    if [[ "$(uname -s)" == "Darwin" && "$background_safe" != true ]]; then
+        # Graphics-heavy tests need a live Metal surface. Running them hidden or
+        # minimized makes fullscreen transitions invalidate LÖVE Canvases.
+        SARCOPHAGUS_TEST_NO_MINIMIZE=1 \
+            "$love_binary" "$game_path" "$@" \
+            >"$stdout_log" 2>"$stderr_log" || run_status=$?
+    else
+        "$love_binary" "$game_path" "$@" \
+            >"$stdout_log" 2>"$stderr_log" || run_status=$?
+    fi
 fi
 
 if [[ -n "$external_log" ]]; then

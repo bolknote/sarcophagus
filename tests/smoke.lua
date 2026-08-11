@@ -16,6 +16,11 @@ local function table_size(value)
     return count
 end
 
+local function background_minimize_enabled()
+	return os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
+		and os.getenv("SARCOPHAGUS_TEST_NO_MINIMIZE") ~= "1"
+end
+
 local function process_test_actor(registry)
 	local ActorState = require("src.actor_state")
 	local host = ActorState.new({ actor_id = "host", actor_role = "host" })
@@ -82,7 +87,8 @@ local function install_process_network_test(role, value)
 		"SARCOPHAGUS_NET_DISCONNECT_AFTER"
 	)) or 0) > 0
 	if role == "host" then
-		local action_seen, input_seen, delta_sent, event_sent = false, false, false, false
+		local action_seen, input_seen = false, false
+		local delta_sequence, event_sequence = 0, 0
 		local completion_elapsed
 		local reconnect_seen, reconnect_completed = false, not forced_disconnect
 		runtime = Runtime.new({
@@ -125,18 +131,28 @@ local function install_process_network_test(role, value)
 				}
 			end,
 			world_delta_provider = function()
-				if delta_sent then return nil end
-				delta_sent = true
+				local wanted = forced_disconnect and reconnect_seen and 2 or 1
+				if delta_sequence >= wanted then return nil end
+				delta_sequence = delta_sequence + 1
 				return {
-					sequence = 1,
+					sequence = delta_sequence,
 					tick = 12,
-					cells = { { x = 1, y = 1, cell = { b = 77 } } },
+					cells = {
+						{ x = 1, y = 1, cell = {
+							b = delta_sequence == 1 and 77 or 88,
+						} },
+					},
 				}
 			end,
 			event_provider = function()
-				if event_sent or not action_seen then return nil end
-				event_sent = true
-				return { kind = "process-test", value = 91 }
+				local wanted = forced_disconnect and reconnect_seen and 2 or 1
+				if event_sequence >= wanted or not action_seen then return nil end
+				event_sequence = event_sequence + 1
+				return {
+					kind = "process-test",
+					event_id = event_sequence,
+					value = event_sequence == 1 and 91 or 92,
+				}
 			end,
 		})
 		assert(runtime:start_host({
@@ -195,7 +211,8 @@ local function install_process_network_test(role, value)
 			action_result_handler = function(result) action_result = result end,
 			event_handler = function(value)
 				network_event = value
-				return value.kind == "process-test" and value.value == 91
+				return value.kind == "process-test"
+					and (value.value == 91 or value.value == 92)
 			end,
 		})
 		local function connect(address, gameplay_port)
@@ -222,7 +239,8 @@ local function install_process_network_test(role, value)
 			elapsed = elapsed + dt
 			runtime:update(dt)
 			if runtime.client_state == "reconnecting"
-				or runtime.client_state == "resuming" then
+				or runtime.client_state == "resuming"
+				or runtime.client_state == "resuming_sync" then
 				reconnect_seen = true
 			elseif reconnect_seen and runtime.client_state == "playing" then
 				reconnect_completed = true
@@ -257,8 +275,9 @@ local function install_process_network_test(role, value)
 			if reconnect_completed and discovery_seen and snapshot_seen
 				and replicated and replicated.input_seen
 				and replicated.action_seen and progress_seen and world_delta
-				and world_delta.cells[1].cell.b == 77
-				and action_result and action_result.ok and network_event then
+				and world_delta.cells[1].cell.b == (forced_disconnect and 88 or 77)
+				and action_result and action_result.ok and network_event
+				and network_event.value == (forced_disconnect and 92 or 91) then
 				complete(0,
 					"snapshot=true state=true progress=true world=true action_result=true event=true discovery="
 						.. tostring(discovery_requested and discovery_seen)
@@ -535,6 +554,34 @@ local function validate_network_core()
 		end
 		assert(delayed and client:stats().faults.queued == 0,
 			"artificial latency did not release the queued packet")
+		client.faults.latency_ms = 5
+		local actual_send = client._actual_send
+		local transient_attempts = 0
+		client._actual_send = function(self, ...)
+			transient_attempts = transient_attempts + 1
+			if transient_attempts == 1 then return false, "transient send failure" end
+			return actual_send(self, ...)
+		end
+		assert(client:send_raw(nil, "retry-after-send-error",
+			Protocol.CHANNEL.WORLD, true))
+		love.timer.sleep(0.01)
+		local _, transient_error = client:poll(0)
+		assert(transient_error == "transient send failure"
+			and client:stats().faults.queued == 1,
+			"transport discarded a delayed packet after peer.send failed")
+		client:poll(0)
+		client._actual_send = actual_send
+		client:flush()
+		assert(client:stats().faults.queued == 0,
+			"transport did not retry a retained packet")
+		local retried_packet
+		deadline = love.timer.getTime() + 2
+		while love.timer.getTime() < deadline and not retried_packet do
+			local event = server:poll(2)
+			retried_packet = event and event.type == "receive"
+				and event.data == "retry-after-send-error"
+		end
+		assert(retried_packet, "retained transport packet was not delivered")
 		local client_stats = client:stats()
 		local server_stats = server:stats()
 		assert(client_stats.packets_sent >= 1 and client_stats.bytes_sent > 0
@@ -544,6 +591,27 @@ local function validate_network_core()
 	if client then client:close() end
 	if server then server:close() end
 	assert(loopback_ok, loopback_error)
+	local active_transport_peer, late_transport_peer = {}, {}
+	local fake_transport = setmetatable({
+		closed = false,
+		peer = active_transport_peer,
+		host = {
+			service = function()
+				return { type = "connect", peer = late_transport_peer }
+			end,
+		},
+		outgoing_queue = {},
+		outgoing_bytes = 0,
+		last_due_by_channel = {},
+		ignored_disconnect_peers = {},
+		synthetic_events = {},
+		packets_received = 0,
+		bytes_received = 0,
+		channel_received = {},
+	}, { __index = EnetTransport })
+	assert(fake_transport:poll(0).peer == late_transport_peer
+		and fake_transport.peer == active_transport_peer,
+		"late connect event replaced the active transport peer")
 
 	local runtime_server, runtime_client
 	local runtime_loopback_ok, runtime_loopback_error = pcall(function()
@@ -671,9 +739,12 @@ local function validate_network_core()
 		assert(applied_world.cells[1].cell.b == 12,
 			"runtime world delta was corrupted")
 		local original_guest = runtime_server.session.guest
-		assert(runtime_server.session:disconnect("runtime-test", false))
-		assert(runtime_server.transport:disconnect(0, true))
-		runtime_server.peer = nil
+		assert(runtime_server:_handle_transport_loss(
+			"runtime-test", runtime_server.peer
+		))
+		assert(not InputState.is_down(
+			runtime_server.registry:runtime(original_guest).input, "a"
+		), "disconnect retained stale held guest input")
 		pump(function()
 			return runtime_server.session.state == Session.STATE.PLAYING
 				and runtime_client.client_state == "playing"
@@ -681,9 +752,9 @@ local function validate_network_core()
 		assert(runtime_server.session.guest == original_guest,
 			"runtime reconnect replaced the guest actor")
 		catchup_allowed = false
-		assert(runtime_server.session:disconnect("runtime-overflow-test", false))
-		assert(runtime_server.transport:disconnect(0, true))
-		runtime_server.peer = nil
+		assert(runtime_server:_handle_transport_loss(
+			"runtime-overflow-test", runtime_server.peer
+		))
 		pump(function()
 			return runtime_server.session.state == Session.STATE.LISTENING
 				and (runtime_client.client_state == "rejected"
@@ -776,7 +847,9 @@ local function validate_network_core()
 	local hello = Protocol.hello({
 		game_version = "test-version",
 		content_hash = test_content_hash,
-		capabilities = { "snapshot-v1", "input-v1", "actions-v1" },
+		capabilities = {
+			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v1",
+		},
 		client_nonce = client_nonce,
 	})
 	local encoded = Protocol.encode("hello", hello)
@@ -799,7 +872,9 @@ local function validate_network_core()
 	local invalid_hash_hello = Protocol.hello({
 		game_version = "test-version",
 		content_hash = "not-a-sha256",
-		capabilities = { "snapshot-v1", "input-v1", "actions-v1" },
+		capabilities = {
+			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v1",
+		},
 		client_nonce = client_nonce,
 	})
 	local hash_ok, hash_error = Protocol.validate_hello(invalid_hash_hello, {
@@ -1084,6 +1159,245 @@ local function validate_network_core()
 	local restored_delta, delta_kind = NetworkReplication.decode(world_packet)
 	assert(delta_kind == "world" and restored_delta.cells[1].cell.i[1].i == 31,
 		"world delta packet did not round-trip")
+	local outbox_world_provided = false
+	local outbox_event_provided = false
+	local outbox_world_attempts = 0
+	local outbox_event_attempts = 0
+	local outbox_send_order = {}
+	local outbox_peer = {}
+	local outbox_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		world_interval = 0.001,
+		world_delta_provider = function()
+			if outbox_world_provided then return nil end
+			outbox_world_provided = true
+			return {
+				sequence = 1,
+				tick = 1,
+				cells = { { x = 1, y = 1, cell = { b = 5 } } },
+			}
+		end,
+		event_provider = function()
+			if outbox_event_provided then return nil end
+			outbox_event_provided = true
+			return { kind = "test", event_id = 1 }
+		end,
+	})
+	outbox_runtime.role = "host"
+	outbox_runtime.peer = outbox_peer
+	outbox_runtime.session = {
+		state = Session.STATE.PLAYING,
+		session_id = string.rep("8", 64),
+	}
+	outbox_runtime.transport = {
+		send_raw = function()
+			outbox_world_attempts = outbox_world_attempts + 1
+			outbox_send_order[#outbox_send_order + 1] = "world"
+			if outbox_world_attempts == 1 then return false, "temporary world failure" end
+			return true
+		end,
+		send = function(_, _, kind)
+			outbox_send_order[#outbox_send_order + 1] = kind
+			if kind == "event" then
+				outbox_event_attempts = outbox_event_attempts + 1
+				if outbox_event_attempts == 1 then
+					return false, "temporary event failure"
+				end
+			end
+			return true
+		end,
+		flush = function() end,
+		disconnect = function() return true end,
+	}
+	outbox_runtime:_publish(0.01)
+	assert(#outbox_runtime.world_outbox == 1
+		and #outbox_runtime.event_outbox == 1
+		and outbox_runtime.world_outbox[1].sent == false
+		and outbox_runtime.event_outbox[1].sent == false,
+		"runtime discarded a reliable item after send failure")
+	outbox_runtime:_publish(0.01)
+	assert(outbox_runtime.world_outbox[1].sent == true
+		and outbox_runtime.event_outbox[1].sent == true,
+		"runtime did not retry retained reliable items")
+	outbox_runtime.resume_phase = "waiting_ready"
+	outbox_runtime.resume_deadline = love.timer.getTime() + 1
+	outbox_runtime:_host_message({ peer = outbox_peer }, {
+		kind = "resume_ready",
+		payload = { world_sequence = 0, event_id = 0 },
+	})
+	assert(outbox_runtime.resume_phase == "sending_sync"
+		and not outbox_runtime.world_outbox[1].sent
+		and not outbox_runtime.event_outbox[1].sent,
+		"resume handshake did not mark unacknowledged streams for replay")
+	assert(outbox_runtime:_complete_resume_sync())
+	outbox_runtime:_publish(0.01)
+	assert(outbox_send_order[#outbox_send_order - 2] == "resume_synced"
+		and outbox_send_order[#outbox_send_order - 1] == "world"
+		and outbox_send_order[#outbox_send_order] == "event",
+		"resume confirmation was not ordered before reliable stream replay")
+	assert(outbox_runtime:_acknowledge_streams({
+		world_sequence = 1,
+		event_id = 1,
+	}))
+	assert(#outbox_runtime.world_outbox == 0 and #outbox_runtime.event_outbox == 0,
+		"acknowledged stream items remained in the outbox")
+	assert(not outbox_runtime:_queue_event({ kind = "test", event_id = 3 }),
+		"host accepted a gap in the reliable event stream")
+
+	local sequence_peer = {}
+	local sequence_event_calls = 0
+	local sequence_ack_calls = 0
+	local sequence_disconnected = false
+	local sequence_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		event_handler = function()
+			sequence_event_calls = sequence_event_calls + 1
+			return true
+		end,
+	})
+	sequence_runtime.role = "client"
+	sequence_runtime.client_state = "playing"
+	sequence_runtime.peer = sequence_peer
+	sequence_runtime.client_welcome = {
+		session_id = string.rep("9", 64),
+		reconnect_token = string.rep("a", 64),
+	}
+	sequence_runtime.received_event_id = 1
+	sequence_runtime.transport = {
+		send = function(_, _, kind)
+			if kind == "stream_ack" then sequence_ack_calls = sequence_ack_calls + 1 end
+			return true
+		end,
+		flush = function() end,
+		disconnect = function()
+			sequence_disconnected = true
+			return true
+		end,
+	}
+	sequence_runtime:_client_message({
+		kind = "event",
+		payload = { kind = "test", event_id = 1 },
+	})
+	assert(sequence_event_calls == 0 and sequence_ack_calls == 1,
+		"duplicate reliable event was presented more than once")
+	sequence_runtime:_client_message({
+		kind = "event",
+		payload = { kind = "test", event_id = 3 },
+	})
+	assert(sequence_disconnected and sequence_runtime.peer == nil
+		and sequence_runtime.client_state == "reconnecting",
+		"event sequence gap did not trigger recoverable reconnect")
+
+	local world_gap_peer = {}
+	local world_gap_applied = false
+	local world_gap_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		world_delta_applier = function()
+			world_gap_applied = true
+			return true
+		end,
+	})
+	world_gap_runtime.role = "client"
+	world_gap_runtime.client_state = "playing"
+	world_gap_runtime.peer = world_gap_peer
+	world_gap_runtime.client_welcome = {
+		session_id = string.rep("b", 64),
+		reconnect_token = string.rep("c", 64),
+	}
+	world_gap_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	world_gap_runtime:_receive({
+		peer = world_gap_peer,
+		channel = Protocol.CHANNEL.WORLD,
+		data = NetworkReplication.encode_world({
+			sequence = 2,
+			tick = 1,
+			cells = {},
+		}),
+	})
+	assert(not world_gap_applied and world_gap_runtime.peer == nil
+		and world_gap_runtime.client_state == "reconnecting",
+		"world sequence gap was applied instead of recovered")
+	local current_peer, stale_peer = {}, {}
+	local stale_disconnect_delivered = false
+	local stale_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	stale_runtime.role = "client"
+	stale_runtime.client_state = "playing"
+	stale_runtime.peer = current_peer
+	stale_runtime.next_heartbeat = math.huge
+	stale_runtime.transport = {
+		poll = function()
+			if stale_disconnect_delivered then return nil end
+			stale_disconnect_delivered = true
+			return { type = "disconnect", peer = stale_peer, data = 0 }
+		end,
+		send = function() return true end,
+		flush = function() end,
+		disconnect = function() return true end,
+	}
+	stale_runtime:update(0)
+	assert(stale_runtime.peer == current_peer and stale_runtime.client_state == "playing",
+		"late disconnect from an old peer cleared the active connection")
+
+	local silent_registry = ActorRegistry.new()
+	local silent_host = process_test_actor(silent_registry)
+	local silent_closed = false
+	local silent_runtime = Runtime.new({ registry = silent_registry })
+	silent_runtime.role = "host"
+	silent_runtime.peer = {}
+	silent_runtime.transport = {
+		port = 23999,
+		poll = function() return nil end,
+		send = function() return true end,
+		flush = function() end,
+		disconnect = function()
+			silent_closed = true
+			return true
+		end,
+	}
+	silent_runtime.session = Session.new({
+		registry = silent_registry,
+		dropper = function() return true end,
+	})
+	silent_runtime.host_hello_deadline = 0
+	silent_runtime.next_heartbeat = math.huge
+	assert(not silent_runtime:advertisement().joinable,
+		"host advertised a slot already occupied by a pre-hello peer")
+	silent_runtime:update(0)
+	assert(silent_closed and silent_runtime.peer == nil
+		and silent_runtime.session.state == Session.STATE.LISTENING,
+		"silent pre-hello peer was not evicted at its deadline")
+
+	local approval_registry = ActorRegistry.new()
+	local approval_host = process_test_actor(approval_registry)
+	local approval_session = Session.new({
+		registry = approval_registry,
+		dropper = function() return true end,
+	})
+	assert(approval_session:begin_join(hello, expected))
+	local approval_peer = {}
+	local approval_event_delivered = false
+	local approval_runtime = Runtime.new({ registry = approval_registry })
+	approval_runtime.role = "host"
+	approval_runtime.peer = approval_peer
+	approval_runtime.session = approval_session
+	approval_runtime.approval_request = { session_id = approval_session.session_id }
+	approval_runtime.next_heartbeat = math.huge
+	approval_runtime.transport = {
+		poll = function()
+			if approval_event_delivered then return nil end
+			approval_event_delivered = true
+			return { type = "disconnect", peer = approval_peer, data = 0 }
+		end,
+		send = function() return true end,
+		flush = function() end,
+		disconnect = function() return true end,
+	}
+	approval_runtime:update(0)
+	assert(approval_runtime.approval_request == nil
+		and approval_runtime:pending_approval() == nil,
+		"transport disconnect retained a stale approval request")
 	local integrity_closed = false
 	local integrity_runtime = Runtime.new({
 		registry = ActorRegistry.new(),
@@ -1160,14 +1474,50 @@ local function validate_network_core()
 			actor_id = "guest",
 		},
 	})
+	assert(retry_runtime.client_state == "resuming_sync" and retry_sends == 1,
+		"client replayed actions before stream synchronization")
+	retry_runtime:_client_message({
+		kind = "resume_synced",
+		payload = { session_id = string.rep("6", 64) },
+	})
 	assert(retry_runtime.client_state == "playing" and retry_sends == 2,
-		"client did not retry an unconfirmed action after reconnect")
+		"client did not retry an unconfirmed action after synchronized reconnect")
 	retry_runtime:_client_message({
 		kind = "action_result",
 		payload = { action_id = 77, ok = true },
 	})
 	assert(#retry_runtime.pending_action_order == 0,
 		"client retained an acknowledged action")
+	local queued_action_attempts = 0
+	local queued_action_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		action_retry_interval = 0.1,
+	})
+	queued_action_runtime.role = "client"
+	queued_action_runtime.client_state = "playing"
+	queued_action_runtime.peer = {}
+	queued_action_runtime.next_heartbeat = math.huge
+	queued_action_runtime.transport = {
+		poll = function() return nil end,
+		send = function(_, _, kind)
+			if kind == "action" then
+				queued_action_attempts = queued_action_attempts + 1
+				if queued_action_attempts == 1 then return false, "temporary action failure" end
+			end
+			return true
+		end,
+		flush = function() end,
+		disconnect = function() return true end,
+	}
+	assert(queued_action_runtime:send_action({
+		action_id = 78,
+		action = "queued-retry-test",
+	}))
+	assert(#queued_action_runtime.pending_action_order == 1,
+		"client discarded an action whose first send failed")
+	queued_action_runtime:update(0.11)
+	assert(queued_action_attempts == 2,
+		"client did not retry a locally queued action")
 	local bounded_journal = WorldJournal.new({ max_pending = 1 })
 	assert(bounded_journal:record(1, 1))
 	local overflow_ok, overflow_error = bounded_journal:record(2, 1)
@@ -1305,6 +1655,49 @@ local function validate_multiplayer_gameplay()
 			"audio presentation failure broke authoritative synchronization")
 		actors:set_local(pl)
 		multiplayer_reset_network_events(true)
+		previous_role, previous_session = multiplayer.role, multiplayer.session
+		multiplayer.role = "host"
+		multiplayer.session = { state = MultiplayerSession.STATE.PLAYING }
+		multiplayer_run_as_actor("host", function()
+			sound_add("smoke_host_network_sound", 5, { x = 0.5, y = 1 })
+		end)
+		local host_sound_event = multiplayer_next_network_event()
+		multiplayer.role, multiplayer.session = previous_role, previous_session
+		assert(host_sound_event and host_sound_event.kind == "sound"
+			and host_sound_event.actor_id == "host"
+			and host_sound_event.x == pl.xt and host_sound_event.y == pl.yt,
+			"host-relative sound was serialized as a world-origin sound")
+		sound_kill("smoke_host_network_sound")
+		multiplayer_reset_network_events(true)
+
+		local attacker_mob_id, attacker_mob
+		for candidate_id, candidate in pairs(mobs) do
+			if type(candidate) == "table" and type(candidate.hp) == "number"
+				and type(candidate.save) == "table" then
+				attacker_mob_id, attacker_mob = candidate_id, candidate
+				break
+			end
+		end
+		assert(attacker_mob_id and type(attacker_mob) == "table",
+			"multiplayer fixture has no mob for attacker attribution")
+		local attacker_before = attacker_mob.last_attacker_id
+		local hostile_before = attacker_mob.hostile
+		local save_hostile_before = attacker_mob.save and attacker_mob.save.hostile
+		local sleep_before = attacker_mob.sleep
+		local hp_before = attacker_mob.hp
+		local sct_before = #sct
+		attacker_mob.last_attacker_id = "guest"
+		multiplayer_run_as_actor("host", function()
+			mob_hit(attacker_mob_id, 0, true)
+		end)
+		assert(attacker_mob.last_attacker_id == "host",
+			"host hit retained stale guest kill attribution")
+		attacker_mob.last_attacker_id = attacker_before
+		attacker_mob.hostile = hostile_before
+		if attacker_mob.save then attacker_mob.save.hostile = save_hostile_before end
+		attacker_mob.sleep = sleep_before
+		attacker_mob.hp = hp_before
+		while #sct > sct_before do table.remove(sct) end
 
 		InputState.set_button(runtime.input, "d", true)
 		runtime.input.aim = {
@@ -1551,6 +1944,22 @@ local function validate_multiplayer_gameplay()
 			and game.network_server_tick == previous_server_tick
 			and game.time == previous_game_time,
 			"malformed replication mutated authoritative client state")
+		local invalid_entity_replication = multiplayer_replication_state({ guest = guest })
+		invalid_entity_replication.mobs[1] = 1
+		local entities_before = mobs
+		local entity_ok, entity_error = multiplayer_apply_replication(
+			invalid_entity_replication
+		)
+		assert(not entity_ok and entity_error == "invalid replicated state shape"
+			and mobs == entities_before,
+			"scalar replicated entity reached the client runtime")
+		local invalid_shared_game = multiplayer_replication_state({ guest = guest })
+		invalid_shared_game.shared_game.network_client = true
+		local network_client_before = game.network_client
+		local shared_ok, shared_error = multiplayer_apply_replication(invalid_shared_game)
+		assert(not shared_ok and shared_error == "invalid replicated state shape"
+			and game.network_client == network_client_before,
+			"replication accepted an arbitrary shared game field")
 
 		local previous_sequence = tonumber(game.network_world_sequence) or 0
 		local original_first_cell = world[1][1]
@@ -3551,7 +3960,9 @@ local function validate_display_modes()
 	game.fullscreen = original_flags.fullscreen or false
 	game.gr2x = original_double_setting
 	love.window.setMode(original_width, original_height, original_flags)
-	if background and love.window.minimize then pcall(love.window.minimize) end
+	if background_minimize_enabled() and love.window.minimize then
+		pcall(love.window.minimize)
+	end
 	screen_res()
 	game.fullscreen = original_fullscreen_setting
 
@@ -3784,8 +4195,7 @@ function smoke.install(specification)
 	ignore_real_input()
 
 	love.load = function(...)
-		if os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
-			and love.window.minimize then
+		if background_minimize_enabled() and love.window.minimize then
 			pcall(love.window.minimize)
 		end
 		if mode == "network-process-host" or mode == "network-process-client" then
@@ -3850,8 +4260,7 @@ function smoke.install(specification)
 		end
 
         original_load(...)
-		if os.getenv("SARCOPHAGUS_TEST_BACKGROUND") == "1"
-			and love.window.minimize then
+		if background_minimize_enabled() and love.window.minimize then
 			pcall(love.window.minimize)
 		end
 		-- love.load installs the menu callbacks, so suppress real events again.
