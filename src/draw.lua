@@ -103,9 +103,7 @@ local function draw_multiplayer_status()
 			local quality_label = msg.network.quality_labels[status.quality]
 				or msg.network.quality_labels.unknown
 			text = text .. "\n" .. message(msg.network.quality, {
-				[1] = math.floor((rtt or 0) + 0.5),
-				[2] = string.format("%.1f", math.max(0, loss or 0)),
-				[3] = quality_label,
+				[1] = quality_label,
 			})
 		else
 			text = text .. "\n" .. msg.network.quality_unknown
@@ -115,8 +113,9 @@ local function draw_multiplayer_status()
 	text = MultiplayerProtocol.sanitize_utf8(text)
 	local width = math.min(520, screen.width - 40)
 	local x = (screen.width - width) / 2
-	local _, line_count = text:gsub("\n", "\n")
-	local height = 24 + (line_count + 1) * 14
+	local status_font = love.graphics.getFont()
+	local _, wrapped_lines = status_font:getWrap(text, width - 20)
+	local height = 24 + math.max(1, #wrapped_lines) * status_font:getHeight()
 	love.graphics.setColor(0.04, 0.06, 0.10, 0.88)
 	love.graphics.rectangle("fill", x, 18, width, height)
 	love.graphics.setColor(0.82, 0.90, 1, 1)

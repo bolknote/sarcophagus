@@ -3090,6 +3090,38 @@ local function validate_settings()
         )
         assert(utf8.len(draw_tool_pad("тест")) == 13, "UTF-8 UI padding is invalid")
         assert(msg.gui.item.dig == "#копание: ", "Russian tool tags were not activated")
+		assert(msg.menu.lan_found:find("В астрале отозвался живой мир", 1, true)
+			and msg.menu.lan_found:find("войти призраком", 1, true),
+			"Russian multiplayer discovery does not use the astral-world metaphor")
+		assert(msg.network.quality == "Астральная связь: _1_",
+			"Russian multiplayer quality exposes technical measurements")
+		local multiplayer_copy = {
+			msg.escmenu_guest[2],
+			msg.menu.lan_found,
+			msg.menu.lan_searching,
+			msg.menu.lan_unavailable,
+			msg.menu.lan_discovery_unavailable,
+		}
+		local function append_multiplayer_copy(value)
+			if type(value) == "string" then
+				multiplayer_copy[#multiplayer_copy + 1] = value
+			elseif type(value) == "table" then
+				for _, child in pairs(value) do
+					append_multiplayer_copy(child)
+				end
+			end
+		end
+		append_multiplayer_copy(msg.network)
+		local visible_multiplayer_copy = table.concat(multiplayer_copy, "\n")
+		for _, technical_term in ipairs({
+			"LAN", "RTT", "host", "Host", "локальной сет", "сетев",
+			"подключ", "соедин", "сесси", "клиент", "протокол", "сервер",
+			"тайм-аут", "мультипле", "синхрони", "сборк", "идентификатор",
+			"верси",
+		}) do
+			assert(not visible_multiplayer_copy:find(technical_term, 1, true),
+				"Russian multiplayer UI exposes technical term: " .. technical_term)
+		end
 		local inventory_hint, inventory_hint_rows = inventory_mode_toggle_hint(true, 1)
 		assert(inventory_hint:find("Инвентарь", 1, true) and inventory_hint_rows == 2,
 			"equipment view does not point back to the populated inventory")
