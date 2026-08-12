@@ -45,6 +45,12 @@ LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
 SARCOPHAGUS_PROCESS_DISCOVERY=broadcast \
 LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
 
+# Hold a fully idle connection longer than its accelerated heartbeat timeout.
+# No gameplay input is sent during this window; only ping/pong may keep the
+# host-side guest reservation alive.
+SARCOPHAGUS_PROCESS_IDLE_SECONDS=5 \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
 SARCOPHAGUS_NET_LATENCY_MS=25 \
 SARCOPHAGUS_NET_JITTER_MS=15 \
 SARCOPHAGUS_NET_LOSS_PERCENT=20 \

@@ -12,6 +12,10 @@ local Snapshot = require("src.network.snapshot")
 local Runtime = {}
 Runtime.__index = Runtime
 
+Runtime.DEFAULT_HEARTBEAT_INTERVAL = 2
+Runtime.DEFAULT_HEARTBEAT_TIMEOUT = 30
+Runtime.DEFAULT_RECONNECT_TIMEOUT = 30 * 60
+
 local function trimmed(value)
 	if type(value) ~= "string" then return tostring(value or "unknown") end
 	return value:match("^%s*(.-)%s*$")
@@ -229,11 +233,17 @@ function Runtime.new(options)
 		approval_timeout = math.max(1, tonumber(options.approval_timeout) or 35),
 		snapshot_timeout = math.max(1, tonumber(options.snapshot_timeout) or 60),
 		hello_timeout = math.max(1, tonumber(options.hello_timeout) or 8),
-		reconnect_timeout = math.max(5, tonumber(options.reconnect_timeout) or 20),
+		-- ENet traffic cannot run while a laptop is asleep or heavily App-Napped.
+		-- Keep an authenticated LAN guest recoverable across an ordinary break;
+		-- explicit quit/kick still tears the session down immediately.
+		reconnect_timeout = math.max(5, tonumber(options.reconnect_timeout)
+			or Runtime.DEFAULT_RECONNECT_TIMEOUT),
 		heartbeat_interval = math.max(0.5,
-			tonumber(options.heartbeat_interval) or 2),
+			tonumber(options.heartbeat_interval)
+				or Runtime.DEFAULT_HEARTBEAT_INTERVAL),
 		heartbeat_timeout = math.max(4,
-			tonumber(options.heartbeat_timeout) or 12),
+			tonumber(options.heartbeat_timeout)
+				or Runtime.DEFAULT_HEARTBEAT_TIMEOUT),
 		heartbeat_nonce = 0,
 		next_heartbeat = nil,
 		last_peer_activity = nil,
@@ -2466,6 +2476,7 @@ end
 function Runtime:status()
 	local transport_stats = self.transport and self.transport.stats
 		and self.transport:stats() or nil
+	local current = clock()
 	return {
 		role = self.role,
 		client_state = self.client_state,
@@ -2476,6 +2487,15 @@ function Runtime:status()
 		discovery_error = self.discovery_error,
 		transport = transport_stats,
 		quality = network_quality(transport_stats),
+		heartbeat = {
+			interval = self.heartbeat_interval,
+			timeout = self.heartbeat_timeout,
+			peer_silence = self.last_peer_activity
+				and math.max(0, current - self.last_peer_activity) or nil,
+			reconnect_timeout = self.reconnect_timeout,
+			reconnect_remaining = self.reconnect_deadline
+				and math.max(0, self.reconnect_deadline - current) or nil,
+		},
 		streams = {
 			world_pending = #self.world_outbox,
 			world_bytes = self.world_outbox_bytes,

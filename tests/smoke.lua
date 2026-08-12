@@ -95,6 +95,10 @@ local function install_process_network_test(role, value)
 	local crash_test = crash_role == "host" or crash_role == "client"
 	local crash_target = crash_test and crash_role == role
 	local expect_peer_crash = crash_test and crash_role ~= role
+	local idle_seconds = math.max(0, tonumber(os.getenv(
+		"SARCOPHAGUS_PROCESS_IDLE_SECONDS"
+	)) or 0)
+	local idle_test = idle_seconds > 0
 	local peer_observed = false
 	local function announce_crash_ready()
 		io.stdout:write("SARCOPHAGUS_PROCESS_CRASH_READY role=" .. role
@@ -113,18 +117,19 @@ local function install_process_network_test(role, value)
 	local reconnect_backlog = math.max(2, math.floor(tonumber(os.getenv(
 		"SARCOPHAGUS_PROCESS_RECONNECT_BACKLOG"
 	)) or 2))
-	local process_timeout = crash_test and 18
-		or (reconnect_backlog > 2 and 25 or 12)
+	local process_timeout = (crash_test and 18
+		or (reconnect_backlog > 2 and 25 or 12)) + idle_seconds + 2
 	if role == "host" then
 		local action_seen, input_seen = false, false
+		local idle_input_seen = not idle_test
 		local delta_sequence, event_sequence = 0, 0
 		local completion_elapsed
 		local reconnect_seen, reconnect_completed = false, not forced_disconnect
 		runtime = Runtime.new({
 			registry = registry,
 			max_poll_events = crash_test and 1 or nil,
-			heartbeat_interval = crash_test and 0.5 or nil,
-			heartbeat_timeout = crash_test and 4 or nil,
+			heartbeat_interval = (crash_test or idle_test) and 0.5 or nil,
+			heartbeat_timeout = (crash_test or idle_test) and 4 or nil,
 			reconnect_timeout = crash_test and 5 or nil,
 			state_interval = 0.01,
 			progress_interval = 0.1,
@@ -151,6 +156,8 @@ local function install_process_network_test(role, value)
 				if InputState.is_down(input, "d") then
 					input_seen = true
 					guest.truex = (guest.truex or 0) + 1
+				elseif idle_test and input_seen then
+					idle_input_seen = true
 				end
 			end,
 			action_handler = function(_, action)
@@ -240,13 +247,14 @@ local function install_process_network_test(role, value)
 			end
 			if runtime:pending_approval() then assert(runtime:approve_guest()) end
 			local wanted = forced_disconnect and reconnect_backlog or 1
-			if action_seen and input_seen and reconnect_completed
+			if action_seen and input_seen and idle_input_seen and reconnect_completed
 				and runtime.world_acked_sequence >= wanted
 				and runtime.event_acked_id >= wanted then
 				completion_elapsed = completion_elapsed or elapsed
-				if elapsed - completion_elapsed >= 0.75 then
+				if elapsed - completion_elapsed >= idle_seconds + 0.75 then
 					complete(0, "handshake=true input=true action=true reconnect="
-						.. tostring(reconnect_seen))
+						.. tostring(reconnect_seen)
+						.. " idle=" .. tostring(idle_test))
 				end
 			end
 			if elapsed > process_timeout then
@@ -265,6 +273,7 @@ local function install_process_network_test(role, value)
 		local discovery_seen = not discovery_requested
 		local action_sent = false
 		local process_input
+		local input_released = not idle_test
 		local next_input_send = 0
 		local completion_elapsed
 		local reconnect_seen, reconnect_completed = false, not forced_disconnect
@@ -272,8 +281,8 @@ local function install_process_network_test(role, value)
 		runtime = Runtime.new({
 			registry = registry,
 			max_poll_events = crash_test and 1 or nil,
-			heartbeat_interval = crash_test and 0.5 or nil,
-			heartbeat_timeout = crash_test and 4 or nil,
+			heartbeat_interval = (crash_test or idle_test) and 0.5 or nil,
+			heartbeat_timeout = (crash_test or idle_test) and 4 or nil,
 			reconnect_timeout = crash_test and 5 or nil,
 			state_interval = 0.01,
 			world_interval = 0.01,
@@ -377,10 +386,15 @@ local function install_process_network_test(role, value)
 					InputState.advance(process_input)
 					assert(runtime:send_input(process_input))
 					next_input_send = elapsed + 0.05
+				elseif idle_test and not input_released and process_input then
+					InputState.set_button(process_input, "d", false)
+					InputState.advance(process_input)
+					assert(runtime:send_input(process_input))
+					input_released = true
 				end
 			end
 			local wanted = forced_disconnect and reconnect_backlog or 1
-			if reconnect_completed and resume_barrier_verified
+			if input_released and reconnect_completed and resume_barrier_verified
 				and discovery_seen and snapshot_seen
 				and replicated and replicated.input_seen
 				and replicated.action_seen and progress_seen and world_delta
@@ -390,11 +404,12 @@ local function install_process_network_test(role, value)
 				and network_event.event_id == wanted
 				and network_event.value == wanted then
 				completion_elapsed = completion_elapsed or elapsed
-				if elapsed - completion_elapsed >= 0.25 then
+				if elapsed - completion_elapsed >= idle_seconds + 0.25 then
 					complete(0,
 						"snapshot=true state=true progress=true world=true action_result=true event=true discovery="
 							.. tostring(discovery_requested and discovery_seen)
-							.. " reconnect=" .. tostring(reconnect_seen))
+							.. " reconnect=" .. tostring(reconnect_seen)
+							.. " idle=" .. tostring(idle_test))
 				end
 			end
 			if runtime.client_state == "failed" or runtime.client_state == "rejected" then
@@ -2142,6 +2157,19 @@ local function validate_network_core()
 		and #repeated_snapshot_runtime.early_snapshot_chunks == 0,
 		"a repeated snapshot interruption switched to stream recovery")
 	local initial_timeout_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	assert(initial_timeout_runtime.heartbeat_interval
+		== Runtime.DEFAULT_HEARTBEAT_INTERVAL
+		and initial_timeout_runtime.heartbeat_timeout
+			== Runtime.DEFAULT_HEARTBEAT_TIMEOUT
+		and initial_timeout_runtime.reconnect_timeout
+			== Runtime.DEFAULT_RECONNECT_TIMEOUT,
+		"runtime defaults do not survive an ordinary laptop idle/suspend period")
+	local initial_timeout_status = initial_timeout_runtime:status()
+	assert(initial_timeout_status.heartbeat.timeout
+		== Runtime.DEFAULT_HEARTBEAT_TIMEOUT
+		and initial_timeout_status.heartbeat.reconnect_timeout
+			== Runtime.DEFAULT_RECONNECT_TIMEOUT,
+		"network status does not expose heartbeat/reconnect diagnostics")
 	initial_timeout_runtime.role = "client"
 	initial_timeout_runtime.client_state = "connecting"
 	initial_timeout_runtime.client_deadline = love.timer.getTime() - 1
@@ -2153,6 +2181,24 @@ local function validate_network_core()
 		and initial_timeout_runtime.client_state == "reconnecting"
 		and initial_timeout_runtime.client_resume_mode == "initial",
 		"initial connection timeout was not retried")
+	local suspend_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	suspend_runtime.role = "client"
+	suspend_runtime.client_state = "playing"
+	suspend_runtime.client_welcome = {
+		session_id = string.rep("8", 64),
+		reconnect_token = string.rep("9", 64),
+	}
+	suspend_runtime.peer = {}
+	suspend_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	assert(suspend_runtime:_handle_transport_loss(
+		"simulated_laptop_suspend",
+		suspend_runtime.peer
+	) and suspend_runtime.client_state == "reconnecting"
+		and suspend_runtime:status().heartbeat.reconnect_remaining
+			> Runtime.DEFAULT_RECONNECT_TIMEOUT - 1,
+		"a suspended client did not retain a long reconnect window")
 
 	local registry = ActorRegistry.new()
 	local host = ActorState.new({ actor_id = "host", actor_role = "host" })
@@ -2191,6 +2237,37 @@ local function validate_network_core()
 		game_version = "test-version",
 		content_hash = test_content_hash,
 	}
+	local suspend_clock = 0
+	local suspend_registry = ActorRegistry.new()
+	local suspend_host = process_test_actor(suspend_registry)
+	local default_session = Session.new({
+		registry = suspend_registry,
+		clock = function() return suspend_clock end,
+		token_factory = function(prefix)
+			return prefix == "session" and string.rep("6", 64)
+				or string.rep("7", 64)
+		end,
+		dropper = function() return true end,
+	})
+	assert(default_session.reconnect_timeout
+		== Session.DEFAULT_RECONNECT_TIMEOUT
+		and default_session:begin_join(hello, expected, suspend_clock)
+		and default_session:approve(suspend_host, { xt = 1, yt = 1 })
+		and default_session:snapshot_sent(1)
+		and default_session:ready(1)
+		and default_session:disconnect(
+			"simulated_laptop_suspend",
+			false,
+			suspend_clock
+		), "could not create a suspended guest session")
+	suspend_clock = 60
+	assert(default_session:update(suspend_clock)
+		and default_session.state == Session.STATE.RECONNECT_GRACE
+		and default_session.guest ~= nil
+		and default_session:resume(string.rep("7", 64)),
+		"host discarded a sleeping guest before its reconnect window")
+	assert(default_session:shutdown(),
+		"suspend recovery fixture did not clean up")
 	assert(session:begin_join(hello, expected, clock))
 	assert(session.state == Session.STATE.AWAITING_APPROVAL)
 	local approved, welcome = session:approve(host, { xt = 10, yt = 20 })

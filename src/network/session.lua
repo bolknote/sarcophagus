@@ -6,6 +6,10 @@ local Protocol = require("src.network.protocol")
 local Session = {}
 Session.__index = Session
 
+-- Runtime gives the host a few extra seconds beyond the client's retry
+-- deadline. This standalone default follows the same suspend-safe policy.
+Session.DEFAULT_RECONNECT_TIMEOUT = 30 * 60 + 5
+
 Session.STATE = {
 	LISTENING = "listening",
 	AWAITING_APPROVAL = "awaiting_host_approval",
@@ -56,7 +60,8 @@ function Session.new(options)
 		guest = nil,
 		last_server_tick = 0,
 		approval_timeout = math.max(1, tonumber(options.approval_timeout) or 30),
-		reconnect_timeout = math.max(1, tonumber(options.reconnect_timeout) or 15),
+		reconnect_timeout = math.max(1, tonumber(options.reconnect_timeout)
+			or Session.DEFAULT_RECONNECT_TIMEOUT),
 		snapshot_timeout = math.max(1, tonumber(options.snapshot_timeout) or 60),
 		catchup_timeout = math.max(1, tonumber(options.catchup_timeout) or 30),
 		deadline = nil,
