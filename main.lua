@@ -76,6 +76,7 @@ NetworkInterpolationBuffer = require("src.network.interpolation_buffer")
 WorldJournal = require("src.network.world_journal")
 LANDiscovery = require("src.network.discovery")
 MultiplayerRuntime = require("src.network.runtime")
+NetworkGameAdapter = require("src.network.game_adapter")
 actors = ActorRegistry.new()
 network_world_journal = WorldJournal.new()
 require ("src.mainlib")
@@ -119,8 +120,7 @@ require ("src.joystick")
 require ("src.achievements")
 require ("src.draw_gui")
 
-multiplayer = MultiplayerRuntime.new({
-	registry = actors,
+local multiplayer_game_adapter = NetworkGameAdapter.new({
 	state_provider = multiplayer_snapshot_state,
 	state_applier = multiplayer_apply_snapshot,
 	spawn_provider = multiplayer_guest_spawn,
@@ -144,6 +144,37 @@ multiplayer = MultiplayerRuntime.new({
 	event_reset = multiplayer_reset_network_events,
 	action_result_handler = multiplayer_action_result,
 })
+multiplayer = MultiplayerRuntime.new(multiplayer_game_adapter:runtime_options({
+	registry = actors,
+}))
+
+if IS_DEVELOPMENT and lurker then
+	lurker.preswap = function(path)
+		if multiplayer and multiplayer.role ~= "offline" then
+			local stopped, stop_error = multiplayer:prepare_quit()
+			if not stopped then
+				if oldprint then
+					oldprint("Hot reload blocked for " .. tostring(path) .. ": "
+						.. tostring(stop_error))
+				end
+				return true
+			end
+		end
+		return false
+	end
+	lurker.postswap = function(path)
+		if multiplayer and multiplayer.invalidate_content_hash then
+			local invalidated, invalidate_error =
+				multiplayer:invalidate_content_hash(true)
+			if not invalidated and oldprint then
+				oldprint("Could not refresh content hash after " .. tostring(path)
+					.. ": " .. tostring(invalidate_error))
+			end
+		elseif MultiplayerContentHash and MultiplayerContentHash.invalidate then
+			MultiplayerContentHash.invalidate()
+		end
+	end
+end
 
 utf8 = require("utf8")
 

@@ -3,10 +3,35 @@ local BlobWriter = require("src.BlobWriter")
 
 local Replication = {}
 
-Replication.STATE_MAGIC = "RST2"
-Replication.WORLD_MAGIC = "RWD2"
+Replication.STATE_MAGIC = "RST3"
+Replication.WORLD_MAGIC = "RWD3"
 Replication.MAX_RAW_BYTES = 8 * 1024 * 1024
 Replication.MAX_STORED_BYTES = 2 * 1024 * 1024
+Replication.HEADER_SIZE = 8
+local LOVE_LZ4_HEADER_SIZE = 4
+
+local function encode_u32(value)
+	assert(type(value) == "number" and value >= 0 and value < 2 ^ 32
+		and value == math.floor(value), "invalid replication payload size")
+	return string.char(
+		math.floor(value / 2 ^ 24) % 256,
+		math.floor(value / 2 ^ 16) % 256,
+		math.floor(value / 2 ^ 8) % 256,
+		value % 256
+	)
+end
+
+local function decode_u32(value, offset)
+	local a, b, c, d = value:byte(offset, offset + 3)
+	if not d then return nil end
+	return ((a * 256 + b) * 256 + c) * 256 + d
+end
+
+local function decode_u32_le(value, offset)
+	local a, b, c, d = value:byte(offset, offset + 3)
+	if not d then return nil end
+	return ((d * 256 + c) * 256 + b) * 256 + a
+end
 
 local actor_fields = {
 	"actor_version", "actor_id", "actor_role", "ghost", "session_id",
@@ -18,7 +43,7 @@ local actor_fields = {
 	"digdone", "digxt", "digyt", "digstart", "digcant", "digback",
 	"digspeed", "diganispeed", "candrop", "canthrow", "throw", "travel",
 	"canuse", "candrink", "inspect", "cob", "iscob", "fishing",
-	"shit", "dishes", "killed", "diet", "quests", "quest",
+	"shit", "dishes", "killed", "diet", "quests", "quest", "deaths",
 	"unlock_i", "unlock_c", "visited", "ferted",
 	"lastshit", "bufftick", "restquality", "restqualityb",
 	"network_recovery_time", "network_deaths",
@@ -36,7 +61,7 @@ local shared_progress_fields = {
 -- survival stats. It travels with the shared progress update, but remains
 -- actor-owned.
 local actor_progress_fields = {
-	"shit", "dishes", "killed", "diet", "quest",
+	"shit", "dishes", "killed", "diet", "quest", "deaths",
 }
 
 local progress_field = {}
@@ -127,7 +152,7 @@ local function encode(magic, payload)
 	assert(#raw <= Replication.MAX_RAW_BYTES, "replication payload is too large")
 	local stored = love.data.compress("string", "lz4", raw)
 	assert(#stored <= Replication.MAX_STORED_BYTES, "replication packet is too large")
-	return magic .. stored
+	return magic .. encode_u32(#raw) .. stored
 end
 
 function Replication.encode_state(payload)
@@ -139,7 +164,7 @@ function Replication.encode_world(payload)
 end
 
 function Replication.packet_kind(packet)
-	if type(packet) ~= "string" or #packet < 5 then return nil end
+	if type(packet) ~= "string" or #packet <= Replication.HEADER_SIZE then return nil end
 	local magic = packet:sub(1, 4)
 	if magic == Replication.STATE_MAGIC then return "state" end
 	if magic == Replication.WORLD_MAGIC then return "world" end
@@ -149,21 +174,46 @@ end
 function Replication.decode(packet)
 	local kind = Replication.packet_kind(packet)
 	if not kind then return nil, "not a replication packet" end
-	if #packet - 4 > Replication.MAX_STORED_BYTES then
+	local expected_size = decode_u32(packet, 5)
+	if not expected_size or expected_size < 1
+		or expected_size > Replication.MAX_RAW_BYTES then
+		return nil, "replication raw size is invalid"
+	end
+	if #packet - Replication.HEADER_SIZE > Replication.MAX_STORED_BYTES then
 		return nil, "replication packet exceeds size limit"
+	end
+	local stored = packet:sub(Replication.HEADER_SIZE + 1)
+	-- LÖVE's string form of an LZ4 block starts with its own little-endian
+	-- uncompressed size and allocates that amount before decoding. Inspect that
+	-- allocator-facing header before calling into love.data.decompress: checking
+	-- only our outer header would still permit a forged compressed bomb.
+	if #stored <= LOVE_LZ4_HEADER_SIZE then
+		return nil, "replication LZ4 header is invalid"
+	end
+	local lz4_size = decode_u32_le(stored, 1)
+	if not lz4_size or lz4_size < 1 or lz4_size > Replication.MAX_RAW_BYTES then
+		return nil, "replication LZ4 raw size is invalid"
+	end
+	if lz4_size ~= expected_size then
+		return nil, "replication raw size mismatch"
 	end
 	local decompressed, raw = pcall(
 		love.data.decompress,
 		"string",
 		"lz4",
-		packet:sub(5)
+		stored
 	)
 	if not decompressed then return nil, tostring(raw) end
-	if #raw > Replication.MAX_RAW_BYTES then
-		return nil, "replication payload exceeds size limit"
+	if #raw ~= expected_size then
+		return nil, "replication raw size mismatch"
 	end
 	local decoded, value = pcall(function()
-		return BlobReader(raw):read()
+		local reader = BlobReader(raw)
+		local result = reader:read()
+		if reader:position() ~= reader:size() then
+			error("trailing replication data")
+		end
+		return result
 	end)
 	if not decoded or type(value) ~= "table" then
 		return nil, decoded and "invalid replication payload" or tostring(value)

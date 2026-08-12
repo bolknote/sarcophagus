@@ -60,6 +60,82 @@ local actor_globals = {
 	"fishing",
 }
 
+local field_groups = {
+	game = game_fields,
+	craft = craft_fields,
+	transient_global = transient_globals,
+	actor_global = actor_globals,
+}
+
+-- This registry is the executable counterpart of docs/actor-state-registry.md.
+-- Keep broad shared tables out of the swap list: they are authoritative world
+-- state.  The entries below make the boundary inspectable by tests and review
+-- tooling instead of leaving it implicit in ActorContext.run.
+local state_registry = {
+	actor_owned = {
+		"actor table (ActorState/GhostActor)",
+		"ActorRegistry runtime input",
+		"ActorRegistry runtime local_globals",
+	},
+	shared = {
+		"world", "mobs", "proj", "worldani", "tips", "disp",
+		"game.time", "game.ttl_list", "game.ph_list",
+	},
+	host_only = {
+		"save_manager", "network_world_journal", "multiplayer.session",
+	},
+	presentation_only = {
+		"ActorRegistry runtime presentation.camera",
+		"ActorRegistry runtime presentation.local_ui",
+		"vi", "mouse_x", "mouse_y", "mouse_t",
+	},
+}
+
+local field_members = {}
+for scope, fields in pairs(field_groups) do
+	field_members[scope] = {}
+	for _, name in ipairs(fields) do field_members[scope][name] = true end
+end
+
+-- Legacy systems can explicitly classify new mutable state without editing
+-- ActorContext's swap implementation. Shared world state must not be
+-- registered here; these groups are exclusively actor-local or transient.
+function ActorContext.register_field(scope, name)
+	local fields = field_groups[scope]
+	assert(fields, "unknown actor context field scope")
+	assert(type(name) == "string" and name:match("^[%a_][%w_]*$"),
+		"invalid actor context field name")
+	if field_members[scope][name] then return true, "existing" end
+	fields[#fields + 1] = name
+	field_members[scope][name] = true
+	return true, "registered"
+end
+
+function ActorContext.registered_fields(scope)
+	local fields = assert(field_groups[scope], "unknown actor context field scope")
+	local result = {}
+	for index, name in ipairs(fields) do result[index] = name end
+	return result
+end
+
+function ActorContext.state_registry()
+	local result = {}
+	for classification, entries in pairs(state_registry) do
+		result[classification] = {}
+		for index, name in ipairs(entries) do
+			result[classification][index] = name
+		end
+	end
+	result.actor_owned_fields = {}
+	for scope, fields in pairs(field_groups) do
+		result.actor_owned_fields[scope] = {}
+		for index, name in ipairs(fields) do
+			result.actor_owned_fields[scope][index] = name
+		end
+	end
+	return result
+end
+
 local function clone_camera(reference)
 	local camera = StateCopy.copy(reference or {})
 	camera.xoffset = tonumber(camera.xoffset) or 0
@@ -141,6 +217,7 @@ function ActorContext.run(registry, actor, options, callback)
 	local previous_transient = {}
 	for _, name in ipairs(transient_globals) do
 		previous_transient[name] = _G[name]
+		_G[name] = nil
 	end
 	local previous_actor_globals = swap_fields(_G, actor_globals, runtime.local_globals)
 
@@ -157,20 +234,28 @@ function ActorContext.run(registry, actor, options, callback)
 	local previous_craft = type(craft) == "table"
 		and swap_fields(craft, craft_fields, ui.craft) or nil
 
-	if actor.truex and actor.truey then coord_true2screen(actor) end
-	local aim = ACTIVE_INPUT_STATE and ACTIVE_INPUT_STATE.aim or {}
-	if tonumber(aim.world_x) and tonumber(aim.world_y) then
-		mouse_x, mouse_y = screen_from_world(camera, aim.world_x, aim.world_y)
-	elseif tonumber(aim.tile_x) and tonumber(aim.tile_y) then
-		mouse_x, mouse_y = tile2px(aim.tile_x, aim.tile_y).x,
-			tile2px(aim.tile_x, aim.tile_y).y
+	local position_ready = false
+	local called, first, second, third = pcall(function()
+		if actor.truex and actor.truey then coord_true2screen(actor) end
+		position_ready = actor.x ~= nil and actor.y ~= nil
+		local aim = ACTIVE_INPUT_STATE and ACTIVE_INPUT_STATE.aim or {}
+		if tonumber(aim.world_x) and tonumber(aim.world_y) then
+			mouse_x, mouse_y = screen_from_world(camera, aim.world_x, aim.world_y)
+		elseif tonumber(aim.tile_x) and tonumber(aim.tile_y) then
+			mouse_x, mouse_y = tile2px(aim.tile_x, aim.tile_y).x,
+				tile2px(aim.tile_x, aim.tile_y).y
+		end
+		mouse_x = tonumber(mouse_x) or tonumber(actor.x) or 0
+		mouse_y = tonumber(mouse_y) or tonumber(actor.y) or 0
+		mouse_t = px2tile(mouse_x, mouse_y)
+		return callback(actor, runtime)
+	end)
+	local position_restored, position_error = pcall(function()
+		if position_ready then coord_screen2true(actor) end
+	end)
+	if called and not position_restored then
+		called, first = false, position_error
 	end
-	mouse_x = tonumber(mouse_x) or tonumber(actor.x) or 0
-	mouse_y = tonumber(mouse_y) or tonumber(actor.y) or 0
-	mouse_t = px2tile(mouse_x, mouse_y)
-
-	local called, first, second, third = pcall(callback, actor, runtime)
-	if actor.x and actor.y then coord_screen2true(actor) end
 
 	persist_fields(game, game_fields, ui.game, previous_game)
 	if previous_craft then

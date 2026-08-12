@@ -45,6 +45,11 @@ function ContentHash.files(paths)
 	return files
 end
 
+function ContentHash.invalidate()
+	cache = {}
+	return true
+end
+
 function ContentHash.compute(paths)
 	assert(love and love.data and love.data.hash, "LÖVE data hashing is required")
 	local files = ContentHash.files(paths)

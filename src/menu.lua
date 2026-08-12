@@ -46,6 +46,59 @@ local function lan_servers()
 	return multiplayer and multiplayer:servers() or {}
 end
 
+local lan_manual_input
+
+function menu_parse_lan_address(value, default_port)
+	value = tostring(value or ""):match("^%s*(.-)%s*$")
+	if value == "" or #value > 128 or value:find("[%z\1-\32\127]") then
+		return nil, "invalid_manual_address"
+	end
+	local host, port = value:match("^([^:]+):(%d+)$")
+	if not host then
+		if value:find(":", 1, true) then return nil, "invalid_manual_address" end
+		host, port = value, default_port or MultiplayerProtocol.DEFAULT_GAMEPLAY_PORT
+	end
+	port = tonumber(port)
+	if not host:match("^[A-Za-z0-9][A-Za-z0-9%.%-]*$")
+		or not port or port < 1 or port > 65535 or port ~= math.floor(port) then
+		return nil, "invalid_manual_address"
+	end
+	if host:match("^[%d%.]+$") then
+		local octets = {}
+		for octet in host:gmatch("[^%.]+") do octets[#octets + 1] = octet end
+		if #octets ~= 4 then return nil, "invalid_manual_address" end
+		for _, octet in ipairs(octets) do
+			local number = tonumber(octet)
+			if not number or number < 0 or number > 255 then
+				return nil, "invalid_manual_address"
+			end
+		end
+	end
+	return host, port
+end
+
+function menu_lan_textinput(value)
+	if lan_manual_input == nil then return false end
+	value = tostring(value or "")
+	if value:match("^[A-Za-z0-9%.%-:]+$")
+		and #lan_manual_input + #value <= 128 then
+		lan_manual_input = lan_manual_input .. value
+	end
+	return true
+end
+
+function menu_begin_manual_lan_entry()
+	lan_manual_input = ""
+	stradd = ""
+	love.keyboard.setTextInput(true)
+	return true
+end
+
+local function close_manual_lan_entry()
+	lan_manual_input = nil
+	love.keyboard.setTextInput(false)
+end
+
 local function lan_server_compatible(record)
 	local expected_content_hash = multiplayer and multiplayer.content_hash
 	return record
@@ -55,7 +108,7 @@ local function lan_server_compatible(record)
 			or record.content_hash == expected_content_hash)
 end
 
-function menu_lan_prompt_state(servers, discovery_error)
+function menu_lan_prompt_state(servers, discovery_error, discovery_status)
 	servers = servers or {}
 	for _, record in ipairs(servers) do
 		if record.joinable and lan_server_compatible(record) then
@@ -64,6 +117,7 @@ function menu_lan_prompt_state(servers, discovery_error)
 	end
 	if #servers > 0 then return "unavailable" end
 	if discovery_error then return "discovery_unavailable" end
+	if discovery_status and discovery_status.timed_out then return "timeout" end
 	return "searching"
 end
 
@@ -96,6 +150,18 @@ local function connect_to_lan_server(record)
 	return multiplayer:connect({
 		host = record.address,
 		port = record.gameplay_port,
+		game_version = game_version,
+	})
+end
+
+local function connect_to_manual_lan_server(value)
+	local host, port_or_error = menu_parse_lan_address(value)
+	if not host then return false, port_or_error end
+	local reset, reset_error = reset_menu_client()
+	if not reset then return false, reset_error end
+	return multiplayer:connect({
+		host = host,
+		port = port_or_error,
 		game_version = game_version,
 	})
 end
@@ -367,10 +433,35 @@ function love.menu_keypressed(key, scan)
 	-- Enter, and save deletion cannot operate on nil fields.
 	ensure_menu_selection()
 
+	if lan_manual_input ~= nil then
+		if scan == "escape" then
+			close_manual_lan_entry()
+		elseif scan == "backspace" then
+			lan_manual_input = lan_manual_input:sub(1, -2)
+		elseif scan == "return" or scan == "kpenter" then
+			local connected, connect_error = connect_to_manual_lan_server(
+				lan_manual_input
+			)
+			if connected then
+				close_manual_lan_entry()
+				stradd = ""
+			else
+				stradd = localized_network_error(connect_error)
+			end
+		end
+		return
+	end
+
+	if scan == "m" then
+		menu_begin_manual_lan_entry()
+		return
+	end
+
 	if scan == "j" then
 		local _, record = menu_lan_prompt_state(
 			lan_servers(),
-			multiplayer and multiplayer.discovery_error
+			multiplayer and multiplayer.discovery_error,
+			multiplayer and multiplayer:discovery_status()
 		)
 		if not record then return end
 		local connected, connect_error = connect_to_lan_server(record)
@@ -590,9 +681,16 @@ function love.menu_update(d)
 	else
 		local lan_state = menu_lan_prompt_state(
 			lan_servers(),
-			multiplayer and multiplayer.discovery_error
+			multiplayer and multiplayer.discovery_error,
+			multiplayer and multiplayer:discovery_status()
 		)
 		game.menu = game.menu .. msg.menu["lan_" .. lan_state]
+		game.menu = game.menu .. msg.menu.lan_manual
+		if lan_manual_input ~= nil then
+			game.menu = game.menu .. menu_message(msg.menu.lan_manual_prompt, {
+				[1] = lan_manual_input,
+			})
+		end
 	end
 	if stradd ~= "" then
 		game.menu = game.menu .. "\n\n{#ff0044ff}" .. stradd .. "{#ffffffff}"

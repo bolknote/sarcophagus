@@ -1,3 +1,5 @@
+local PerformanceMetrics = require("src.performance_metrics")
+
 function mobs_remove_prototypes(active_mobs)
 	local removed = 0
 	for id, mob in pairs(active_mobs or {}) do
@@ -101,20 +103,23 @@ function quit_countdown_update()
 	return true
 end
 
-
-function love.update(d)
-	-- Save serialization is cooperative and receives only a small slice of each
-	-- frame. Worker results are polled before focus and pause early-returns so a
-	-- background save can finish while the window is inactive or the menu is up.
-	if save_manager then
-		save_manager.update()
-	end
+local function gameplay_network_phase(frame_dt)
+	-- Save serialization is cooperative and must advance before any early return.
+	if save_manager then save_manager.update() end
 	if not game.network_client then
 		game.network_clock = (tonumber(game.network_clock) or 0)
-			+ math.max(0, math.min(0.25, tonumber(d) or 0))
+			+ math.max(0, math.min(0.25, tonumber(frame_dt) or 0))
+	end
+	if multiplayer_recover_guest_possessions then
+		local recovered, recovery_status = multiplayer_recover_guest_possessions()
+		if not recovered then
+			game.network_guest_recovery_error = tostring(recovery_status)
+		elseif recovery_status == "recovered" or recovery_status == "empty" then
+			game.network_guest_recovery_error = nil
+		end
 	end
 	if multiplayer_finalize_shared_time then multiplayer_finalize_shared_time() end
-	if multiplayer then multiplayer:update(d) end
+	if multiplayer then multiplayer:update(frame_dt) end
 	if multiplayer and multiplayer:pending_approval() then
 		local pending = multiplayer:pending_approval()
 		if game.multiplayer_prompt_session ~= pending.session_id then
@@ -125,114 +130,79 @@ function love.update(d)
 		game.multiplayer_prompt_session = nil
 	end
 	if game.network_client and multiplayer and multiplayer.role == "client" then
-		multiplayer_client_update(d)
-		return
+		multiplayer_client_update(frame_dt)
+		return false
 	end
+	return true
+end
 
-	--love.audio.setVolume(0.1)
+local virtual_pointer_directions = {
+	{ key = "kp6", axis = "x", direction = 1 },
+	{ key = "kp4", axis = "x", direction = -1 },
+	{ key = "kp8", axis = "y", direction = -1 },
+	{ key = "kp2", axis = "y", direction = 1 },
+}
 
-	--local direction = joystick:getAxis(1)
-	--dump (direction)
-
-	mousemoved_last = mousemoved_last or 0
-	mousemoved_last = mousemoved_last + d
-
-	mousetruemoved_last = mousetruemoved_last or 0
-	mousetruemoved_last = mousetruemoved_last + d
-
-
-	--mouse joystick move
-
-	local k,a = is_pressed ('kp6')  --right
-	if k then
-		mousemoved_last = 0
-		mousemoved = true
-		a = virtual_cursor_delta(a, 1)
-
-		local x = love.mouse.getX( )
-		love.mouse.setX(x+a)
+local function gameplay_pointer_phase(frame_dt)
+	mousemoved_last = (mousemoved_last or 0) + frame_dt
+	mousetruemoved_last = (mousetruemoved_last or 0) + frame_dt
+	for _, movement in ipairs(virtual_pointer_directions) do
+		local pressed, amount = is_pressed(movement.key)
+		if pressed then
+			mousemoved = true
+			if movement.key == "kp6" then mousemoved_last = 0 end
+			amount = virtual_cursor_delta(amount, movement.direction)
+			if movement.axis == "x" then
+				love.mouse.setX(love.mouse.getX() + amount)
+			else
+				love.mouse.setY(love.mouse.getY() + amount)
+			end
+		end
 	end
+	mouse_x, mouse_y = love.mouse.getX(), love.mouse.getY()
+	if game.gr2x then mouse_x, mouse_y = mouse_x / 2, mouse_y / 2 end
+	mouse_t = px2tile(mouse_x, mouse_y)
+end
 
-
-	local k,a = is_pressed ('kp4') --left
-	if k then
-		mousemoved = true
-		a = virtual_cursor_delta(a, -1)
-
-		local x = love.mouse.getX( )
-		love.mouse.setX(x+a)
-	end
-
-
-	local k,a = is_pressed ('kp8')  --up
-	if k then
-		mousemoved = true
-		a = virtual_cursor_delta(a, -1)
-
-		local x = love.mouse.getY( )
-		love.mouse.setY(x+a)
-	end
-
-
-	local k,a = is_pressed ('kp2')  --down
-	if k then
-		mousemoved = true
-		a = virtual_cursor_delta(a, 1)
-
-		local x = love.mouse.getY( )
-		love.mouse.setY(x+a)
-	end
-
-	
-
-
-
-
-
-
-
-
-	mouse_x = love.mouse.getX()
-	mouse_y = love.mouse.getY()
-	
-	if game.gr2x then
-		mouse_x = mouse_x/2
-		mouse_y = mouse_y/2
-	end
-
-	mouse_t = px2tile (mouse_x,mouse_y)
-
-	--dump (mouse_t)
-
-
-	dt = d
-	if dt>1 then dt = 0 end
-	
-	next_time = next_time + min_dt
-
-	-- A successful Save and Quit freezes the simulation immediately. Keep the
-	-- short preview-capture countdown running even if focus changes meanwhile.
-	if quit_countdown_update() then
-		return
-	end
-
-	local multiplayer_host_paused = false
+local function gameplay_pause_phase()
+	if quit_countdown_update() then return false, false end
+	local host_paused = false
 	if not love.window.hasFocus() then
 		if multiplayer_session_active and multiplayer_session_active() then
-			multiplayer_host_paused = true
+			host_paused = true
 		else
-			return
+			return false, false
 		end
 	end
-
 	if game.pause then
 		if multiplayer_session_active and multiplayer_session_active() then
-			multiplayer_host_paused = true
+			host_paused = true
 		else
-			sound_update ()
-			return
+			sound_update()
+			return false, false
 		end
 	end
+	return true, host_paused
+end
+
+
+local gameplay_actor_phase
+local gameplay_lighting_phase
+local gameplay_player_phase
+local gameplay_movement_phase
+local gameplay_mobs_phase
+local gameplay_world_phase
+local gameplay_ui_phase
+
+local function gameplay_update(d)
+	if not gameplay_network_phase(d) then return end
+	gameplay_pointer_phase(d)
+	dt = d
+	if dt>1 then dt = 0 end
+
+	next_time = next_time + min_dt
+	local continue, multiplayer_host_paused = gameplay_pause_phase()
+	if not continue then return end
 	game.network_tick = (game.network_tick or 0) + 1
 
 
@@ -286,7 +256,10 @@ function love.update(d)
 	--dump (game.showroom)
 
 	autosave_update(game.dt, mousemoved_last)
+	return gameplay_actor_phase(multiplayer_host_paused)
+end
 
+function gameplay_actor_phase(multiplayer_host_paused)
 	-- player position changed
 	game.moved = false
 
@@ -441,7 +414,10 @@ function love.update(d)
 		stat_recovery ('arms',dt)
 		--print (dt)
 	end
+	return gameplay_lighting_phase(multiplayer_host_paused)
+end
 
+function gameplay_lighting_phase(multiplayer_host_paused)
 	if #mobs<3 then
 		--local m = mobs[mob_create (pl.xt,pl.yt,11)]
 	end
@@ -488,10 +464,13 @@ function love.update(d)
 		end
 	end
 	multiplayer_refresh_actor_lights(false)
+	return gameplay_player_phase(multiplayer_host_paused)
+end
 
 
 
 
+function gameplay_player_phase(multiplayer_host_paused)
 	-- dead
 	--dying
 	if pl.dying==1 then 
@@ -555,16 +534,7 @@ function love.update(d)
 
 
 	if pl.dying==6 and game.fadein == nil then
-		inv_ground_add (pl.xt,pl.yt,item_make(45)) --corpse
-		pl.dying=nil
-		player_reset ()
-		stats_reset ()
-		stat_spend ("power",95)
-		pl.isdead = nil
-		--quest_reset (1)
-		--quest_cd (30)
-		pl.inv = {}
-		inv_add (item_make(26))
+		player_respawn()
 	end
 
 	--dump (game.fadein)
@@ -714,6 +684,10 @@ function love.update(d)
 
 	end
 
+	return gameplay_movement_phase(multiplayer_host_paused)
+end
+
+function gameplay_movement_phase(multiplayer_host_paused)
 	-- moving
 	if pl.dying == nil and not multiplayer_host_paused then
 
@@ -825,8 +799,11 @@ function love.update(d)
 
 
 	camera_move()
+	return gameplay_mobs_phase()
+end
 
 
+function gameplay_mobs_phase()
 	-- mobs 
 	local mobst = 0
 	mobs_remove_prototypes(mobs)
@@ -877,6 +854,10 @@ function love.update(d)
 	end
 
 
+	return gameplay_world_phase()
+end
+
+function gameplay_world_phase()
 	fishing_update ()
 
 	PlayerAnimation.update(pl, dt, gr)
@@ -913,20 +894,14 @@ end
 game.checked = false
 game.fchecked = false
 
-local checked_active_cells = {}
-for _, active_camera in ipairs(multiplayer_active_cameras()) do
-	for ix=-1,screen.x+1 do
-	for iy=-1,screen.y+1 do
-		x = active_camera.xtile+ix+1
-		y = active_camera.ytile+iy+1
-		local active_key = x .. ":" .. y
-		if not checked_active_cells[active_key] then
-			checked_active_cells[active_key] = true
-			checks (x,y,{real = true})
-		end
+multiplayer_each_active_cell(
+	multiplayer_active_cameras(),
+	screen.x,
+	screen.y,
+	function(active_x, active_y)
+		checks(active_x, active_y, { real = true })
 	end
-	end
-end
+)
 
 if game.checked then game.ttlcheck = game.dt + game.deltacheck end
 if game.fchecked then game.firecheck = game.dt + 0.5 end
@@ -1006,6 +981,10 @@ end
 
 
 
+	return gameplay_ui_phase()
+end
+
+function gameplay_ui_phase()
 if is_pressed('ralt') then
 
 	if ctrshow then
@@ -1070,4 +1049,8 @@ end
 
 --print (pl.state)
 
+end
+
+function love.update(d)
+	return PerformanceMetrics.measure("frame_update", gameplay_update, d)
 end

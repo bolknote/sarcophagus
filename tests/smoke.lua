@@ -44,6 +44,7 @@ end
 local function install_process_network_test(role, value)
 	local ActorRegistry = require("src.actor_registry")
 	local InputState = require("src.input_state")
+	local LANDiscovery = require("src.network.discovery")
 	local Replication = require("src.network.replication")
 	local Runtime = require("src.network.runtime")
 	local Session = require("src.network.session")
@@ -59,6 +60,9 @@ local function install_process_network_test(role, value)
 	io.stdout:setvbuf("no")
 	io.stderr:setvbuf("no")
 	love.draw = function() end
+	-- multiplayer_apply_snapshot restores the gameplay callback from
+	-- love.old_draw. Keep both aliases headless in this process harness.
+	love.old_draw = function() end
 	local elapsed = 0
 	local finished = false
 	local runtime
@@ -80,16 +84,37 @@ local function install_process_network_test(role, value)
 	local host_actor = process_test_actor(registry)
 	local world_id = string.rep("a", 64)
 	local process_content_hash = string.rep("b", 64)
-	local multicast_discovery = os.getenv(
-		"SARCOPHAGUS_PROCESS_DISCOVERY"
-	) == "multicast"
+	local discovery_mode = os.getenv("SARCOPHAGUS_PROCESS_DISCOVERY")
+	local multicast_discovery = discovery_mode == "multicast"
+	local broadcast_discovery = discovery_mode == "broadcast"
 	local forced_disconnect = (tonumber(os.getenv(
 		"SARCOPHAGUS_NET_DISCONNECT_AFTER"
 	)) or 0) > 0
+	local crash_role = os.getenv("SARCOPHAGUS_PROCESS_CRASH_ROLE")
+	local crash_phase = os.getenv("SARCOPHAGUS_PROCESS_CRASH_PHASE")
+	local crash_test = crash_role == "host" or crash_role == "client"
+	local crash_target = crash_test and crash_role == role
+	local expect_peer_crash = crash_test and crash_role ~= role
+	local peer_observed = false
+	local function announce_crash_ready()
+		io.stdout:write("SARCOPHAGUS_PROCESS_CRASH_READY role=" .. role
+			.. " phase=" .. tostring(crash_phase) .. "\n")
+		local trigger_path = assert(os.getenv("SARCOPHAGUS_PROCESS_CRASH_TRIGGER"),
+			"crash trigger path is required")
+		while true do
+			local trigger = io.open(trigger_path, "rb")
+			if trigger then
+				trigger:close()
+				os.exit(86)
+			end
+			love.timer.sleep(0.05)
+		end
+	end
 	local reconnect_backlog = math.max(2, math.floor(tonumber(os.getenv(
 		"SARCOPHAGUS_PROCESS_RECONNECT_BACKLOG"
 	)) or 2))
-	local process_timeout = reconnect_backlog > 2 and 25 or 12
+	local process_timeout = crash_test and 18
+		or (reconnect_backlog > 2 and 25 or 12)
 	if role == "host" then
 		local action_seen, input_seen = false, false
 		local delta_sequence, event_sequence = 0, 0
@@ -97,6 +122,10 @@ local function install_process_network_test(role, value)
 		local reconnect_seen, reconnect_completed = false, not forced_disconnect
 		runtime = Runtime.new({
 			registry = registry,
+			max_poll_events = crash_test and 1 or nil,
+			heartbeat_interval = crash_test and 0.5 or nil,
+			heartbeat_timeout = crash_test and 4 or nil,
+			reconnect_timeout = crash_test and 5 or nil,
 			state_interval = 0.01,
 			progress_interval = 0.1,
 			world_interval = 0.01,
@@ -104,6 +133,9 @@ local function install_process_network_test(role, value)
 				return { truex = 96, truey = 128, tx = 4, ty = 5, xt = 4, yt = 5 }
 			end,
 			state_provider = function(session)
+				if crash_target and crash_phase == "snapshot" then
+					announce_crash_ready()
+				end
 				return {
 					world = { [1] = { [1] = { b = 0 } } },
 					game = { world_id = world_id, time = 7 },
@@ -179,6 +211,28 @@ local function install_process_network_test(role, value)
 		guard(function(dt)
 			elapsed = elapsed + dt
 			runtime:update(dt)
+			peer_observed = peer_observed or runtime.peer ~= nil
+				or runtime.session.state ~= Session.STATE.LISTENING
+			if crash_target then
+				local expected_state = crash_phase == "handshake"
+					and Session.STATE.AWAITING_APPROVAL
+					or crash_phase == "catchup" and Session.STATE.CATCHING_UP
+					or crash_phase == "playing" and Session.STATE.PLAYING
+				if expected_state and runtime.session.state == expected_state then
+					announce_crash_ready()
+				end
+			end
+			if expect_peer_crash and peer_observed and runtime.last_error
+				and (runtime.last_error == "transport_disconnect"
+					or runtime.last_error == "heartbeat_timeout") then
+				local expected_state = crash_phase == "handshake"
+					and Session.STATE.LISTENING or Session.STATE.RECONNECT_GRACE
+				if runtime.session.state == expected_state then
+					complete(0, "peer_crash=true phase=" .. crash_phase
+						.. " survivor_state=" .. runtime.session.state)
+					return
+				end
+			end
 			if runtime.session.state == Session.STATE.RECONNECT_GRACE then
 				reconnect_seen = true
 			elseif reconnect_seen and runtime.session.state == Session.STATE.PLAYING then
@@ -217,6 +271,10 @@ local function install_process_network_test(role, value)
 		local resume_barrier_verified = not forced_disconnect
 		runtime = Runtime.new({
 			registry = registry,
+			max_poll_events = crash_test and 1 or nil,
+			heartbeat_interval = crash_test and 0.5 or nil,
+			heartbeat_timeout = crash_test and 4 or nil,
+			reconnect_timeout = crash_test and 5 or nil,
 			state_interval = 0.01,
 			world_interval = 0.01,
 			state_applier = function(snapshot)
@@ -249,8 +307,10 @@ local function install_process_network_test(role, value)
 				port = discovery_port,
 				game_version = "process-test",
 				content_hash = process_content_hash,
+				destinations = broadcast_discovery
+					and { LANDiscovery.BROADCAST } or nil,
 			}))
-			if not multicast_discovery then
+			if not multicast_discovery and not broadcast_discovery then
 				assert(runtime.browser:refresh("127.0.0.1", discovery_port))
 			end
 		else
@@ -259,6 +319,25 @@ local function install_process_network_test(role, value)
 		guard(function(dt)
 			elapsed = elapsed + dt
 			runtime:update(dt)
+			peer_observed = peer_observed or runtime.peer ~= nil
+				or runtime.client_state ~= "connecting"
+			if crash_target then
+				local expected_state = crash_phase == "handshake"
+					and "awaiting_approval"
+					or crash_phase == "snapshot" and "receiving_snapshot"
+					or crash_phase == "catchup" and "catching_up"
+					or crash_phase == "playing" and "playing"
+				if expected_state and runtime.client_state == expected_state then
+					announce_crash_ready()
+				end
+			end
+			if expect_peer_crash and peer_observed and runtime.last_error
+				and (runtime.client_state == "reconnecting"
+					or runtime.client_state == "disconnected") then
+				complete(0, "peer_crash=true phase=" .. crash_phase
+					.. " survivor_state=" .. runtime.client_state)
+				return
+			end
 			if runtime.client_state == "reconnecting"
 				or runtime.client_state == "resuming"
 				or runtime.client_state == "resuming_sync" then
@@ -274,11 +353,13 @@ local function install_process_network_test(role, value)
 			if discovery_port and runtime.role == "offline" then
 				local records = runtime:servers()
 				if records[1] then
-					discovery_seen = (multicast_discovery
+					discovery_seen = (multicast_discovery or broadcast_discovery
 						or records[1].address == "127.0.0.1")
 						and records[1].gameplay_port == port
 					assert(discovery_seen, "discovery returned an invalid host record")
-					assert(connect(records[1].address, records[1].gameplay_port))
+					local connect_address = broadcast_discovery
+						and "127.0.0.1" or records[1].address
+					assert(connect(connect_address, records[1].gameplay_port))
 				end
 			end
 			if runtime.client_state == "playing" then
@@ -330,6 +411,609 @@ local function install_process_network_test(role, value)
 	end
 end
 
+local function install_process_gameplay_test(role, value)
+	local InputState = require("src.input_state")
+	local Session = require("src.network.session")
+	local port = tonumber(tostring(value):match("^(%d+)"))
+	assert(port and port >= 1 and port <= 65535, "invalid gameplay process port")
+
+	local identity = "sarcophagus-gameplay-process-" .. role .. "-" .. port
+	love.filesystem.setIdentity(identity)
+	game_delete_save(8)
+	game_delete_save(9)
+	local fixture, fixture_error = love.filesystem.read("tests/fixtures/9.sav")
+	assert(fixture, "cannot read gameplay process fixture: " .. tostring(fixture_error))
+	assert(love.filesystem.write("9.sav", fixture), "cannot stage gameplay fixture")
+	assert(game_load(9), "cannot load gameplay process fixture")
+	actors:bind_host(pl, vi)
+
+	love.draw = function() end
+	-- Snapshot activation restores love.draw from this alias.
+	love.old_draw = function() end
+	-- smoke.install suppresses physical input before love.load. Network actions
+	-- must still invoke the production gameplay callback captured at module load.
+	love.old_keypressed = gameplay_keypressed
+	io.stdout:setvbuf("no")
+	io.stderr:setvbuf("no")
+	local elapsed = 0
+	local finished = false
+	local content_hash = string.rep("d", 64)
+	local fault_disconnect_after = tonumber(os.getenv(
+		"SARCOPHAGUS_NET_DISCONNECT_AFTER"
+	)) or 0
+	local reconnect_required = fault_disconnect_after > 0
+	local reconnect_seen = false
+	local function complete(code, details)
+		if finished then return end
+		finished = true
+		if multiplayer and multiplayer.role ~= "offline" then
+			multiplayer:prepare_quit()
+		end
+		finish(code, "mode=multiplayer-gameplay-process-" .. role .. " " .. details)
+	end
+	local function guard(callback)
+		local guarded_update = function(frame_dt)
+			if finished then return end
+			dt = frame_dt
+			local ok, err = pcall(callback, frame_dt)
+			if not ok then complete(1, tostring(err)) end
+		end
+		love.update = guarded_update
+		-- multiplayer_apply_snapshot restores the gameplay alias. Point it at the
+		-- harness too so the state machine survives snapshot activation.
+		love.old_update = guarded_update
+	end
+	local function tagged(container, tag)
+		for slot, instance in pairs(container or {}) do
+			if type(instance) == "table" and instance.e2e_role == tag then
+				return instance, slot
+			end
+		end
+	end
+	local function ground_tag(x, y, tag)
+		local cell = world[y] and world[y][x]
+		return tagged(cell and cell.i, tag)
+	end
+	local function projectile_tag(tag)
+		for _, projectile in pairs(proj or {}) do
+			if type(projectile) == "table" and type(projectile.inv) == "table"
+				and projectile.inv.e2e_role == tag then
+				return projectile
+			end
+		end
+	end
+	local function tagged_item(item_id, tag)
+		local instance = assert(item_make(item_id))
+		instance.e2e_role = tag
+		return instance
+	end
+
+	if role == "host" then
+		local original_state_provider = multiplayer.state_provider
+		local original_action_handler = multiplayer.action_handler
+		local seeded = false
+		local arena_x, arena_y, target_x, target_y
+		local contention_done = false
+		local far_cameras_seen = false
+		local thrown_seen = false
+		local autosave_done = false
+		local guest_respawned = false
+		local host_respawned = false
+		local reunion_done = false
+		local reconnect_backlog_seeded = not reconnect_required
+		local reconnect_world_start, reconnect_event_start
+		local saved_guest_uids = {}
+		local host_deaths_before
+		local craft_open_seen, craft_return_seen, craft_recipe_selected
+		local craft_recipe_count, craft_inventory
+		local client_done_at
+
+		local host_x = tonumber(pl.xt) or math.floor(cf.wmax / 2)
+		local host_y = tonumber(pl.yt) or math.floor(cf.wmax / 2)
+		arena_x = host_x + screen.x + 12
+		if arena_x > cf.wmax - 4 then arena_x = host_x - screen.x - 12 end
+		arena_x = math.max(4, math.min(cf.wmax - 4, arena_x))
+		arena_y = math.max(4, math.min(cf.wmax - 4, host_y))
+		local guest_truex = (arena_x - 1) * cf.w + 16
+		local guest_truey = (arena_y - 1) * cf.h + 6
+		local spawn = {
+			truex = guest_truex,
+			truey = guest_truey,
+			tx = arena_x, ty = arena_y, xt = arena_x, yt = arena_y,
+			x = (arena_x - 1 - vi.xtile) * cf.w - vi.xoffset + 16,
+			y = (arena_y - 1 - vi.ytile) * cf.h - vi.yoffset + 6,
+		}
+		multiplayer.spawn_provider = function() return StateCopy.copy(spawn) end
+
+		local function seed_world(session)
+			if seeded then return end
+			seeded = true
+			local guest = assert(session.guest)
+			target_x, target_y = arena_x + 1, arena_y
+			for y = arena_y - 2, arena_y do
+				for x = arena_x - 2, arena_x + 3 do
+					world[y][x] = { b = 0 }
+				end
+			end
+			for x = arena_x - 2, arena_x + 3 do
+				world[arena_y + 1][x] = createblock(1)
+			end
+			world[target_y][target_x] = createblock(2)
+			guest.inv = {
+				[1] = tagged_item(2, "craft-stick-a"),
+				[2] = tagged_item(2, "craft-stick-b"),
+				[3] = tagged_item(104, "craft-thread"),
+			}
+			guest.invsize = math.max(12, tonumber(guest.invsize) or 0)
+			guest.invselect = 1
+			guest.unlock_i = guest.unlock_i or {}
+			guest.unlock_i[2] = true
+			guest.unlock_i[104] = true
+			guest.iscarry = createblock(12)
+			guest.candrop = 1
+			guest.flip = 1
+			local contest = tagged_item(31, "contest")
+			local pickup = tagged_item(31, "pickup")
+			assert(inv_ground_add(arena_x, arena_y, contest, { groundlast = true }))
+			assert(inv_ground_add(arena_x, arena_y, pickup, { groundlast = true }))
+			host_deaths_before = tonumber(pl.deaths) or 0
+		end
+
+		multiplayer.state_provider = function(session)
+			seed_world(session)
+			return original_state_provider(session)
+		end
+		multiplayer.action_handler = function(actor, payload)
+			if payload.action == "e2e-complete" then
+				client_done_at = elapsed
+				return true
+			end
+			if not contention_done and payload.action == "pickup" then
+				local contest, index = ground_tag(arena_x, arena_y, "contest")
+				if contest and payload.item_uid == contest.uid then
+					local won = assert(inv_ground_remove(arena_x, arena_y, index))
+					assert(inv_ground_add(pl.xt, pl.yt, won, { groundlast = true }))
+					writemap(target_x, target_y, 0, "clear")
+					contention_done = true
+				end
+			end
+			if payload.action == "key"
+				and (payload.scancode == "c" or payload.key == "c") then
+				local _, ingredient_slot = tagged(actor.inv, "craft-stick-a")
+				assert(ingredient_slot, "craft ingredient selection is missing")
+				actor.invselect = ingredient_slot
+			end
+			local accepted, action_error = original_action_handler(actor, payload)
+			if accepted and payload.action == "key"
+				and (payload.scancode == "c" or payload.key == "c") then
+				craft_open_seen = true
+				local actor_runtime = assert(actors:runtime(actor))
+				local craft_ui = actor_runtime.presentation.local_ui.craft
+				craft_recipe_count = #(craft_ui.item_recipies or {})
+				local ids = {}
+				for slot, instance in pairs(actor.inv or {}) do
+					ids[#ids + 1] = tostring(slot) .. ":" .. tostring(instance.i)
+				end
+				table.sort(ids)
+				craft_inventory = table.concat(ids, ",")
+				for position, recipe_id in ipairs(craft_ui.item_recipies or {}) do
+					local recipe = craft.recipies[recipe_id]
+					if recipe and recipe.result and recipe.result[349] then
+						craft_ui.pointer = position
+						craft_recipe_selected = recipe_id
+						break
+					end
+				end
+			end
+			if accepted and payload.action == "key"
+				and (payload.scancode == "return" or payload.key == "return") then
+				craft_return_seen = true
+				local crafted = false
+				for _, instance in pairs(actor.inv or {}) do
+					crafted = crafted or instance.i == 349
+				end
+				if crafted and not tagged(actor.inv, "equip") then
+					actor.inv[4] = tagged_item(264, "equip")
+					actor.inv[5] = tagged_item(31, "drop")
+					actor.inv[6] = tagged_item(31, "throw")
+				end
+			end
+			return accepted, action_error
+		end
+
+		assert(multiplayer:start_host({
+			host = "127.0.0.1",
+			port = port,
+			last_port = port,
+			discovery = false,
+			game_version = "gameplay-process",
+			content_hash = content_hash,
+			world_id = NetworkIdentity.ensure_world(game),
+		}))
+		if reconnect_required then
+			-- The gameplay reconnect scenario arms the fault on the client only,
+			-- after the initial snapshot has reached PLAYING. Otherwise a fast
+			-- timer can test snapshot restart instead of a real gameplay backlog.
+			multiplayer.transport.faults.disconnect_after = 0
+		end
+		io.stdout:write("SARCOPHAGUS_PROCESS_HOST_READY port=" .. port .. "\n")
+
+		local function snapshot_uid_count(value, uid, seen)
+			if type(value) ~= "table" then return 0 end
+			seen = seen or {}
+			if seen[value] then return 0 end
+			seen[value] = true
+			local count = value.uid == uid and 1 or 0
+			for key, nested in pairs(value) do
+				if key ~= "uid" then count = count + snapshot_uid_count(nested, uid, seen) end
+			end
+			return count
+		end
+
+		guard(function(frame_dt)
+			elapsed = elapsed + frame_dt
+			game.network_clock = (tonumber(game.network_clock) or 0) + frame_dt
+			game.network_tick = (tonumber(game.network_tick) or 0) + 1
+			multiplayer:update(frame_dt)
+			if multiplayer_finalize_shared_time then multiplayer_finalize_shared_time() end
+			if multiplayer:pending_approval() then assert(multiplayer:approve_guest()) end
+			local session = multiplayer.session
+			if session and session.state == Session.STATE.RECONNECT_GRACE then
+				reconnect_seen = true
+				if not reconnect_backlog_seeded then
+					reconnect_world_start = multiplayer.world_highest_sequence
+					reconnect_event_start = multiplayer.event_highest_id
+					for index = 1, 16 do
+						local backlog_x = 2 + ((index - 1) % 4)
+						local backlog_y = 2 + math.floor((index - 1) / 4)
+						writemap(backlog_x, backlog_y, index % 2 == 0 and 1 or 2)
+						assert(multiplayer_queue_text_event(
+							"e2e-reconnect-backlog-" .. index,
+							false,
+							"guest"
+						))
+					end
+					reconnect_backlog_seeded = true
+				end
+			end
+			local guest = session and session.guest
+			if guest and session.state == Session.STATE.PLAYING then
+				local cameras = multiplayer_active_cameras()
+				if #cameras == 2 and math.abs((pl.xt or 0) - (guest.xt or 0)) > screen.x then
+					far_cameras_seen = true
+				end
+				thrown_seen = thrown_seen or projectile_tag("throw") ~= nil
+				local built = world[target_y] and world[target_y][target_x]
+					and world[target_y][target_x].b == 12 and guest.iscarry == nil
+				local crafted = false
+				for _, instance in pairs(guest.inv or {}) do
+					crafted = crafted or instance.i == 349
+				end
+				local equipped = guest.inv and guest.inv.b
+					and guest.inv.b.e2e_role == "equip"
+				local dropped = ground_tag(arena_x, arena_y, "drop") ~= nil
+				local picked = tagged(guest.inv, "pickup") ~= nil
+				local contested = ground_tag(pl.xt, pl.yt, "contest") ~= nil
+				if built and crafted and equipped and dropped and picked and contested
+					and thrown_seen and far_cameras_seen and contention_done
+					and (not reconnect_required or reconnect_seen) then
+					if not autosave_done then
+						for slot = 1, guest.invsize do
+							if guest.inv[slot] == nil then
+								guest.inv[slot] = tagged_item(31, "autosave-" .. slot)
+							end
+						end
+						guest.iscarry = createblock(12)
+						for _, instance in pairs(guest.inv) do
+							saved_guest_uids[#saved_guest_uids + 1] = instance.uid
+						end
+						local snapshot = game_save_snapshot()
+						assert(guest.iscarry and guest.iscarry.b == 12,
+							"autosave mutated the live carried block")
+						for _, uid in ipairs(saved_guest_uids) do
+							assert(snapshot_uid_count(snapshot, uid) == 1,
+								"autosave lost or duplicated guest item " .. uid)
+						end
+						assert(game_save(8), "could not persist gameplay E2E save")
+						autosave_done = true
+						guest.stats.body.hp = 0
+					end
+				end
+				if autosave_done and (tonumber(guest.network_deaths) or 0) >= 1 then
+					guest_respawned = true
+				end
+				if guest_respawned and not host_respawned then
+					player_die()
+					assert(pl.isdead and (tonumber(pl.deaths) or 0) == host_deaths_before + 1,
+						"host death path did not update authoritative state")
+					assert(player_respawn() and not pl.isdead,
+						"host respawn path did not restore the player")
+					host_respawned = true
+				end
+				if host_respawned and not reunion_done then
+					guest.truex, guest.truey = pl.truex + cf.w, pl.truey
+					guest.tx, guest.ty = pl.tx + 1, pl.ty
+					guest.xt, guest.yt = pl.xt + 1, pl.yt
+					reunion_done = true
+				end
+			end
+			local backlog_acked = reconnect_backlog_seeded
+				and (not reconnect_required or (
+					multiplayer.world_acked_sequence > reconnect_world_start
+					and multiplayer.event_acked_id >= reconnect_event_start + 16
+				))
+			if autosave_done and host_respawned and reunion_done and client_done_at
+				and backlog_acked
+				and elapsed - client_done_at >= 0.5 then
+				assert(game_load(8), "saved gameplay E2E world could not be reloaded")
+				local loaded = { world, game }
+				for _, uid in ipairs(saved_guest_uids) do
+					assert(snapshot_uid_count(loaded, uid) == 1,
+						"reloaded world lost or duplicated guest item " .. uid)
+				end
+				complete(0, "build=true contention=true craft=true equipment=true drop=true throw=true deaths=true cameras=true autosave=true reload=true real_backlog=" .. tostring(backlog_acked) .. " reconnect=" .. tostring(reconnect_seen))
+			end
+			if elapsed > 45 then
+				local guest_runtime = session and session.guest
+					and actors:runtime(session.guest)
+				local craft_ui = guest_runtime and guest_runtime.presentation.local_ui.craft
+				complete(1, "timeout state=" .. tostring(session and session.state)
+					.. " seeded=" .. tostring(seeded)
+					.. " autosave=" .. tostring(autosave_done)
+					.. " deaths=" .. tostring(guest_respawned and host_respawned)
+					.. " reconnect=" .. tostring(reconnect_seen)
+					.. " craft=" .. tostring(craft_open_seen)
+						.. "/" .. tostring(craft_return_seen)
+						.. "/" .. tostring(craft_recipe_selected)
+						.. " pointer=" .. tostring(craft_ui and craft_ui.pointer)
+						.. " recipes=" .. tostring(craft_recipe_count)
+						.. " inv=" .. tostring(craft_inventory)
+					.. " error=" .. tostring(multiplayer.last_error))
+			end
+		end)
+	else
+		assert(multiplayer:connect({
+			host = "127.0.0.1",
+			port = port,
+			game_version = "gameplay-process",
+			content_hash = content_hash,
+		}))
+		if reconnect_required then
+			multiplayer.transport.faults.disconnect_after = 0
+		end
+		local gameplay_fault_armed = false
+		local stage = 0
+		local expected_action
+		local contest, pickup
+		local target_x, target_y
+		local input = InputState.new()
+		local next_input_send = 0
+		local throw_started
+		local observed = {
+			far = false, contention = false, build = false, craft = false,
+			equipment = false, drop = false, throw = false,
+			backlog = not reconnect_required,
+		}
+		local reconnect_world_before, reconnect_event_before
+		local host_deaths_before
+		local function send_action(label, callback, expected_ok)
+			game.network_last_action_result = nil
+			assert(callback(), "could not send " .. label)
+			expected_action = {
+				id = game.network_action_id,
+				label = label,
+				ok = expected_ok ~= false,
+			}
+		end
+		local function action_finished()
+			if not expected_action then return true end
+			local result = game.network_last_action_result
+			if not result or result.action_id ~= expected_action.id then return false end
+			assert(result.ok == expected_action.ok,
+				expected_action.label .. " returned " .. tostring(result.error))
+			expected_action = nil
+			return true
+		end
+		local function send_key(key)
+			return multiplayer_send_key_action(key, key)
+		end
+
+		guard(function(frame_dt)
+			elapsed = elapsed + frame_dt
+			if reconnect_required and not gameplay_fault_armed
+				and multiplayer.client_state == "playing" then
+				multiplayer.transport.connected_at = love.timer.getTime()
+				multiplayer.transport.faults.disconnect_after = fault_disconnect_after
+				gameplay_fault_armed = true
+			end
+			multiplayer:update(frame_dt)
+			if game.network_client and multiplayer.client_state == "playing" then
+				multiplayer_interpolate_remote_state(frame_dt)
+			end
+			if multiplayer.client_state == "reconnecting"
+				or multiplayer.client_state == "resuming"
+				or multiplayer.client_state == "resuming_sync" then
+				reconnect_seen = true
+				reconnect_world_before = reconnect_world_before
+					or multiplayer.received_world_sequence
+				reconnect_event_before = reconnect_event_before
+					or multiplayer.received_event_id
+			end
+			if reconnect_seen and multiplayer.client_state == "playing"
+				and reconnect_world_before and reconnect_event_before then
+				observed.backlog = multiplayer.received_world_sequence
+					> reconnect_world_before
+					and multiplayer.received_event_id >= reconnect_event_before + 16
+			end
+			if multiplayer.client_state == "failed"
+				or multiplayer.client_state == "rejected" then
+				return complete(1, "state=" .. tostring(multiplayer.client_state)
+					.. " error=" .. tostring(multiplayer.last_error))
+			end
+			if multiplayer.client_state == "playing" and pl.actor_id == "guest" then
+				if stage == 0 then
+					target_x, target_y = pl.xt + 1, pl.yt
+					contest = assert(ground_tag(pl.xt, pl.yt, "contest"))
+					pickup = assert(ground_tag(pl.xt, pl.yt, "pickup"))
+					host_deaths_before = tonumber(actors.host.deaths) or 0
+					observed.far = math.abs((actors.host.xt or 0) - (pl.xt or 0)) > screen.x
+					assert(observed.far, "snapshot did not contain separated cameras")
+					send_action("contested pickup", function()
+						return multiplayer_send_pickup_action(contest)
+					end, false)
+					stage = 1
+				elseif stage == 1 and action_finished() then
+					observed.contention = tagged(pl.inv, "contest") == nil
+					stage = 2
+				elseif stage == 2 and world[target_y] and world[target_y][target_x]
+					and world[target_y][target_x].b == 0 then
+					assert(not ground_tag(pl.xt, pl.yt, "contest"),
+						"losing client kept the contested ground item")
+					send_action("authoritative pickup", function()
+						local current = assert(ground_tag(pl.xt, pl.yt, "pickup"))
+						return multiplayer_send_pickup_action(current)
+					end, true)
+					stage = 3
+				elseif stage == 3 and action_finished() and tagged(pl.inv, "pickup") then
+					input.aim = {
+						world_x = pl.truex + cf.w,
+						world_y = pl.truey,
+						tile_x = target_x,
+						tile_y = target_y,
+					}
+					InputState.set_button(input, "space", true)
+					InputState.advance(input)
+					assert(multiplayer:send_input(input))
+					next_input_send = elapsed + 0.05
+					stage = 4
+				elseif stage == 4 then
+					if elapsed >= next_input_send then
+						InputState.advance(input)
+						assert(multiplayer:send_input(input))
+						next_input_send = elapsed + 0.05
+					end
+					if world[target_y] and world[target_y][target_x]
+						and world[target_y][target_x].b == 12 and pl.iscarry == nil then
+						observed.build = true
+						InputState.set_button(input, "space", false)
+						InputState.advance(input)
+						assert(multiplayer:send_input(input))
+						send_action("open craft", function() return send_key("c") end, true)
+						stage = 5
+					end
+				elseif stage == 5 and action_finished() then
+					send_action("craft recipe", function() return send_key("return") end, true)
+					stage = 6
+				elseif stage == 6 and action_finished() then
+					for _, instance in pairs(pl.inv or {}) do
+						observed.craft = observed.craft or instance.i == 349
+					end
+					if observed.craft then
+						local equip, slot = assert(tagged(pl.inv, "equip"))
+						send_action("select equipment", function()
+							return multiplayer_send_select_action(slot, equip)
+						end, true)
+						stage = 7
+					end
+				elseif stage == 7 and action_finished() then
+					local selected = pl.inv and pl.inv[pl.invselect]
+					if selected and selected.e2e_role == "equip" then
+						send_action("equip", function() return send_key("p") end, true)
+						stage = 8
+					end
+				elseif stage == 8 and action_finished() then
+					observed.equipment = pl.inv.b and pl.inv.b.e2e_role == "equip"
+					if observed.equipment then
+						local drop, slot = assert(tagged(pl.inv, "drop"))
+						send_action("select drop", function()
+							return multiplayer_send_select_action(slot, drop)
+						end, true)
+						stage = 9
+					end
+				elseif stage == 9 and action_finished() then
+					local selected = pl.inv and pl.inv[pl.invselect]
+					if selected and selected.e2e_role == "drop" then
+						send_action("drop", function() return send_key("z") end, true)
+						stage = 10
+					end
+				elseif stage == 10 and action_finished() then
+					observed.drop = ground_tag(pl.xt, pl.yt, "drop") ~= nil
+					if observed.drop then
+						local throwable, slot = assert(tagged(pl.inv, "throw"))
+						send_action("select throw", function()
+							return multiplayer_send_select_action(slot, throwable)
+						end, true)
+						stage = 11
+					end
+				elseif stage == 11 and action_finished() then
+					local selected = pl.inv and pl.inv[pl.invselect]
+					if selected and selected.e2e_role == "throw" then
+					input.aim = {
+						world_x = pl.truex + cf.w * 4,
+						world_y = pl.truey - cf.h,
+						tile_x = pl.xt + 4,
+						tile_y = pl.yt - 1,
+					}
+					InputState.set_button(input, "r", true)
+					InputState.advance(input)
+					assert(multiplayer:send_input(input))
+					throw_started = elapsed
+					next_input_send = elapsed + 0.05
+					stage = 12
+					end
+				elseif stage == 12 then
+					if elapsed >= next_input_send then
+						InputState.advance(input)
+						assert(multiplayer:send_input(input))
+						next_input_send = elapsed + 0.05
+					end
+					if elapsed - throw_started >= 1.1 then
+						InputState.set_button(input, "r", false)
+						InputState.advance(input)
+						assert(multiplayer:send_input(input))
+						stage = 13
+					end
+				elseif stage == 13 then
+					if elapsed >= next_input_send then
+						InputState.advance(input)
+						assert(multiplayer:send_input(input))
+						next_input_send = elapsed + 0.05
+					end
+					observed.throw = observed.throw or projectile_tag("throw") ~= nil
+					if observed.throw then stage = 14 end
+				elseif stage == 14 then
+					local deaths = (tonumber(pl.network_deaths) or 0) >= 1
+						and (tonumber(actors.host.deaths) or 0) >= host_deaths_before + 1
+					local reunited = math.abs((actors.host.xt or 0) - (pl.xt or 0)) <= 2
+					if deaths and reunited and observed.backlog
+						and (not reconnect_required or reconnect_seen) then
+						for name, value in pairs(observed) do
+							assert(value, "gameplay E2E did not observe " .. name)
+						end
+						send_action("E2E completion", function()
+							return multiplayer_send_action({ action = "e2e-complete" })
+						end, true)
+						stage = 15
+					end
+				elseif stage == 15 and action_finished() then
+					complete(0, "build=true contention=true craft=true equipment=true drop=true throw=true deaths=true cameras=true real_backlog=" .. tostring(observed.backlog) .. " reconnect=" .. tostring(reconnect_seen))
+				end
+			end
+			if elapsed > 45 then
+				complete(1, "timeout stage=" .. stage
+					.. " state=" .. tostring(multiplayer.client_state)
+					.. " reconnect=" .. tostring(reconnect_seen)
+					.. " backlog=" .. tostring(observed.backlog)
+					.. " world=" .. tostring(reconnect_world_before)
+						.. "/" .. tostring(multiplayer.received_world_sequence)
+					.. " event=" .. tostring(reconnect_event_before)
+						.. "/" .. tostring(multiplayer.received_event_id)
+					.. " error=" .. tostring(multiplayer.last_error))
+			end
+		end)
+	end
+end
+
 local function validate_actor_architecture()
 	local ActorState = require("src.actor_state")
 	local ActorRegistry = require("src.actor_registry")
@@ -339,6 +1023,7 @@ local function validate_actor_architecture()
 	local ItemIdentity = require("src.item_identity")
 	local ActorInventory = require("src.actor_inventory")
 	local GhostActor = require("src.ghost_actor")
+	local ActorContext = require("src.actor_context")
 
 	assert(actors.host == pl and actors.local_actor == pl,
 		"global player is not registered as the local host actor")
@@ -367,6 +1052,190 @@ local function validate_actor_architecture()
 		"actor registry did not retain both actors")
 	assert(registry:runtime(host) ~= registry:runtime(guest),
 		"actors unexpectedly share runtime sidecar state")
+
+	do
+		assert(ActorContext.register_field("game", "context_smoke_game"))
+		assert(ActorContext.register_field("craft", "context_smoke_craft"))
+		assert(ActorContext.register_field(
+			"actor_global", "CONTEXT_SMOKE_ACTOR"
+		))
+		assert(ActorContext.register_field(
+			"transient_global", "CONTEXT_SMOKE_TRANSIENT"
+		))
+		local guest_runtime = registry:runtime(guest)
+		guest_runtime.presentation.local_ui.game = {
+			context_smoke_game = "guest-game",
+		}
+		guest_runtime.presentation.local_ui.craft = {
+			context_smoke_craft = "guest-craft",
+		}
+		guest_runtime.local_globals = {
+			CONTEXT_SMOKE_ACTOR = "guest-global",
+		}
+		local original_game_value = game.context_smoke_game
+		local original_craft_value = craft.context_smoke_craft
+		local original_actor_value = CONTEXT_SMOKE_ACTOR
+		local original_transient_value = CONTEXT_SMOKE_TRANSIENT
+		local original_pl, original_vi = pl, vi
+		local position_fields = {
+			"x", "y", "truex", "truey", "tx", "ty", "xt", "yt",
+		}
+		local original_guest_position = {}
+		for _, field in ipairs(position_fields) do
+			original_guest_position[field] = { value = guest[field] }
+		end
+		game.context_smoke_game = "host-game"
+		craft.context_smoke_craft = "host-craft"
+		CONTEXT_SMOKE_ACTOR = "host-global"
+		CONTEXT_SMOKE_TRANSIENT = "host-transient"
+		guest.truex, guest.truey = 320, 320
+
+		local context_ok, context_error = pcall(
+			ActorContext.run,
+			registry,
+			guest,
+			{ camera = vi },
+			function()
+				assert(game.context_smoke_game == "guest-game"
+					and craft.context_smoke_craft == "guest-craft"
+					and CONTEXT_SMOKE_ACTOR == "guest-global"
+					and CONTEXT_SMOKE_TRANSIENT == nil,
+					"actor context exposed host-local sentinel state")
+				game.context_smoke_game = "guest-game-updated"
+				craft.context_smoke_craft = "guest-craft-updated"
+				CONTEXT_SMOKE_ACTOR = "guest-global-updated"
+				CONTEXT_SMOKE_TRANSIENT = "guest-transient"
+				error("actor context smoke error")
+			end
+		)
+		assert(not context_ok and tostring(context_error):find(
+			"actor context smoke error", 1, true
+		), "actor context swallowed its callback error")
+		assert(pl == original_pl and vi == original_vi
+			and game.context_smoke_game == "host-game"
+			and craft.context_smoke_craft == "host-craft"
+			and CONTEXT_SMOKE_ACTOR == "host-global"
+			and CONTEXT_SMOKE_TRANSIENT == "host-transient"
+			and guest_runtime.presentation.local_ui.game.context_smoke_game
+				== "guest-game-updated"
+			and guest_runtime.presentation.local_ui.craft.context_smoke_craft
+				== "guest-craft-updated"
+			and guest_runtime.local_globals.CONTEXT_SMOKE_ACTOR
+				== "guest-global-updated",
+			"actor context did not restore globals after callback failure")
+
+		local original_coord_true2screen = coord_true2screen
+		local coordinate_callback_reached = false
+		coord_true2screen = function() error("coordinate smoke error") end
+		local coordinate_ok, coordinate_error = pcall(
+			ActorContext.run,
+			registry,
+			guest,
+			{ camera = vi },
+			function() coordinate_callback_reached = true end
+		)
+		coord_true2screen = original_coord_true2screen
+			assert(not coordinate_ok and tostring(coordinate_error):find(
+			"coordinate smoke error", 1, true
+		) and not coordinate_callback_reached
+			and pl == original_pl and vi == original_vi
+			and game.context_smoke_game == "host-game"
+			and craft.context_smoke_craft == "host-craft"
+			and CONTEXT_SMOKE_ACTOR == "host-global"
+			and CONTEXT_SMOKE_TRANSIENT == "host-transient",
+				"coordinate failure leaked an actor context")
+
+			local registry_view = ActorContext.state_registry()
+			assert(type(registry_view.actor_owned) == "table"
+				and type(registry_view.shared) == "table"
+				and type(registry_view.host_only) == "table"
+				and type(registry_view.presentation_only) == "table",
+				"actor state ownership registry is incomplete")
+			local sentinel_previous = { game = {}, craft = {}, global = {} }
+			local function remember(bucket, container, field)
+				bucket[field] = { present = container[field] ~= nil, value = container[field] }
+			end
+			for _, field in ipairs(ActorContext.registered_fields("game")) do
+				remember(sentinel_previous.game, game, field)
+				game[field] = "host:game:" .. field
+				guest_runtime.presentation.local_ui.game[field] = "guest:game:" .. field
+			end
+			for _, field in ipairs(ActorContext.registered_fields("craft")) do
+				remember(sentinel_previous.craft, craft, field)
+				craft[field] = "host:craft:" .. field
+				guest_runtime.presentation.local_ui.craft[field] = "guest:craft:" .. field
+			end
+			for _, field in ipairs(ActorContext.registered_fields("actor_global")) do
+				remember(sentinel_previous.global, _G, field)
+				_G[field] = "host:global:" .. field
+				guest_runtime.local_globals[field] = "guest:global:" .. field
+			end
+			for _, field in ipairs(ActorContext.registered_fields("transient_global")) do
+				remember(sentinel_previous.global, _G, field)
+				_G[field] = "host:transient:" .. field
+			end
+
+			ActorContext.run(registry, guest, { camera = vi }, function()
+				for _, field in ipairs(ActorContext.registered_fields("game")) do
+					assert(game[field] == "guest:game:" .. field,
+						"host game sentinel leaked into guest: " .. field)
+					game[field] = "updated:game:" .. field
+				end
+				for _, field in ipairs(ActorContext.registered_fields("craft")) do
+					assert(craft[field] == "guest:craft:" .. field,
+						"host craft sentinel leaked into guest: " .. field)
+					craft[field] = "updated:craft:" .. field
+				end
+				for _, field in ipairs(ActorContext.registered_fields("actor_global")) do
+					assert(_G[field] == "guest:global:" .. field,
+						"host actor global leaked into guest: " .. field)
+					_G[field] = "updated:global:" .. field
+				end
+				for _, field in ipairs(ActorContext.registered_fields("transient_global")) do
+					assert(_G[field] == nil,
+						"host transient global leaked into guest: " .. field)
+					_G[field] = "guest:transient:" .. field
+				end
+			end)
+
+			for _, field in ipairs(ActorContext.registered_fields("game")) do
+				assert(game[field] == "host:game:" .. field
+					and guest_runtime.presentation.local_ui.game[field]
+						== "updated:game:" .. field,
+					"game sentinel was not isolated: " .. field)
+			end
+			for _, field in ipairs(ActorContext.registered_fields("craft")) do
+				assert(craft[field] == "host:craft:" .. field
+					and guest_runtime.presentation.local_ui.craft[field]
+						== "updated:craft:" .. field,
+					"craft sentinel was not isolated: " .. field)
+			end
+			for _, field in ipairs(ActorContext.registered_fields("actor_global")) do
+				assert(_G[field] == "host:global:" .. field
+					and guest_runtime.local_globals[field] == "updated:global:" .. field,
+					"actor global sentinel was not isolated: " .. field)
+			end
+			for _, field in ipairs(ActorContext.registered_fields("transient_global")) do
+				assert(_G[field] == "host:transient:" .. field,
+					"transient sentinel was not restored: " .. field)
+			end
+			local function restore(bucket, container)
+				for field, saved in pairs(bucket) do
+					container[field] = saved.present and saved.value or nil
+				end
+			end
+			restore(sentinel_previous.game, game)
+			restore(sentinel_previous.craft, craft)
+			restore(sentinel_previous.global, _G)
+
+			for _, field in ipairs(position_fields) do
+			guest[field] = original_guest_position[field].value
+		end
+		game.context_smoke_game = original_game_value
+		craft.context_smoke_craft = original_craft_value
+		CONTEXT_SMOKE_ACTOR = original_actor_value
+		CONTEXT_SMOKE_TRANSIENT = original_transient_value
+	end
 
 	local host_input = registry:runtime(host).input
 	assert(InputState.set_button(host_input, "a", true))
@@ -481,6 +1350,7 @@ local function validate_actor_architecture()
 end
 
 local function validate_network_core()
+	local ActiveCameraUnion = require("src.active_camera_union")
 	local ActorState = require("src.actor_state")
 	local ActorRegistry = require("src.actor_registry")
 	local ActorInventory = require("src.actor_inventory")
@@ -491,6 +1361,7 @@ local function validate_network_core()
 	local Identity = require("src.network.identity")
 	local EnetTransport = require("src.network.enet_transport")
 	local GuestPossessions = require("src.guest_possessions")
+	local GameAdapter = require("src.network.game_adapter")
 	local ItemIdentity = require("src.item_identity")
 	local GhostActor = require("src.ghost_actor")
 	local NetworkSnapshot = require("src.network.snapshot")
@@ -498,6 +1369,76 @@ local function validate_network_core()
 	local WorldJournal = require("src.network.world_journal")
 	local Runtime = require("src.network.runtime")
 	local LANDiscovery = require("src.network.discovery")
+	local PerformanceBudget = require("src.performance_budget")
+	local PerformanceMetrics = require("src.performance_metrics")
+	do
+		local callbacks = {}
+		for _, name in ipairs(GameAdapter.required_callbacks()) do
+			callbacks[name] = function() return true end
+		end
+		local adapter = GameAdapter.new(callbacks)
+		local options = adapter:runtime_options({ registry = "sentinel" })
+		assert(options.registry == "sentinel"
+			and options.state_provider == callbacks.state_provider,
+			"network game adapter did not bind explicit dependencies")
+		callbacks.state_provider = nil
+		local accepted, adapter_error = pcall(GameAdapter.new, callbacks)
+		assert(not accepted and tostring(adapter_error):find(
+			"state_provider", 1, true
+		), "network game adapter accepted a missing dependency")
+	end
+	do
+		local visited = {}
+		local unique, candidates = ActiveCameraUnion.each({
+			{ xtile = 0, ytile = 0 },
+			{ xtile = 2, ytile = 1 },
+		}, 2, 1, function(x, y)
+			local key = x .. ":" .. y
+			assert(not visited[key], "camera union visited a cell twice")
+			visited[key] = true
+		end)
+		assert(unique == 31 and candidates == 40,
+			"overlapping camera union has the wrong coverage")
+		assert(visited["0:0"] and visited["6:4"] and visited["2:1"],
+			"camera union omitted an edge or overlap cell")
+		local far_unique, far_candidates = ActiveCameraUnion.each({
+			{ xtile = 0, ytile = 0 },
+			{ xtile = 20, ytile = 20 },
+		}, 2, 1, function() end)
+		assert(far_unique == 40 and far_candidates == 40,
+			"distant camera union unexpectedly discarded cells")
+	end
+	do
+		PerformanceMetrics.activate({ scenario = "unit" })
+		local first, second = PerformanceMetrics.measure(
+			"returns", function() return "first", nil, "third" end
+		)
+		assert(first == "first" and second == nil,
+			"performance wrapper changed callback returns")
+		PerformanceMetrics.record("ordered", 1)
+		PerformanceMetrics.record("ordered", 2)
+		PerformanceMetrics.record("ordered", 10)
+		local raised, raise_error = pcall(
+			PerformanceMetrics.measure,
+			"errors",
+			function() error("measured failure") end
+		)
+		local report = PerformanceMetrics.deactivate()
+		assert(not raised and tostring(raise_error):find("measured failure", 1, true),
+			"performance wrapper swallowed callback errors")
+		assert(report.phases.ordered.p50_ms == 2
+			and report.phases.ordered.p95_ms == 10,
+			"performance percentiles are incorrect")
+		local accepted, failures = PerformanceBudget.evaluate({
+			phases = {
+				frame_update = { count = 120, p95_ms = 5, p99_ms = 7 },
+				frame_render = { count = 120, p95_ms = 6, p99_ms = 8 },
+			},
+			memory_growth_kb = 0,
+		})
+		assert(accepted and #failures == 0,
+			"valid performance report failed its budget")
+	end
 	local enet_ok, enet = pcall(require, "enet")
 	local socket_ok, socket = pcall(require, "socket")
 	assert(enet_ok and type(enet) == "table", "lua-enet is unavailable")
@@ -505,6 +1446,34 @@ local function validate_network_core()
 	local content_hash = ContentHash.compute({ "version.txt", "conf.lua" })
 	assert(type(content_hash) == "string" and #content_hash == 64,
 		"content manifest hash is invalid")
+	do
+		local hash_probe = "network-content-hash-smoke.txt"
+		assert(love.filesystem.write(hash_probe, "content hash before reload"))
+		ContentHash.invalidate()
+		local hash_before_reload = ContentHash.compute({ hash_probe })
+		assert(love.filesystem.write(hash_probe, "content hash after reload"))
+		ContentHash.invalidate()
+		local hash_after_reload = ContentHash.compute({ hash_probe })
+		love.filesystem.remove(hash_probe)
+		ContentHash.invalidate()
+		assert(hash_before_reload ~= hash_after_reload,
+			"content hash stayed stale after cache invalidation")
+	end
+	if IS_DEVELOPMENT then
+		do
+			local original_compute = ContentHash.compute
+			local original_runtime_hash = multiplayer.content_hash
+			local reloaded_hash = string.rep("a", 64)
+			ContentHash.compute = function() return reloaded_hash end
+			lurker.postswap("network-content-hash-smoke.lua")
+			ContentHash.compute = original_compute
+			local refreshed_hash = multiplayer.content_hash
+			multiplayer.content_hash = original_runtime_hash
+			ContentHash.invalidate()
+			assert(refreshed_hash == reloaded_hash,
+				"automatic Lua hot reload did not refresh runtime content hash")
+		end
+	end
 	local identity_state = {}
 	local world_id = Identity.ensure_world(identity_state)
 	local test_content_hash = string.rep("b", 64)
@@ -513,6 +1482,30 @@ local function validate_network_core()
 	local incomplete_nonce = string.rep("e", 64)
 	assert(Identity.valid(world_id) and Identity.ensure_world(identity_state) == world_id,
 		"world identity is not stable")
+	do
+		local deterministic_provider = function(length)
+			assert(length == 32, "identity requested less than 256 random bits")
+			return string.rep("\165", length)
+		end
+		local public_token = Identity.public_token("scope", deterministic_provider)
+		local secret_token = Identity.secret_token("scope", deterministic_provider)
+		assert(Identity.valid(public_token) and Identity.valid(secret_token)
+			and public_token ~= secret_token,
+			"public and secret identity domains were not separated")
+		local random_token_a = Identity.secret_token("unique")
+		local random_token_b = Identity.secret_token("unique")
+		assert(Identity.valid(random_token_a) and Identity.valid(random_token_b)
+			and random_token_a ~= random_token_b,
+			"system CSPRNG did not produce unique valid secrets")
+		local insecure_ok, insecure_error = pcall(
+			Identity.secret_token,
+			"unavailable",
+			function() return nil, "entropy unavailable" end
+		)
+		assert(not insecure_ok and tostring(insecure_error):find(
+			"secure random unavailable", 1, true
+		), "identity silently fell back after CSPRNG failure")
+	end
 
 	local server, client
 	local loopback_ok, loopback_error = pcall(function()
@@ -957,6 +1950,18 @@ local function validate_network_core()
 			and records[1].session_id == discovery_session_id
 			and records[1].address == "127.0.0.1",
 			"LAN discovery response was not retained")
+		local discovery_status = browser:status()
+		assert(discovery_status.refresh_count >= 1
+			and discovery_status.last_response_at
+			and discovery_status.destinations[LANDiscovery.GROUP]
+			and discovery_status.destinations[LANDiscovery.BROADCAST],
+			"LAN discovery diagnostics omitted attempts or responses")
+		browser.records = {}
+		browser.last_response_at = nil
+		browser.first_refresh_at = socket.gettime()
+			- LANDiscovery.DIAGNOSTIC_TIMEOUT - 1
+		assert(browser:status().timed_out,
+			"LAN discovery never reaches its diagnostic timeout")
 	end)
 	if browser then browser:close() end
 	if responder then responder:close() end
@@ -1192,10 +2197,19 @@ local function validate_network_core()
 	assert(drops == 1 and dropped_items == 1,
 		"guest possessions were not dropped exactly once")
 	assert(session.state == Session.STATE.LISTENING and registry.guest == nil
-		and session.client_nonce == nil,
+		and session.client_nonce == nil and next(session.dropped_sessions) == nil,
 		"expired guest session was not cleaned up")
 	assert(session:update(clock + 100) and drops == 1,
 		"finished session repeated possession drop")
+	for cycle = 1, 128 do
+		assert(session:begin_join(hello, expected, clock))
+		assert(session:approve(host, { xt = 10, yt = 20 }))
+		assert(session:snapshot_sent(100 + cycle))
+		assert(session:ready(100 + cycle))
+		assert(session:disconnect("cycle", true, clock))
+	end
+	assert(drops == 129 and next(session.dropped_sessions) == nil,
+		"completed join/drop cycles retained session ids or repeated cleanup")
 
 	local timeout_clock = 0
 	local timeout_drops = 0
@@ -1279,6 +2293,74 @@ local function validate_network_core()
 	assert(next(possession_actor.inv) == nil and possession_actor.iscarry == nil,
 		"dropped possessions remained attached to guest actor")
 
+	do
+		local dense_world = {}
+		for y = 1, 17 do
+			dense_world[y] = {}
+			for x = 1, 17 do dense_world[y][x] = { b = 1 } end
+		end
+		local dense_actor = {
+			xt = 9,
+			yt = 9,
+			inv = { [1] = { i = 31 } },
+			invselect = 1,
+			iscarry = { b = 12 },
+		}
+		local dense_drop, dense_drop_error = GuestPossessions.drop(dense_actor, {
+			world = dense_world,
+			fallback_x = 9,
+			fallback_y = 9,
+		})
+		assert(not dense_drop and dense_drop_error == "no room for carried block",
+			"dense-world possession regression was not reproduced")
+		local dense_recovery = {}
+		assert(GuestPossessions.stash(dense_actor, dense_recovery, {
+			session_id = string.rep("6", 64),
+			reason = dense_drop_error,
+		}))
+		assert(#dense_recovery == 1 and dense_recovery[1].iscarry.b == 12
+			and dense_recovery[1].inv[1].i == 31
+			and next(dense_actor.inv) == nil and dense_actor.iscarry == nil,
+			"dense-world fallback lost or duplicated guest possessions")
+		local dense_registry = ActorRegistry.new()
+		dense_registry:bind_host(host, {})
+		local cleanup_recovery = {}
+		local dense_session = Session.new({
+			registry = dense_registry,
+			clock = function() return clock end,
+			token_factory = function(prefix)
+				return prefix == "session" and string.rep("6", 64)
+					or string.rep("7", 64)
+			end,
+			dropper = function(guest, id)
+				local recovered, recovery_error = GuestPossessions.drop(guest, {
+					world = dense_world,
+					fallback_x = 9,
+					fallback_y = 9,
+				})
+				if recovered then return true end
+				return GuestPossessions.stash(guest, cleanup_recovery, {
+					session_id = id,
+					reason = recovery_error,
+				})
+			end,
+		})
+		assert(dense_session:begin_join(hello, expected, clock))
+		assert(dense_session:approve(host, { xt = 9, yt = 9 }))
+		dense_session.guest.inv = { [1] = { i = 32 } }
+		dense_session.guest.iscarry = { b = 12 }
+		assert(dense_session:snapshot_sent(300) and dense_session:ready(300))
+		assert(dense_session:disconnect("dense", true, clock))
+		assert(dense_session.state == Session.STATE.LISTENING
+			and dense_registry.guest == nil
+			and #cleanup_recovery == 1
+			and next(dense_session.dropped_sessions) == nil,
+			"dense-world fallback left the session stuck in DROPPING")
+		assert(dense_session:shutdown()
+			and dense_session.state == Session.STATE.SHUTDOWN,
+			"dense-world recovery prevented host shutdown")
+	end
+
 	local snapshot_session_id = string.rep("4", 64)
 	local snapshot = NetworkSnapshot.capture({
 		world = { [1] = { [1] = { b = 12 } } },
@@ -1352,6 +2434,8 @@ local function validate_network_core()
 		and ready_runtime.client_resume_mode == "stream",
 		"READY send failure discarded an already applied snapshot")
 
+	do
+	local BlobWriter = require("src.BlobWriter")
 	local replicated_actor = NetworkReplication.capture_actor(restored_snapshot.guest_actor)
 	local state_packet = NetworkReplication.encode_state({
 		tick = 78,
@@ -1363,6 +2447,65 @@ local function validate_network_core()
 		and restored_state.guest_actor.actor_role == "guest"
 		and restored_state.mobs[1].truey == 64,
 		"authoritative state packet did not round-trip")
+	local function smoke_u32_be(value)
+		return string.char(
+			math.floor(value / 2 ^ 24) % 256,
+			math.floor(value / 2 ^ 16) % 256,
+			math.floor(value / 2 ^ 8) % 256,
+			value % 256
+		)
+	end
+	local function smoke_u32_le(value)
+		return string.char(
+			value % 256,
+			math.floor(value / 2 ^ 8) % 256,
+			math.floor(value / 2 ^ 16) % 256,
+			math.floor(value / 2 ^ 24) % 256
+		)
+	end
+	local original_decompress = love.data.decompress
+	local decompress_calls = 0
+	love.data.decompress = function(...)
+		decompress_calls = decompress_calls + 1
+		return original_decompress(...)
+	end
+	local declared_bomb, declared_bomb_error = NetworkReplication.decode(
+		NetworkReplication.STATE_MAGIC
+			.. smoke_u32_be(NetworkReplication.MAX_RAW_BYTES + 1)
+			.. state_packet:sub(NetworkReplication.HEADER_SIZE + 1)
+	)
+	local wrong_size, wrong_size_error = NetworkReplication.decode(
+		NetworkReplication.STATE_MAGIC
+			.. smoke_u32_be(NetworkReplication.MAX_RAW_BYTES)
+			.. state_packet:sub(NetworkReplication.HEADER_SIZE + 1)
+	)
+	local internal_bomb, internal_bomb_error = NetworkReplication.decode(
+		NetworkReplication.STATE_MAGIC
+			.. smoke_u32_be(NetworkReplication.MAX_RAW_BYTES)
+			.. smoke_u32_le(NetworkReplication.MAX_RAW_BYTES + 1)
+			.. state_packet:sub(NetworkReplication.HEADER_SIZE + 5)
+	)
+	love.data.decompress = original_decompress
+	assert(not declared_bomb
+		and declared_bomb_error == "replication raw size is invalid"
+		and not wrong_size
+		and wrong_size_error == "replication raw size mismatch"
+		and not internal_bomb
+		and internal_bomb_error == "replication LZ4 raw size is invalid"
+		and decompress_calls == 0,
+		"replication raw-size preflight ran after a dangerous allocation")
+	local trailing_writer = BlobWriter()
+	trailing_writer:write({ first = true })
+	trailing_writer:write({ second = true })
+	local trailing_raw = trailing_writer:tostring()
+	local trailing_packet = NetworkReplication.STATE_MAGIC
+		.. smoke_u32_be(#trailing_raw)
+		.. love.data.compress("string", "lz4", trailing_raw)
+	local trailing_value, trailing_error = NetworkReplication.decode(trailing_packet)
+	assert(not trailing_value and tostring(trailing_error):find(
+		"trailing replication data", 1, true
+	), "replication decoder accepted trailing serialized values")
+	end
 	local InterpolationBuffer = require("src.network.interpolation_buffer")
 	local interpolation = InterpolationBuffer.new({ delay = 0.11 })
 	assert(interpolation:push(0, {
@@ -1956,6 +3099,249 @@ local function validate_save_fixture(slot)
     finish(0, result)
 end
 
+local function begin_multiplayer_benchmark()
+	local GhostActor = require("src.ghost_actor")
+	local InputState = require("src.input_state")
+	local PerformanceBudget = require("src.performance_budget")
+	local PerformanceMetrics = require("src.performance_metrics")
+	local Replication = require("src.network.replication")
+	local socket = require("socket")
+	local original_identity = love.filesystem.getIdentity()
+	local test_identity = "sarcophagus-multiplayer-benchmark"
+	love.filesystem.setIdentity(test_identity)
+	game_delete_save(9)
+	local fixture, fixture_error = love.filesystem.read("tests/fixtures/9.sav")
+	assert(fixture, "cannot read benchmark fixture: " .. tostring(fixture_error))
+	assert(love.filesystem.write("9.sav", fixture), "cannot stage benchmark fixture")
+	assert(game_load(9), "cannot load benchmark fixture")
+	-- Save projection intentionally omits presentation-only dimensions.
+	vi.textwall_w = tonumber(vi.textwall_w) or 700
+	vi.textwall_h = tonumber(vi.textwall_h) or 140
+	screen_res()
+	game.pause = nil
+	game.inputing = nil
+	game.mapgenning = nil
+	pl.dying = nil
+	actors:bind_host(pl, vi)
+
+	local spawn = multiplayer_guest_spawn()
+	local guest = GhostActor.new(pl, {
+		actor_id = "guest",
+		session_id = string.rep("8", 64),
+		x = spawn.x,
+		y = spawn.y,
+		tx = spawn.tx,
+		ty = spawn.ty,
+		xt = spawn.xt,
+		yt = spawn.yt,
+		truex = spawn.truex,
+		truey = spawn.truey,
+	})
+	local distant_camera = {}
+	for key, value in pairs(vi) do distant_camera[key] = value end
+	local host_camera_x = tonumber(vi.xtile) or 0
+	local host_camera_y = tonumber(vi.ytile) or 0
+	local distant_camera_x = host_camera_x
+		+ (tonumber(screen.x) or 0) + 40
+	local distant_camera_y = host_camera_y
+		+ (tonumber(screen.y) or 0) + 24
+	distant_camera.xtile = distant_camera_x
+	distant_camera.ytile = distant_camera_y
+	distant_camera.xoffset = 0
+	distant_camera.yoffset = 0
+	actors:bind_guest(guest, { camera = distant_camera })
+	local input = InputState.new()
+	local session = { guest = guest, session_id = string.rep("8", 64) }
+
+	local dense_mobs = {}
+	for index = 1, 96 do
+		dense_mobs[index] = {
+			id = 1,
+			truex = spawn.truex + (index % 16) * cf.w,
+			truey = spawn.truey + math.floor(index / 16) * cf.h,
+			hp = 100,
+			state = "idle",
+			ani_status = "walk",
+			ani_frame = 1,
+		}
+	end
+	local reconnect_backlog = {}
+	for sequence = 1, 64 do
+		reconnect_backlog[sequence] = Replication.encode_world({
+			sequence = sequence,
+			tick = sequence,
+			sample_time = sequence / 30,
+			cells = {{
+				x = math.max(1, math.min(cf.wmax, (pl.xt or 1) + sequence % 4)),
+				y = math.max(1, math.min(cf.wmax, (pl.yt or 1) + sequence % 3)),
+				cell = { b = sequence % 2 == 0 and 1 or 2 },
+			}},
+		})
+	end
+
+	local udp_constructor = socket.udp4 or socket.udp
+	local receiver = assert(udp_constructor())
+	assert(receiver:setsockname("127.0.0.1", 0))
+	receiver:settimeout(0)
+	local _, publish_port = receiver:getsockname()
+	local publisher = assert(udp_constructor())
+	publisher:settimeout(0)
+
+	local gameplay_update = assert(love.old_update, "gameplay update is unavailable")
+	local gameplay_draw = assert(love.old_draw, "gameplay draw is unavailable")
+	local original_has_focus = love.window.hasFocus
+	love.window.hasFocus = function() return true end
+	local frame = 0
+	local rendered = 0
+	local frame_limit = 180
+	local finished = false
+	local latest_packet_size = 0
+
+	local function cleanup()
+		love.window.hasFocus = original_has_focus
+		publisher:close()
+		receiver:close()
+		game_delete_save(9)
+		love.filesystem.setIdentity(original_identity)
+	end
+
+	local function complete(code, details)
+		if finished then return end
+		finished = true
+		cleanup()
+		finish(code, "mode=multiplayer-benchmark " .. details)
+	end
+
+	collectgarbage("collect")
+	PerformanceMetrics.activate({
+		scenario = "near-distant-build-reconnect-dense-replication",
+		frames = frame_limit,
+	})
+
+	local function benchmark_update()
+		if finished then return end
+		local ok, benchmark_error = pcall(function()
+				frame = frame + 1
+				dt = 1 / 30
+				if frame <= 45 then
+					distant_camera.xtile = host_camera_x + 2
+					distant_camera.ytile = host_camera_y + 1
+				else
+					distant_camera.xtile = distant_camera_x
+					distant_camera.ytile = distant_camera_y
+				end
+				if frame > 90 and frame <= 135 then
+					local build_x = math.max(1, math.min(cf.wmax, (pl.xt or 1) + 2))
+					local build_y = math.max(1, math.min(cf.wmax, pl.yt or 1))
+					PerformanceMetrics.measure(
+						"active_building",
+						writemap,
+						build_x,
+						build_y,
+						frame % 2 == 0 and 1 or 2
+					)
+				elseif frame > 135 then
+					PerformanceMetrics.measure("reconnect_backlog_replay", function()
+						for offset = 0, 3 do
+							local index = ((frame - 136) * 4 + offset) % 64 + 1
+							local delta, kind = Replication.decode(reconnect_backlog[index])
+							assert(delta and kind == "world" and delta.sequence == index,
+								"benchmark reconnect backlog did not round-trip")
+						end
+					end)
+				end
+				PerformanceMetrics.measure(
+				"guest_simulation",
+				multiplayer_simulate_guest,
+				guest,
+				input,
+				1 / 30
+			)
+			multiplayer_each_active_cell(
+				{ vi, distant_camera },
+				screen.x,
+				screen.y,
+				function(x, y)
+					-- Match the hot loop's table lookup without mutating the world.
+					local _ = world[y] and world[y][x]
+				end
+			)
+
+			local previous_mobs = mobs
+			mobs = dense_mobs
+			local captured, state_or_error = pcall(
+				PerformanceMetrics.measure,
+				"replication_capture",
+				multiplayer_replication_state,
+				session,
+				frame % 30 == 0
+			)
+			mobs = previous_mobs
+			assert(captured, state_or_error)
+			local packet = PerformanceMetrics.measure(
+				"replication_encode", Replication.encode_state, state_or_error
+			)
+			latest_packet_size = #packet
+			local decoded, packet_kind = PerformanceMetrics.measure(
+				"replication_decode", Replication.decode, packet
+			)
+			assert(decoded and packet_kind == "state",
+				"benchmark state packet did not round-trip")
+			local datagram_count = math.ceil(#packet / 8000)
+			local sent, send_error = PerformanceMetrics.measure(
+				"network_publish",
+				function()
+					for offset = 1, #packet, 8000 do
+						local bytes, publish_error = publisher:sendto(
+							packet:sub(offset, offset + 7999),
+							"127.0.0.1",
+							publish_port
+						)
+						if not bytes then return nil, publish_error end
+					end
+					return #packet
+				end
+			)
+			assert(sent == #packet, "benchmark publish failed: "
+				.. tostring(send_error) .. " packet=" .. latest_packet_size
+				.. " port=" .. tostring(publish_port))
+			for _ = 1, datagram_count do receiver:receivefrom() end
+
+			gameplay_update(1 / 30)
+			PerformanceMetrics.step_garbage(200)
+		end)
+		if not ok then
+			PerformanceMetrics.active = false
+			complete(1, tostring(benchmark_error))
+		end
+	end
+
+	local function benchmark_draw()
+		if finished then return end
+		local ok, draw_error = pcall(gameplay_draw)
+		if not ok then
+			PerformanceMetrics.active = false
+			complete(1, tostring(draw_error))
+			return
+		end
+		rendered = rendered + 1
+		if frame >= frame_limit and rendered >= frame_limit then
+			PerformanceMetrics.collect_garbage()
+			local report = PerformanceMetrics.deactivate()
+			local accepted, failures = PerformanceBudget.evaluate(report)
+			local formatted = PerformanceMetrics.format(report)
+			if not accepted then
+				complete(1, table.concat(failures, ", ") .. "; " .. formatted)
+			else
+				complete(0, "packet=" .. latest_packet_size .. "B; " .. formatted)
+			end
+		end
+	end
+
+	love.update = benchmark_update
+	love.draw = benchmark_draw
+end
+
 local function validate_multiplayer_gameplay()
 	local original_identity = love.filesystem.getIdentity()
 	local test_identity = "sarcophagus-multiplayer-gameplay-smoke"
@@ -1978,7 +3364,36 @@ local function validate_multiplayer_gameplay()
 			truex = spawn.truex, truey = spawn.truey,
 		})
 		actors:bind_guest(guest)
-		local runtime = assert(actors:runtime(guest))
+			local runtime = assert(actors:runtime(guest))
+			local function capture_host_actor_context()
+				local captured = { game = {}, craft = {}, globals = {} }
+				for _, field in ipairs(ActorContext.registered_fields("game")) do
+					captured.game[field] = { value = game[field] }
+				end
+				for _, field in ipairs(ActorContext.registered_fields("craft")) do
+					captured.craft[field] = { value = craft[field] }
+				end
+				for _, scope in ipairs({ "actor_global", "transient_global" }) do
+					for _, field in ipairs(ActorContext.registered_fields(scope)) do
+						captured.globals[field] = { value = _G[field] }
+					end
+				end
+				return captured
+			end
+			local function assert_host_actor_context(captured, path)
+				for field, saved in pairs(captured.game) do
+					assert(game[field] == saved.value,
+						path .. " leaked game." .. field)
+				end
+				for field, saved in pairs(captured.craft) do
+					assert(craft[field] == saved.value,
+						path .. " leaked craft." .. field)
+				end
+				for field, saved in pairs(captured.globals) do
+					assert(_G[field] == saved.value,
+						path .. " leaked global " .. field)
+				end
+			end
 
 		multiplayer_reset_network_events(true)
 		local previous_role, previous_session = multiplayer.role, multiplayer.session
@@ -2087,7 +3502,9 @@ local function validate_multiplayer_gameplay()
 		}
 		local host_truex, host_truey = pl.truex, pl.truey
 		local guest_start_x, guest_start_y = guest.truex, guest.truey
-		for _ = 1, 45 do multiplayer_simulate_guest(guest, runtime.input, 1 / 30) end
+			local simulation_context = capture_host_actor_context()
+			for _ = 1, 45 do multiplayer_simulate_guest(guest, runtime.input, 1 / 30) end
+			assert_host_actor_context(simulation_context, "guest simulation")
 		assert(pl.truex == host_truex and pl.truey == host_truey,
 			"guest simulation moved the host actor")
 		assert(guest.truex ~= guest_start_x or guest.truey ~= guest_start_y,
@@ -2168,10 +3585,12 @@ local function validate_multiplayer_gameplay()
 			item_uid = "item:stale",
 		})
 		assert(stale_ok == false, "server accepted a stale ground item uid")
-		assert(multiplayer_guest_action(guest, {
-			action = "pickup",
-			item_uid = pickup.uid,
-		}), "server rejected the authoritative ground item uid")
+			local action_context = capture_host_actor_context()
+			assert(multiplayer_guest_action(guest, {
+				action = "pickup",
+				item_uid = pickup.uid,
+			}), "server rejected the authoritative ground item uid")
+			assert_host_actor_context(action_context, "guest action")
 		local picked, picked_slot
 		for slot, instance in pairs(guest.inv) do
 			if instance.uid == pickup.uid then picked, picked_slot = true, slot end
@@ -2375,6 +3794,71 @@ local function validate_multiplayer_gameplay()
 			{ owner_id = guest.actor_id }
 		) == nil, "friendly projectile could hit a player")
 
+		local dense_cells = {}
+		for y = math.max(1, guest.yt - 8), math.min(cf.wmax, guest.yt + 8) do
+			for x = math.max(1, guest.xt - 8), math.min(cf.wmax, guest.xt + 8) do
+				dense_cells[#dense_cells + 1] = {
+					x = x,
+					y = y,
+					cell = StateCopy.copy(world[y][x]),
+				}
+				world[y][x] = { b = 1 }
+			end
+		end
+		local function restore_dense_cells()
+			for _, entry in ipairs(dense_cells) do
+				world[entry.y][entry.x] = entry.cell
+			end
+		end
+		local original_guest_carry = guest.iscarry
+		guest.iscarry = createblock(12)
+		local dense_save = game_save_snapshot()
+		local saved_recovery = dense_save[4].network_guest_recovery
+		local saved_record = saved_recovery and saved_recovery[#saved_recovery]
+		assert(saved_record and saved_record.iscarry
+			and saved_record.iscarry.b == 12
+			and guest.iscarry and guest.iscarry.b == 12,
+			"dense-world autosave lost or mutated guest possessions")
+		guest.iscarry = original_guest_carry
+
+		local original_live_recovery = game.network_guest_recovery
+		game.network_guest_recovery = nil
+		local recovery_actor = {
+			actor_id = "guest",
+			session_id = string.rep("9", 64),
+			xt = guest.xt,
+			yt = guest.yt,
+			inv = { [1] = item_make(31) },
+			invselect = 1,
+			iscarry = createblock(12),
+		}
+		local cleanup_ok, cleanup_report = multiplayer_drop_guest(
+			recovery_actor,
+			recovery_actor.session_id
+		)
+		assert(cleanup_ok and cleanup_report and cleanup_report.stored
+			and game.network_guest_recovery
+			and #game.network_guest_recovery == 1
+			and next(recovery_actor.inv) == nil
+			and recovery_actor.iscarry == nil,
+			"dense-world disconnect did not enter durable recovery")
+		for attempt = 1, 8 do
+			local retry_ok, retry_error = multiplayer_recover_guest_possessions(true)
+			assert(not retry_ok and retry_error == "no room for carried block",
+				"dense-world recovery retry lost its failure state")
+		end
+		local parked, parked_status = multiplayer_recover_guest_possessions(false)
+		assert(parked and parked_status == "parked",
+			"unchanged dense world caused unbounded recovery retries")
+		restore_dense_cells()
+		local recovered, recovery_error = multiplayer_recover_guest_possessions(true)
+		assert(recovered and recovery_error == "recovered"
+			and game.network_guest_recovery == nil,
+			"durable guest possessions were not retried after space returned")
+		restore_dense_cells()
+		game.network_guest_recovery = original_live_recovery
+		if network_world_journal then network_world_journal:clear() end
+
 		local snapshot = NetworkSnapshot.capture(multiplayer_snapshot_state({
 			guest = guest,
 			session_id = gameplay_session_id,
@@ -2544,6 +4028,159 @@ local function validate_multiplayer_gameplay()
 			and multiplayer_flush_network_events(lagged_sound_time + 2)
 			and not allsounds["net:host:lagged_reconnect_sound"],
 			"lagged buffered audio burst after interpolation recovery")
+
+		local timeline_base = tonumber(game.network_server_time) or 0
+		local server_time_before_future = game.network_server_time
+		local future_state = multiplayer_replication_state({ guest = actors.guest })
+		future_state.tick = (tonumber(game.network_server_tick) or 0) + 1
+		future_state.sample_time = timeline_base + 60
+		local future_state_ok, future_state_error = multiplayer_apply_replication(
+			future_state
+		)
+		assert(not future_state_ok
+			and future_state_error == "replicated sample time is too far ahead"
+			and game.network_server_time == server_time_before_future,
+			"future replication state poisoned the client timeline")
+
+		local function timeline_event(event_id, sample_time)
+			return {
+				kind = "text",
+				event_id = event_id,
+				tick = tonumber(game.network_tick) or 0,
+				sample_time = sample_time,
+				actor_id = "guest",
+				text = "bounded timeline",
+				temporary = false,
+			}
+		end
+		local function event_runtime()
+			return MultiplayerRuntime.new({
+				registry = ActorRegistry.new(),
+				event_handler = multiplayer_apply_network_event,
+			})
+		end
+		multiplayer_reset_network_events(true)
+		local future_event_runtime = event_runtime()
+		local future_event_ok, future_event_error =
+			future_event_runtime:_apply_event_payload(
+				timeline_event(1, timeline_base + 60),
+				MultiplayerProtocol.MAX_MESSAGE_BYTES
+			)
+		assert(not future_event_ok
+			and future_event_error == "network event sample time is too far ahead"
+			and future_event_runtime.received_event_id == 0,
+			"future presentation event advanced its ACK")
+
+		multiplayer_reset_network_events(true)
+		local event_count_runtime = event_runtime()
+		for event_id = 1, 1024 do
+			assert(event_count_runtime:_apply_event_payload(
+				timeline_event(event_id, timeline_base + 1),
+				1
+			))
+		end
+		local event_count_ok, event_count_error =
+			event_count_runtime:_apply_event_payload(
+				timeline_event(1025, timeline_base + 1),
+				1
+			)
+		assert(not event_count_ok
+			and event_count_error == "network event timeline overflow"
+			and event_count_runtime.received_event_id == 1024,
+			"presentation count limit advanced its ACK")
+
+		multiplayer_reset_network_events(true)
+		local event_bytes_runtime = event_runtime()
+		for event_id = 1, 128 do
+			assert(event_bytes_runtime:_apply_event_payload(
+				timeline_event(event_id, timeline_base + 1),
+				MultiplayerProtocol.MAX_MESSAGE_BYTES
+			))
+		end
+		local event_bytes_ok, event_bytes_error =
+			event_bytes_runtime:_apply_event_payload(
+				timeline_event(129, timeline_base + 1),
+				MultiplayerProtocol.MAX_MESSAGE_BYTES
+			)
+		assert(not event_bytes_ok
+			and event_bytes_error == "network event timeline overflow"
+			and event_bytes_runtime.received_event_id == 128,
+			"presentation byte limit advanced its ACK")
+
+		local original_world_sequence = game.network_world_sequence
+		local original_received_sequence = game.network_world_received_sequence
+		local function timeline_delta(sequence, sample_time)
+			return {
+				sequence = sequence,
+				tick = tonumber(game.network_tick) or 0,
+				sample_time = sample_time,
+				cells = { { x = 1, y = 1, cell = { b = 77 } } },
+			}
+		end
+		local function world_runtime()
+			return MultiplayerRuntime.new({
+				registry = ActorRegistry.new(),
+				world_delta_applier = multiplayer_apply_world_delta,
+			})
+		end
+		multiplayer_reset_network_events(true)
+		game.network_world_sequence = 0
+		game.network_world_received_sequence = 0
+		local future_world_runtime = world_runtime()
+		local future_world_ok, future_world_error =
+			future_world_runtime:_apply_world_payload(
+				timeline_delta(1, timeline_base + 60),
+				NetworkReplication.HEADER_SIZE + 64
+			)
+		assert(not future_world_ok
+			and future_world_error == "world delta sample time is too far ahead"
+			and future_world_runtime.received_world_sequence == 0,
+			"future world delta advanced its ACK")
+
+		multiplayer_reset_network_events(true)
+		game.network_world_sequence = 0
+		game.network_world_received_sequence = 0
+		local world_count_runtime = world_runtime()
+		for sequence = 1, 512 do
+			assert(world_count_runtime:_apply_world_payload(
+				timeline_delta(sequence, timeline_base + 1),
+				1
+			))
+		end
+		local world_count_ok, world_count_error =
+			world_count_runtime:_apply_world_payload(
+				timeline_delta(513, timeline_base + 1),
+				1
+			)
+		assert(not world_count_ok
+			and world_count_error == "world delta timeline overflow"
+			and world_count_runtime.received_world_sequence == 512,
+			"world-delta count limit advanced its ACK")
+
+		multiplayer_reset_network_events(true)
+		game.network_world_sequence = 0
+		game.network_world_received_sequence = 0
+		local world_bytes_runtime = world_runtime()
+		local maximum_world_packet = NetworkReplication.MAX_STORED_BYTES
+			+ NetworkReplication.HEADER_SIZE
+		for sequence = 1, 15 do
+			assert(world_bytes_runtime:_apply_world_payload(
+				timeline_delta(sequence, timeline_base + 1),
+				maximum_world_packet
+			))
+		end
+		local world_bytes_ok, world_bytes_error =
+			world_bytes_runtime:_apply_world_payload(
+				timeline_delta(16, timeline_base + 1),
+				maximum_world_packet
+			)
+		assert(not world_bytes_ok
+			and world_bytes_error == "world delta timeline overflow"
+			and world_bytes_runtime.received_world_sequence == 15,
+			"world-delta byte limit advanced its ACK")
+		multiplayer_reset_network_events(true)
+		game.network_world_sequence = original_world_sequence
+		game.network_world_received_sequence = original_received_sequence
 		local gameplay_key_handler = love.keypressed
 		esc_menu()
 		assert(game.escmenu == 1 and #msg.escmenu_guest == 2
@@ -2695,6 +4332,9 @@ local function validate_persistence()
 			pl.ferted = nil
 			pl.disaster = nil
 			pl.disastercd = nil
+			game.network_guest_recovery = {
+				{ inv = {}, recovery_attempts = 8, recovery_last_error = "dense" },
+			}
 			local hidden_slot = pl.invsize + 50
 			pl.inv[hidden_slot] = item_make(31)
 			game_migrate()
@@ -2702,6 +4342,10 @@ local function validate_persistence()
 				"save migration did not add exploration histories")
 			assert(pl.inv[hidden_slot] == nil,
 				"save migration left an item in an inaccessible inventory slot")
+			assert(game.network_guest_recovery[1].recovery_attempts == 0
+				and game.network_guest_recovery[1].recovery_last_error == nil,
+				"loaded recovery storage remained permanently parked")
+			game.network_guest_recovery = nil
 		for name in pairs(cf.disaster) do
 			assert(pl.disaster[name] and type(pl.disaster[name].cd) == "number",
 				"save migration did not add disaster state for " .. name)
@@ -3574,10 +5218,24 @@ local function validate_display()
 	}) == "unavailable", "LAN menu offers an occupied game")
 	assert(menu_lan_prompt_state({}, "multicast unavailable")
 		== "discovery_unavailable", "LAN discovery failure has no friendly menu state")
+	assert(menu_lan_prompt_state({}, nil, { timed_out = true }) == "timeout",
+		"silent LAN discovery has no finite diagnostic state")
 	assert(menu_lan_prompt_state({}) == "searching",
 		"empty LAN discovery does not leave the menu in its searching state")
-	assert(msg.menu.lan_manual == nil and msg.menu.manual_prompt == nil,
-		"main menu still exposes manual IP entry")
+	local manual_host, manual_port = menu_parse_lan_address("192.168.1.20:23000")
+	assert(manual_host == "192.168.1.20" and manual_port == 23000,
+		"manual LAN IPv4 address did not parse")
+	local named_host, named_port = menu_parse_lan_address("sarcophagus.local")
+	assert(named_host == "sarcophagus.local"
+		and named_port == MultiplayerProtocol.DEFAULT_GAMEPLAY_PORT,
+		"manual LAN host name did not use the gameplay port")
+	assert(not menu_parse_lan_address("999.1.1.1")
+		and not menu_parse_lan_address("host:70000"),
+		"manual LAN parser accepted an invalid endpoint")
+	assert(type(msg.menu.lan_manual) == "string"
+		and type(msg.menu.lan_manual_prompt) == "string"
+		and type(msg.menu.lan_timeout) == "string",
+		"main menu has no manual-address or timeout fallback")
 	assert(msg.menu.lan_found:find("J", 1, true)
 		and not msg.menu.lan_found:find("_1_", 1, true),
 		"discovered-game prompt exposes technical data instead of the J action")
@@ -4659,6 +6317,18 @@ function smoke.install(specification)
 		if background_minimize_enabled() and love.window.minimize then
 			pcall(love.window.minimize)
 		end
+		if mode == "multiplayer-gameplay-process-host"
+			or mode == "multiplayer-gameplay-process-client" then
+			original_load(...)
+			ignore_real_input()
+			local role = mode:match("multiplayer%-gameplay%-process%-(.+)")
+			local ok, err = pcall(install_process_gameplay_test, role, value)
+			if not ok then
+				finish(1, "mode=" .. mode .. " " .. tostring(err))
+			end
+			return
+		end
+
 		if mode == "network-process-host" or mode == "network-process-client" then
 			local role = mode:match("network%-process%-(.+)")
 			local ok, err = pcall(install_process_network_test, role, value)
@@ -4748,6 +6418,14 @@ function smoke.install(specification)
 			local ok, err = pcall(validate_multiplayer_gameplay)
 			if not ok then
 				finish(1, "mode=multiplayer-gameplay " .. tostring(err))
+			end
+			return
+		end
+
+		if mode == "multiplayer-benchmark" then
+			local ok, err = xpcall(begin_multiplayer_benchmark, debug.traceback)
+			if not ok then
+				finish(1, "mode=multiplayer-benchmark " .. tostring(err))
 			end
 			return
 		end

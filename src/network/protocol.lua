@@ -71,11 +71,10 @@ function Protocol.sanitize_utf8(value, maximum)
 	return table.concat(output)
 end
 
--- Version 3 makes reconnect synchronization a real barrier and distinguishes
--- a stream resume from restarting an interrupted initial snapshot.  Version 2
--- announced the client as synchronized before replaying its backlog, so the
--- two wire semantics must never be mixed in one session.
-Protocol.VERSION = 3
+-- Version 4 adds a bounded replication container with raw-size preflight.
+-- Version 3 peers cannot parse that wire format, so the protocol version must
+-- keep the two implementations apart.
+Protocol.VERSION = 4
 Protocol.SNAPSHOT_VERSION = 1
 Protocol.DEFAULT_GAMEPLAY_PORT = 22122
 Protocol.CHANNEL = {

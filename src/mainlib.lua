@@ -1,3 +1,6 @@
+local ActiveCameraUnion = require("src.active_camera_union")
+local PerformanceMetrics = require("src.performance_metrics")
+
 -- SCREEN
 --------------------------------------------------
 
@@ -61,8 +64,12 @@ function multiplayer_snapshot_state(session)
 	}
 end
 
-function multiplayer_drop_guest(actor)
-	return GuestPossessions.drop(actor, {
+local network_next_possession_recovery = 0
+local network_possession_recovery_active = false
+local NETWORK_POSSESSION_RECOVERY_MAX_ATTEMPTS = 8
+
+local function multiplayer_live_possession_options()
+	return {
 		world = world,
 		fallback_x = pl.startx,
 		fallback_y = pl.starty,
@@ -76,7 +83,85 @@ function multiplayer_drop_guest(actor)
 			local merged = GuestPossessions.merge_block_cell(world[y][x], block)
 			return writemap(x, y, merged, "all") == true
 		end,
-	})
+	}
+end
+
+function multiplayer_drop_guest(actor, session_id)
+	local dropped, drop_error, report = GuestPossessions.drop(
+		actor,
+		multiplayer_live_possession_options()
+	)
+	if dropped then return true, drop_error end
+
+	game.network_guest_recovery = type(game.network_guest_recovery) == "table"
+		and game.network_guest_recovery or {}
+	local stored, store_report = GuestPossessions.stash(
+		actor,
+		game.network_guest_recovery,
+		{
+			fallback_x = pl.startx,
+			fallback_y = pl.starty,
+			session_id = session_id,
+			reason = tostring(drop_error or "guest possession drop failed"),
+		}
+	)
+	if not stored then return false, drop_error, report end
+	network_next_possession_recovery = 0
+	if oldprint then
+		oldprint("Guest possessions moved to recovery storage: "
+			.. tostring(drop_error))
+	end
+	return true, store_report
+end
+
+function multiplayer_recover_guest_possessions(force)
+	if type(game) ~= "table" or game.network_client or game.mapgenning
+		or type(world) ~= "table" or type(pl) ~= "table" then
+		return true, "unavailable"
+	end
+	local recovery = game.network_guest_recovery
+	if type(recovery) ~= "table" or type(recovery[1]) ~= "table" then
+		if type(recovery) == "table" and next(recovery) == nil then
+			game.network_guest_recovery = nil
+		end
+		return true, "empty"
+	end
+	local record = recovery[1]
+	local attempts = math.max(0, math.floor(
+		tonumber(record.recovery_attempts) or 0
+	))
+	if not force and attempts >= NETWORK_POSSESSION_RECOVERY_MAX_ATTEMPTS then
+		return true, "parked"
+	end
+	local current = love and love.timer and love.timer.getTime()
+		or os.clock()
+	if not force and current < network_next_possession_recovery then
+		return true, "deferred"
+	end
+	network_next_possession_recovery = current + 1
+
+	network_possession_recovery_active = true
+	local called, recovered, recovery_error = pcall(
+		GuestPossessions.drop,
+		record,
+		multiplayer_live_possession_options()
+	)
+	network_possession_recovery_active = false
+	if not called then recovered, recovery_error = false, recovered end
+	if not recovered then
+		attempts = math.min(
+			NETWORK_POSSESSION_RECOVERY_MAX_ATTEMPTS,
+			attempts + 1
+		)
+		record.recovery_attempts = attempts
+		record.recovery_last_error = tostring(recovery_error)
+		network_next_possession_recovery = current + math.min(60, 2 ^ (attempts - 1))
+		return false, recovery_error
+	end
+	table.remove(recovery, 1)
+	network_next_possession_recovery = 0
+	if next(recovery) == nil then game.network_guest_recovery = nil end
+	return true, "recovered"
 end
 
 local network_outgoing_events = {}
@@ -86,8 +171,66 @@ local network_client_event_id = 0
 local network_client_event_received_id = 0
 local NETWORK_EVENT_QUEUE_LIMIT = 1024
 local NETWORK_SOUND_EVENT_MAX_LAG = 1
-local network_pending_world_deltas = {}
-local network_pending_presentation_events = {}
+local NETWORK_TIMELINE_MAX_FUTURE = 30
+local NETWORK_PENDING_EVENT_LIMIT = 1024
+local NETWORK_PENDING_EVENT_BYTES = 8 * 1024 * 1024
+local NETWORK_PENDING_WORLD_LIMIT = 512
+local NETWORK_PENDING_WORLD_BYTES = 32 * 1024 * 1024
+
+local function network_queue_new()
+	return { first = 1, last = 0, bytes = 0 }
+end
+
+local function network_queue_count(queue)
+	return math.max(0, queue.last - queue.first + 1)
+end
+
+local function network_queue_peek(queue)
+	local entry = queue[queue.first]
+	return entry and entry.value or nil
+end
+
+local function network_queue_last(queue)
+	local entry = queue[queue.last]
+	return entry and entry.value or nil
+end
+
+local function network_queue_push(queue, value, bytes, maximum_count, maximum_bytes)
+	bytes = tonumber(bytes) or 1
+	if type(bytes) ~= "number" or bytes ~= bytes or bytes == math.huge
+		or bytes == -math.huge or bytes < 0 then
+		return false
+	end
+	bytes = math.max(1, math.floor(bytes))
+	if network_queue_count(queue) >= maximum_count
+		or queue.bytes + bytes > maximum_bytes then
+		return false
+	end
+	queue.last = queue.last + 1
+	queue[queue.last] = { value = value, bytes = bytes }
+	queue.bytes = queue.bytes + bytes
+	return true
+end
+
+local function network_queue_pop(queue)
+	local entry = queue[queue.first]
+	if not entry then return nil end
+	queue[queue.first] = nil
+	queue.first = queue.first + 1
+	queue.bytes = math.max(0, queue.bytes - entry.bytes)
+	if queue.first > queue.last then
+		queue.first = 1
+		queue.last = 0
+		queue.bytes = 0
+	end
+	return entry.value
+end
+
+local network_pending_world_deltas = network_queue_new()
+local network_pending_presentation_events = network_queue_new()
+
+local network_timeline_anchor_time
+local network_timeline_anchor_sample
 
 local function network_finite_number(value)
 	return type(value) == "number"
@@ -99,6 +242,66 @@ end
 local function network_nonnegative_integer(value)
 	return network_finite_number(value) and value >= 0
 		and value == math.floor(value)
+end
+
+local function network_timeline_clock()
+	return love and love.timer and love.timer.getTime() or os.clock()
+end
+
+local function network_timeline_reset(sample_time)
+	network_timeline_anchor_time = network_timeline_clock()
+	network_timeline_anchor_sample = math.max(0, tonumber(sample_time) or 0)
+end
+
+local function network_timeline_reference()
+	if network_finite_number(network_timeline_anchor_time)
+		and network_finite_number(network_timeline_anchor_sample) then
+		return network_timeline_anchor_sample + math.max(
+			0,
+			network_timeline_clock() - network_timeline_anchor_time
+		)
+	end
+	for _, value in ipairs({
+		game and game.network_server_time,
+		game and game.network_render_time,
+		game and game.network_clock,
+	}) do
+		if network_finite_number(value) and value >= 0 then return value end
+	end
+	return 0
+end
+
+local function network_timeline_time_allowed(value)
+	return network_finite_number(value) and value >= 0
+		and value <= network_timeline_reference() + NETWORK_TIMELINE_MAX_FUTURE
+end
+
+local function network_serializable_size(value, seen, remaining)
+	remaining = remaining or NETWORK_PENDING_WORLD_BYTES
+	if remaining < 0 then return nil end
+	local kind = type(value)
+	if kind == "nil" then return 1 end
+	if kind == "boolean" then return 1 end
+	if kind == "number" then return 8 end
+	if kind == "string" then return #value + 8 end
+	if kind ~= "table" then return nil end
+	seen = seen or {}
+	if seen[value] then return nil end
+	seen[value] = true
+	local total = 24
+	for key, nested in pairs(value) do
+		local key_size = network_serializable_size(key, seen, remaining - total)
+		local nested_size = key_size and network_serializable_size(
+			nested,
+			seen,
+			remaining - total - key_size - 16
+		) or nil
+		if not nested_size then seen[value] = nil; return nil end
+		total = total + key_size + nested_size + 16
+		if total > remaining then seen[value] = nil; return nil end
+	end
+	seen[value] = nil
+	return total
 end
 
 local function network_validate_serializable(value, budget, depth, seen)
@@ -195,8 +398,8 @@ function multiplayer_reset_network_events(reset_sequence)
 		network_event_id = 0
 		network_client_event_id = 0
 		network_client_event_received_id = 0
-		network_pending_world_deltas = {}
-		network_pending_presentation_events = {}
+		network_pending_world_deltas = network_queue_new()
+		network_pending_presentation_events = network_queue_new()
 	end
 	return true
 end
@@ -303,7 +506,9 @@ function multiplayer_network_catchup_ready()
 	return true
 end
 
-function multiplayer_apply_network_event(event)
+local network_event_handlers
+
+function multiplayer_apply_network_event(event, encoded_bytes)
 	if type(event) ~= "table"
 		or (event.kind ~= "sound" and event.kind ~= "text") then
 		return false, "invalid network event"
@@ -327,21 +532,38 @@ function multiplayer_apply_network_event(event)
 		or event.sample_time < 0) then
 		return false, "invalid network event sample time"
 	end
+	return network_event_handlers[event.kind](event, event_id, encoded_bytes)
+end
 
-	local function buffer_for_timeline()
+local function buffer_network_event_for_timeline(event, event_id, encoded_bytes)
 		if NETWORK_EVENT_TIMELINE_APPLY or not game.network_client
 			or not network_interpolation_buffer then return nil end
 		if not network_finite_number(event.sample_time) then
 			return false, "missing network event sample time"
 		end
-		network_pending_presentation_events[
-			#network_pending_presentation_events + 1
-		] = event
+		if not network_timeline_time_allowed(event.sample_time) then
+			return false, "network event sample time is too far ahead"
+		end
+		local previous = network_queue_last(network_pending_presentation_events)
+		if previous and event.sample_time < previous.sample_time then
+			return false, "stale network event sample time"
+		end
+		local bytes = tonumber(encoded_bytes)
+			or ((event.kind == "text" and #event.text or 0) + 256)
+		if not network_queue_push(
+			network_pending_presentation_events,
+			event,
+			bytes,
+			NETWORK_PENDING_EVENT_LIMIT,
+			NETWORK_PENDING_EVENT_BYTES
+		) then
+			return false, "network event timeline overflow"
+		end
 		network_client_event_received_id = event_id
 		return true, "buffered"
 	end
 
-	if event.kind == "text" then
+local function apply_network_text_event(event, event_id, encoded_bytes)
 		if event.actor_id ~= "host" and event.actor_id ~= "guest" then
 			return false, "invalid network text actor"
 		end
@@ -352,7 +574,9 @@ function multiplayer_apply_network_event(event)
 		if type(event.temporary) ~= "boolean" then
 			return false, "invalid network text flags"
 		end
-		local buffered, buffer_status = buffer_for_timeline()
+		local buffered, buffer_status = buffer_network_event_for_timeline(
+			event, event_id, encoded_bytes
+		)
 		if buffered ~= nil then return buffered, buffer_status end
 
 		local local_actor = actors and actors.local_actor
@@ -378,6 +602,7 @@ function multiplayer_apply_network_event(event)
 		return true
 	end
 
+local function apply_network_sound_event(event, event_id, encoded_bytes)
 	if type(event.name) ~= "string" or #event.name < 1 or #event.name > 96
 		or event.name:find("[%z\1-\31\127]") then
 		return false, "invalid network sound name"
@@ -411,7 +636,9 @@ function multiplayer_apply_network_event(event)
 		return false, "invalid network sound flags"
 	end
 	if event.replayed then
-		local buffered, buffer_status = buffer_for_timeline()
+		local buffered, buffer_status = buffer_network_event_for_timeline(
+			event, event_id, encoded_bytes
+		)
 		if buffered ~= nil then return buffered, buffer_status end
 		-- A sound that was outstanding when the transport died is no longer
 		-- temporally meaningful. Its tombstone still traverses the presentation
@@ -422,7 +649,9 @@ function multiplayer_apply_network_event(event)
 		network_client_event_id = math.max(network_client_event_id, event_id)
 		return true, "expired"
 	end
-	local buffered, buffer_status = buffer_for_timeline()
+	local buffered, buffer_status = buffer_network_event_for_timeline(
+		event, event_id, encoded_bytes
+	)
 	if buffered ~= nil then return buffered, buffer_status end
 
 	local options = {
@@ -455,13 +684,18 @@ function multiplayer_apply_network_event(event)
 	return true
 end
 
+network_event_handlers = {
+	text = apply_network_text_event,
+	sound = apply_network_sound_event,
+}
+
 function multiplayer_flush_network_events(render_time)
 	render_time = tonumber(render_time)
 	if not network_finite_number(render_time) then return false end
 	local applied = 0
-	while network_pending_presentation_events[1]
-		and network_pending_presentation_events[1].sample_time <= render_time do
-		local event = table.remove(network_pending_presentation_events, 1)
+	local event = network_queue_peek(network_pending_presentation_events)
+	while event and event.sample_time <= render_time do
+		event = network_queue_pop(network_pending_presentation_events)
 		if event.kind == "sound" and network_finite_number(event.sample_time)
 			and render_time - event.sample_time > NETWORK_SOUND_EVENT_MAX_LAG then
 			-- The interpolation clock can jump forward after reconnect. Never turn
@@ -476,6 +710,7 @@ function multiplayer_flush_network_events(render_time)
 			return false, apply_error
 		end
 		applied = applied + 1
+		event = network_queue_peek(network_pending_presentation_events)
 	end
 	return true, applied
 end
@@ -499,6 +734,16 @@ function multiplayer_record_cell(x, y)
 		return false
 	end
 	local recorded, record_error = network_world_journal:record(x, y)
+	if recorded and not network_possession_recovery_active
+		and type(game and game.network_guest_recovery) == "table" then
+		for _, record in ipairs(game.network_guest_recovery) do
+			if type(record) == "table" then
+				record.recovery_attempts = 0
+				record.recovery_last_error = nil
+			end
+		end
+		network_next_possession_recovery = 0
+	end
 	if not recorded and record_error and multiplayer then
 		multiplayer.last_error = record_error
 	end
@@ -897,6 +1142,8 @@ function multiplayer_apply_projectile_player_hit(actor, callback)
 	}, callback)
 end
 
+local guest_action_handlers
+
 function multiplayer_guest_action(actor, payload)
 	if type(payload) ~= "table" then
 		return false, "unsupported guest action"
@@ -918,7 +1165,12 @@ function multiplayer_guest_action(actor, payload)
 	-- predicted action. That rolls back a stale client-side pickup/drop.
 	multiplayer_record_cell(actor.xt, actor.yt)
 
-	if payload.action == "pickup" then
+	local handler = guest_action_handlers[payload.action]
+	if not handler then return false, "unsupported guest action" end
+	return handler(actor, runtime, payload)
+end
+
+local function guest_pickup_action(actor, runtime, payload)
 		if not ItemIdentity.counter(payload.item_uid) then
 			return false, "pickup item uid is missing"
 		end
@@ -941,7 +1193,8 @@ function multiplayer_guest_action(actor, payload)
 			return inventory_pick_ground_item(index, expected)
 		end)
 	end
-	if payload.action == "select" then
+
+local function guest_select_action(actor, runtime, payload)
 		local slot = payload.slot
 		local valid_slot = type(slot) == "number"
 			and slot >= 1 and slot <= actor.invsize and slot == math.floor(slot)
@@ -968,7 +1221,7 @@ function multiplayer_guest_action(actor, payload)
 		end)
 	end
 
-	if payload.action ~= "key" then return false, "unsupported guest action" end
+local function guest_key_action(actor, runtime, payload)
 	local key = gameplay_key_from_event(payload.key, payload.scancode)
 	if type(key) ~= "string" or not replicated_action_keys[key] then
 		return false, "guest key is not allowed"
@@ -1053,8 +1306,14 @@ function multiplayer_guest_action(actor, payload)
 		game.recovery = recovery_before
 		if not called then error(action_error, 0) end
 		return true
-	end)
+		end)
 end
+
+guest_action_handlers = {
+	pickup = guest_pickup_action,
+	select = guest_select_action,
+	key = guest_key_action,
+}
 
 function multiplayer_reject_guest_action(actor)
 	if not actor then return false end
@@ -1390,6 +1649,17 @@ function multiplayer_active_cameras()
 	return result
 end
 
+function multiplayer_each_active_cell(cameras, width, height, callback)
+	return PerformanceMetrics.measure(
+		"active_world_scan",
+		ActiveCameraUnion.each,
+		cameras,
+		width,
+		height,
+		callback
+	)
+end
+
 function multiplayer_apply_replication(state)
 	if type(state) ~= "table" then return false, "invalid replicated state" end
 	local progress_present = state.shared_progress ~= nil
@@ -1420,6 +1690,9 @@ function multiplayer_apply_replication(state)
 	end
 	if not network_finite_number(state.sample_time) or state.sample_time < 0 then
 		return false, "invalid replicated sample time"
+	end
+	if game.network_client and not network_timeline_time_allowed(state.sample_time) then
+		return false, "replicated sample time is too far ahead"
 	end
 	if not network_interpolation_buffer then
 		network_interpolation_buffer = NetworkInterpolationBuffer.new()
@@ -1601,7 +1874,7 @@ local function multiplayer_apply_validated_world_delta(delta, validated)
 	return true
 end
 
-function multiplayer_apply_world_delta(delta)
+function multiplayer_apply_world_delta(delta, encoded_bytes)
 	local delayed = game.network_client and network_interpolation_buffer ~= nil
 	local current_sequence = delayed
 		and (tonumber(game.network_world_received_sequence)
@@ -1617,10 +1890,29 @@ function multiplayer_apply_world_delta(delta)
 		if not network_finite_number(delta.sample_time) then
 			return false, "missing world delta sample time"
 		end
-		network_pending_world_deltas[#network_pending_world_deltas + 1] = {
+		if not network_timeline_time_allowed(delta.sample_time) then
+			return false, "world delta sample time is too far ahead"
+		end
+		local previous = network_queue_last(network_pending_world_deltas)
+		if previous and delta.sample_time < previous.delta.sample_time then
+			return false, "stale world delta sample time"
+		end
+		local pending = {
 			delta = delta,
 			cells = validated,
 		}
+		local estimated_bytes = network_serializable_size(delta)
+		if not estimated_bytes then return false, "world delta is too large" end
+		local bytes = math.max(tonumber(encoded_bytes) or 0, estimated_bytes)
+		if not network_queue_push(
+			network_pending_world_deltas,
+			pending,
+			bytes,
+			NETWORK_PENDING_WORLD_LIMIT,
+			NETWORK_PENDING_WORLD_BYTES
+		) then
+			return false, "world delta timeline overflow"
+		end
 		game.network_world_received_sequence = delta.sequence
 		return true, "buffered"
 	end
@@ -1631,9 +1923,9 @@ function multiplayer_flush_world_deltas(render_time)
 	render_time = tonumber(render_time)
 	if not network_finite_number(render_time) then return false end
 	local applied = 0
-	while network_pending_world_deltas[1]
-		and network_pending_world_deltas[1].delta.sample_time <= render_time do
-		local pending = table.remove(network_pending_world_deltas, 1)
+	local pending = network_queue_peek(network_pending_world_deltas)
+	while pending and pending.delta.sample_time <= render_time do
+		pending = network_queue_pop(network_pending_world_deltas)
 		local ok, apply_error = multiplayer_apply_validated_world_delta(
 			pending.delta,
 			pending.cells
@@ -1643,6 +1935,7 @@ function multiplayer_flush_world_deltas(render_time)
 			return false, apply_error
 		end
 		applied = applied + 1
+		pending = network_queue_peek(network_pending_world_deltas)
 	end
 	return true, applied
 end
@@ -1991,6 +2284,7 @@ function multiplayer_apply_snapshot(snapshot)
 	game.network_tick = snapshot.header.tick or 0
 	game.network_server_time = tonumber(game.network_clock) or 0
 	game.network_render_time = game.network_server_time
+	network_timeline_reset(game.network_server_time)
 	game.network_world_sequence = 0
 	game.network_world_received_sequence = 0
 	network_interpolation_buffer = NetworkInterpolationBuffer.new()
@@ -4238,6 +4532,18 @@ function player_die ()
 
 end
 
+function player_respawn ()
+	inv_ground_add(pl.xt, pl.yt, item_make(45)) -- corpse
+	pl.dying = nil
+	player_reset()
+	stats_reset()
+	stat_spend("power", 95)
+	pl.isdead = nil
+	pl.inv = {}
+	inv_add(item_make(26))
+	return true
+end
+
 function stats_reset ()
 
 	pl.stats = {}
@@ -4594,9 +4900,18 @@ function game_migrate ()
 		"network_world_received_sequence",
 		"network_last_action_result", "network_time_base",
 		"network_guest_time_delta", "multiplayer_port",
-		"multiplayer_prompt_session",
+		"multiplayer_prompt_session", "network_guest_recovery_error",
 	}) do
 		game[field] = nil
+	end
+	if type(game.network_guest_recovery) == "table" then
+		for _, record in ipairs(game.network_guest_recovery) do
+			if type(record) == "table" then
+				record.recovery_attempts = 0
+				record.recovery_last_error = nil
+			end
+		end
+		network_next_possession_recovery = 0
 	end
 
 	pl.inv = pl.inv or {}
@@ -4822,7 +5137,7 @@ function game_save_snapshot ()
 		"network_world_received_sequence",
 		"network_last_action_result", "network_time_base",
 		"network_guest_time_delta", "multiplayer_port",
-		"multiplayer_prompt_session",
+		"multiplayer_prompt_session", "network_guest_recovery_error",
 	}) do
 		snapshot[4][field] = nil
 	end
@@ -4835,8 +5150,21 @@ function game_save_snapshot ()
 			fallback_y = pl.starty,
 		})
 		if not projected then
-			error("could not project guest possessions into save: "
-				.. tostring(projection_error))
+			-- Projection can have partially changed the private snapshot world before
+			-- discovering that no block cell is available. Rebuild that copy and keep
+			-- the complete guest payload in durable recovery storage instead.
+			snapshot[1] = StateCopy.copy(world)
+			snapshot[4].network_guest_recovery = type(
+				snapshot[4].network_guest_recovery
+			) == "table" and snapshot[4].network_guest_recovery or {}
+			snapshot[4].network_guest_recovery[
+				#snapshot[4].network_guest_recovery + 1
+			] = GuestPossessions.capture(guest, {
+				fallback_x = pl.startx,
+				fallback_y = pl.starty,
+				session_id = guest.session_id,
+				reason = tostring(projection_error),
+			})
 		end
 	end
 	return snapshot

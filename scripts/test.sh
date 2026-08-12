@@ -42,6 +42,9 @@ SARCOPHAGUS_SMOKE_TEST=network \
 SARCOPHAGUS_PROCESS_DISCOVERY=multicast \
 LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
 
+SARCOPHAGUS_PROCESS_DISCOVERY=broadcast \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
 SARCOPHAGUS_NET_LATENCY_MS=25 \
 SARCOPHAGUS_NET_JITTER_MS=15 \
 SARCOPHAGUS_NET_LOSS_PERCENT=20 \
@@ -56,9 +59,26 @@ SARCOPHAGUS_NET_DISCONNECT_AFTER=0.35 \
 SARCOPHAGUS_PROCESS_RECONNECT_BACKLOG=64 \
 LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
 
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-crash-process.sh"
+
+SARCOPHAGUS_PROCESS_MODE=multiplayer-gameplay \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
+SARCOPHAGUS_PROCESS_MODE=multiplayer-gameplay \
+SARCOPHAGUS_NET_LATENCY_MS=25 \
+SARCOPHAGUS_NET_JITTER_MS=15 \
+SARCOPHAGUS_NET_LOSS_PERCENT=10 \
+SARCOPHAGUS_NET_DUPLICATION_PERCENT=10 \
+SARCOPHAGUS_NET_DISCONNECT_AFTER=0.75 \
+LOVE_BIN="$love_binary" "$script_directory/test-multiplayer-process.sh"
+
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=multiplayer-gameplay \
     "$love_test" "$love_binary" "$project_root"
+
+SARCOPHAGUS_BUILD_MODE=development \
+SARCOPHAGUS_SMOKE_TEST=multiplayer-benchmark \
+	"$love_test" "$love_binary" "$project_root"
 
 SARCOPHAGUS_BUILD_MODE=development \
 SARCOPHAGUS_SMOKE_TEST=display \

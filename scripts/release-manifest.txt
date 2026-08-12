@@ -6,6 +6,7 @@ version.txt
 src/BlobReader.lua
 src/BlobWriter.lua
 src/achievements.lua
+src/active_camera_union.lua
 src/ani.lua
 src/actor_context.lua
 src/actor_inventory.lua
@@ -43,10 +44,12 @@ src/mapthread.lua
 src/menu.lua
 src/mobs_ai.lua
 src/moving.lua
+src/moving_phases.lua
 src/msg.lua
 src/network/content_hash.lua
 src/network/discovery.lua
 src/network/enet_transport.lua
+src/network/game_adapter.lua
 src/network/identity.lua
 src/network/interpolation_buffer.lua
 src/network/protocol.lua
@@ -55,6 +58,8 @@ src/network/runtime.lua
 src/network/session.lua
 src/network/snapshot.lua
 src/network/world_journal.lua
+src/performance_budget.lua
+src/performance_metrics.lua
 src/player_animation.lua
 src/projes.lua
 src/save_format.lua

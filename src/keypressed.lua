@@ -90,6 +90,7 @@ end
 
 
 function love.textinput(t)
+	if menu_lan_textinput and menu_lan_textinput(t) then return end
     if game.inputing and t~='`' then
     	game.textinput = game.textinput or ""
     	game.textinputold = game.textinputold or ""
@@ -575,6 +576,16 @@ function development_reload_assets()
 	-- the language of the current session and apply it again after every file
 	-- has been rebuilt, even if the reload also replaced src/msg.lua.
 	local active_language = LANGUAGE
+	if multiplayer and multiplayer.role ~= "offline" then
+		local stopped, stop_error = multiplayer:prepare_quit()
+		if not stopped then
+			if oldprint then
+				oldprint("Could not stop multiplayer before reload: "
+					.. tostring(stop_error))
+			end
+			return false, stop_error
+		end
+	end
 
 	ini_quad ()
 	lurker.scan()
@@ -589,7 +600,18 @@ function development_reload_assets()
 		language_set(active_language, false)
 	end
 
+	if multiplayer and multiplayer.invalidate_content_hash then
+		local invalidated, invalidate_error = multiplayer:invalidate_content_hash(true)
+		if not invalidated and oldprint then
+			oldprint("Could not refresh multiplayer content hash: "
+				.. tostring(invalidate_error))
+		end
+	elseif MultiplayerContentHash and MultiplayerContentHash.invalidate then
+		MultiplayerContentHash.invalidate()
+	end
+
 	screen_res ()
+	return true
 end
 
 function love.keypressed(key,s)
@@ -860,7 +882,7 @@ function love.keypressed(key,s)
 
 		--dump (togo.down)
 
-		if (togo.down or 0)>1 then return end
+		if (togo and togo.down or 0)>1 then return end
 
 		inventory_z_action()
 

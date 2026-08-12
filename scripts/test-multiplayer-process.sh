@@ -8,6 +8,12 @@ script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_directory/.." && pwd)"
 love_binary="${LOVE_BIN:-$project_root/.tools/love-11.5/runtime/love.app/Contents/MacOS/love}"
 love_test="$script_directory/run-love-test.sh"
+process_mode="${SARCOPHAGUS_PROCESS_MODE:-network}"
+
+if [[ "$process_mode" != "network" && "$process_mode" != "multiplayer-gameplay" ]]; then
+    echo "Unsupported multiplayer process mode: $process_mode" >&2
+    exit 1
+fi
 
 if [[ ! -x "$love_binary" ]]; then
     echo "LÖVE 11.5 executable not found: $love_binary" >&2
@@ -33,13 +39,14 @@ trap cleanup EXIT INT TERM
 test_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 test_specification="$test_port"
 if [[ "${SARCOPHAGUS_PROCESS_DISCOVERY:-0}" == "1" || \
-    "${SARCOPHAGUS_PROCESS_DISCOVERY:-0}" == "multicast" ]]; then
+    "${SARCOPHAGUS_PROCESS_DISCOVERY:-0}" == "multicast" || \
+    "${SARCOPHAGUS_PROCESS_DISCOVERY:-0}" == "broadcast" ]]; then
     discovery_port="$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
     test_specification="$test_port,$discovery_port"
 fi
 
 SARCOPHAGUS_BUILD_MODE=development \
-SARCOPHAGUS_SMOKE_TEST="network-process-host:$test_specification" \
+SARCOPHAGUS_SMOKE_TEST="$process_mode-process-host:$test_specification" \
 SARCOPHAGUS_TEST_LOG="$host_log" \
     "$love_test" "$love_binary" "$project_root" &
 host_pid=$!
@@ -64,7 +71,7 @@ fi
 
 set +e
 SARCOPHAGUS_BUILD_MODE=development \
-SARCOPHAGUS_SMOKE_TEST="network-process-client:$test_specification" \
+SARCOPHAGUS_SMOKE_TEST="$process_mode-process-client:$test_specification" \
 SARCOPHAGUS_TEST_LOG="$client_log" \
     "$love_test" "$love_binary" "$project_root"
 client_status=$?
@@ -80,13 +87,13 @@ if [[ $host_status -ne 0 || $client_status -ne 0 ]]; then
     echo "Two-process multiplayer smoke test failed." >&2
     exit 1
 fi
-if ! grep -Fq "SARCOPHAGUS_SMOKE_OK mode=network-process-host" "$host_log"; then
+if ! grep -Fq "SARCOPHAGUS_SMOKE_OK mode=$process_mode-process-host" "$host_log"; then
     echo "Multiplayer host success marker is missing." >&2
     exit 1
 fi
-if ! grep -Fq "SARCOPHAGUS_SMOKE_OK mode=network-process-client" "$client_log"; then
+if ! grep -Fq "SARCOPHAGUS_SMOKE_OK mode=$process_mode-process-client" "$client_log"; then
     echo "Multiplayer client success marker is missing." >&2
     exit 1
 fi
 
-echo "SARCOPHAGUS_MULTIPLAYER_PROCESS_OK port=$test_port"
+echo "SARCOPHAGUS_MULTIPLAYER_PROCESS_OK mode=$process_mode port=$test_port"

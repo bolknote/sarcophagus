@@ -39,12 +39,18 @@ local function fault_options(options)
 		if supplied[field] ~= nil then return supplied[field] end
 		return from_environment and os.getenv(environment) or nil
 	end
+	local disconnect_after = bounded_number(
+		value("disconnect_after", "SARCOPHAGUS_NET_DISCONNECT_AFTER"),
+		0,
+		0,
+		86400
+	)
 	return {
 		latency_ms = bounded_number(value("latency_ms", "SARCOPHAGUS_NET_LATENCY_MS"), 0, 0, 60000),
 		jitter_ms = bounded_number(value("jitter_ms", "SARCOPHAGUS_NET_JITTER_MS"), 0, 0, 60000),
 		loss_percent = bounded_number(value("loss_percent", "SARCOPHAGUS_NET_LOSS_PERCENT"), 0, 0, 100),
 		duplication_percent = bounded_number(value("duplication_percent", "SARCOPHAGUS_NET_DUPLICATION_PERCENT"), 0, 0, 100),
-		disconnect_after = bounded_number(value("disconnect_after", "SARCOPHAGUS_NET_DISCONNECT_AFTER"), 0, 0, 86400),
+		disconnect_after = disconnect_after,
 		random = type(supplied.random) == "function" and supplied.random or nil,
 	}
 end

@@ -23,7 +23,7 @@ local function default_clock()
 end
 
 local function default_token(prefix)
-	return Identity.token(prefix)
+	return Identity.secret_token(prefix)
 end
 
 local function now(session, value)
@@ -283,6 +283,7 @@ function Session:_finish_drop()
 		self.dropped_sessions[id] = true
 	end
 	self.registry:remove(guest)
+	self.dropped_sessions[id] = nil
 	self.guest = nil
 	self.client_nonce = nil
 	self.reconnect_token = nil

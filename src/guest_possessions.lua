@@ -146,4 +146,37 @@ function GuestPossessions.project(actor, options)
 	return transfer(actor, options, true)
 end
 
+function GuestPossessions.capture(actor, options)
+	assert(type(actor) == "table", "guest actor must be a table")
+	options = options or {}
+	local center_x, center_y = origin(actor, options)
+	return {
+		xt = center_x,
+		yt = center_y,
+		tx = center_x,
+		ty = center_y,
+		inv = deep_copy(actor.inv or {}),
+		invselect = 1,
+		iscarry = deep_copy(actor.iscarry),
+		recovery_session_id = options.session_id or actor.session_id,
+		recovery_reason = options.reason,
+		recovery_attempts = 0,
+	}
+end
+
+function GuestPossessions.stash(actor, storage, options)
+	assert(type(storage) == "table", "guest recovery storage must be a table")
+	local record = GuestPossessions.capture(actor, options)
+	local item_count = #sorted_inventory(actor)
+	storage[#storage + 1] = record
+	actor.inv = {}
+	actor.invselect = 1
+	actor.iscarry = nil
+	return true, {
+		items = item_count,
+		block = type(record.iscarry) == "table",
+		stored = true,
+	}, record
+end
+
 return GuestPossessions

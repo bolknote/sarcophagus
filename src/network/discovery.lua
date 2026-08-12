@@ -10,6 +10,7 @@ Discovery.PORT = 22121
 Discovery.VERSION = 1
 Discovery.MAGIC = "SARCO-LAN"
 Discovery.MAX_PACKET_BYTES = 2048
+Discovery.DIAGNOSTIC_TIMEOUT = 6
 
 local socket_ok, socket = pcall(require, "socket")
 
@@ -162,23 +163,40 @@ function Discovery.create_browser(options)
 		ttl = tonumber(options.ttl) or 5,
 		nonces = {},
 		records = {},
+		started_at = clock(),
+		first_refresh_at = nil,
+		last_refresh_at = nil,
+		last_response_at = nil,
+		refresh_count = 0,
+		destinations = {},
+		configured_destinations = options.destinations,
 	}, Browser)
 end
 
 function Browser:refresh(target_address, target_port)
-	local nonce = Identity.token("discover")
+	local refreshed_at = clock()
+	self.first_refresh_at = self.first_refresh_at or refreshed_at
+	self.last_refresh_at = refreshed_at
+	self.refresh_count = self.refresh_count + 1
+	local nonce = Identity.public_token("discover")
 	self.nonces[nonce] = clock() + self.ttl
 	local packet = encode("discover", { nonce = nonce })
 	local port = target_port or self.port
-	local destinations = target_address and { target_address } or {
-		self.group,
-		Discovery.BROADCAST,
-		"127.0.0.1",
-	}
+	local destinations = target_address and { target_address }
+		or self.configured_destinations or {
+			self.group,
+			Discovery.BROADCAST,
+			"127.0.0.1",
+		}
 	local sent_any = false
 	local errors = {}
 	for _, address in ipairs(destinations) do
 		local sent, send_error = self.udp:sendto(packet, address, port)
+		self.destinations[address] = {
+			ok = sent and true or false,
+			error = sent and nil or tostring(send_error),
+			last_attempt_at = refreshed_at,
+		}
 		if sent then
 			sent_any = true
 		else
@@ -215,6 +233,7 @@ function Browser:update()
 			packet.last_seen = current
 			packet.expires_at = current + self.ttl
 			self.records[key] = packet
+			self.last_response_at = current
 		end
 	end
 	for nonce, expires_at in pairs(self.nonces) do
@@ -223,6 +242,27 @@ function Browser:update()
 	for key, record in pairs(self.records) do
 		if record.expires_at < current then self.records[key] = nil end
 	end
+end
+
+function Browser:status()
+	local current = clock()
+	local records = self:list()
+	local waiting_since = self.last_response_at or self.first_refresh_at
+	local waiting_seconds = waiting_since and math.max(0, current - waiting_since) or 0
+	local multicast = self.destinations[self.group]
+	local broadcast = self.destinations[Discovery.BROADCAST]
+	return {
+		refresh_count = self.refresh_count,
+		searching_seconds = waiting_seconds,
+		timed_out = #records == 0 and self.refresh_count > 0
+			and waiting_seconds >= Discovery.DIAGNOSTIC_TIMEOUT,
+		last_response_at = self.last_response_at,
+		multicast_error = multicast and multicast.error or nil,
+		broadcast_error = broadcast and broadcast.error or nil,
+		broadcast_fallback = multicast and not multicast.ok
+			and broadcast and broadcast.ok or false,
+		destinations = self.destinations,
+	}
 end
 
 function Browser:list()

@@ -158,6 +158,9 @@ msg.menu = {
 	lan_searching = "\n\n{#8b9bb4ff}Searching the local network automatically…{#ffffffff}",
 	lan_unavailable = "\n\n{#8b9bb4ff}The game found on the local network is unavailable.{#ffffffff}",
 	lan_discovery_unavailable = "\n\n{#8b9bb4ff}Local-network game discovery is unavailable.{#ffffffff}",
+	lan_timeout = "\n\n{#8b9bb4ff}No game answered. Check that both computers are on the same network and that the firewall or Wi-Fi isolation is not blocking them.{#ffffffff}",
+	lan_manual = "\nPress {#fee761ff}M{#ffffffff} to enter an IPv4 address or host name manually.",
+	lan_manual_prompt = "\n{#63c74dff}Host (address[:port]): _1_{#ffffffff}\nPress Enter to connect or Esc to cancel.",
 }
 
 msg.network = {
@@ -191,6 +194,7 @@ msg.network = {
 	},
 	errors = {
 		generic = "Could not connect to the game found on the local network.",
+		invalid_manual_address = "Enter a valid IPv4 address or host name, optionally followed by :port.",
 		protocol_mismatch = "The host uses an incompatible network protocol.",
 		game_version_mismatch = "The game versions do not match.",
 		invalid_content_hash = "The remote build sent an invalid content signature.",

@@ -1,3 +1,5 @@
+local PerformanceMetrics = require("src.performance_metrics")
+
 function death_title_sprite(sprites, language)
 	return sprites[language] or sprites.en
 end
@@ -171,7 +173,7 @@ local function send_world_lights(scale)
 	return total_power
 end
 
-function love.draw()
+local function gameplay_draw()
 	
 
 
@@ -1051,7 +1053,9 @@ end
 
 
 
-	--fps
+end
+
+local function limit_frame_rate()
 	local cur_time = love.timer.getTime()
 	if next_time <= cur_time then
 		next_time = cur_time
@@ -1065,5 +1069,9 @@ end
 	--dump (limits)
 
 	
+end
 
+function love.draw()
+	PerformanceMetrics.measure("frame_render", gameplay_draw)
+	limit_frame_rate()
 end

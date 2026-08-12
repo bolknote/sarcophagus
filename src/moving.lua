@@ -1,3 +1,5 @@
+local MovingPhases = require("src.moving_phases")
+
 function carried_block_placement_warning (block_id,support)
 	local definition = stone[block_id]
 	if support or not definition or not definition.coby then
@@ -59,6 +61,12 @@ function digging_tool_selection (gather, selected_slot)
 	return selection
 end
 
+local moving_action_phase
+local moving_throw_phase
+local moving_climb_and_combat_phase
+local moving_walk_and_combat_phase
+local moving_digging_phase
+local moving_finalize_phase
 
 function moving ()
 
@@ -90,75 +98,11 @@ function moving ()
 	-- 			--return
 	-- 		end
 	-- end
-	-- speed
+	local step, slow = MovingPhases.prepare()
+	return moving_action_phase(step, slow)
+end
 
-	if pl.state~='ave' and pl.state~='stepup' and pl.state~='stepupb' and pl.state~='fell' and pl.state~='jump' and pl.state~='hang' and pl.state~='pullup' 
-		and pl.state~='buttscratch'
-		and pl.state~='dying'
-		and pl.state~='flex' then
-		pl.state = 'idle'
-	end
-
-
-	if pl.idlecnt>7 and pl.state=='idle' and pl.iscarry == nil then
-		pl.state = 'buttscratch'
-		pl.idlecnt = (-1)*love.math.random (5,10)
-	end
-
-
-	if pl.idlecnt>7 and pl.state=='idle' and pl.iscarry then
-		pl.state = 'flex'
-		pl.idlecnt = (-1)*love.math.random (5,10)
-	end
-
-	
-	
-	local slow = pl.slowed
-
-	--turbo
-	if (is_pressed('rshift') or is_pressed('lshift'))
-		and pl.stats.arms.pc>=33 then	
-			slow = slow + 1
-			pl.turbox = pl.x 
-	else
-		pl.turbox = nil
-	end
-
-	if slow<0 then slow=0.2 end
-	
-	if pl.stats.arms.pc<33 then 
-		pl.speedstat = 3
-	elseif pl.stats.arms.pc<66 then
-		pl.speedstat = 2
-	else
-		pl.speedstat = 1
-	end
-
-
-	pl.speed = pl.speeds[pl.speedstat]
-	pl.jumpx = pl.jumpxs[pl.speedstat] + pl.jumpxs[pl.speedstat]*((slow-1)/2)
-	pl.jumpy = pl.jumpys[pl.speedstat]
-
-	local step = pl.speed*dt*slow
-	if pl.iscarry and step>1 then
-		step = step * pl.walkcarry
-	end
-
-	-- collide
-	local points = {}
-	--table.insert (points, {x=pl.x+col.x,  y=pl.y+col.y,mode={up = true, down = true, left = true, right = true}}) --левый верхний
-	--table.insert (points, {x=pl.x+col.x+col.w,  y=pl.y+col.y,mode={up = true, down = true, left = true, right = true}}) -- правый верхний
-
-	table.insert (points, {x=pl.x+col.x/2,  y=pl.y+col.y,mode={up = true, down = true, left = true, right = true}}) --средний верхний
-
-	table.insert (points, {x=pl.x+col.x+col.w,  y=pl.y+col.y+col.h/2,mode={up = true, down = true,left = true, right = true}}) -- правый средний
-	table.insert (points, {x=pl.x+col.x,  y=pl.y+col.y+col.h/2,mode={up = true, down = true,left = true, right = true}}) -- левый средний
-	table.insert (points, {x=pl.x+col.x+col.w,  y=pl.y+col.y+col.h,mode={up = true, down = true,left = true, right = true}}) --правый нижний
-	table.insert (points, {x=pl.x+col.x,  y=pl.y+col.y+col.h,mode={up = true, down = true,left = true, right = true}}) -- левый нижний
-	
-	togo = tocollide (points)
-
-	
+function moving_action_phase(step, slow)
 	-- pick mob
 	if not NETWORK_CLIENT_PREDICTION
 		and is_pressed("space") and pl.digcount==0 then
@@ -313,6 +257,10 @@ function moving ()
 
 
 
+	return moving_throw_phase(step, slow)
+end
+
+function moving_throw_phase(step, slow)
 	-- throwing item
 	--and type(pl.invselect)=='number'
 	if not NETWORK_CLIENT_PREDICTION then
@@ -478,6 +426,10 @@ function moving ()
 
 
 
+	return moving_climb_and_combat_phase(step, slow)
+end
+
+function moving_climb_and_combat_phase(step, slow)
 	-- local climb = maptile (pl.xt, pl.yt, 'climb') or 0
 	-- local climb2 = maptile (pl.xt, pl.yt-1, 'climb') or 0
 	-- local climb_stand = maptile (pl.xt, pl.yt+1, 'climb') or 0
@@ -940,6 +892,12 @@ function moving ()
 		end
 
 
+		return moving_walk_and_combat_phase(step, cclimb, solid, r)
+	end
+	return moving_digging_phase(r)
+end
+
+function moving_walk_and_combat_phase(step, cclimb, solid, r)
 		local mul = 1
 		local gameplay_mouse_down = (ACTIVE_INPUT_STATE and is_pressed("mouse1"))
 			or (not ACTIVE_INPUT_STATE and love.mouse.isDown(1) and not game.gui_mouse_down)
@@ -1280,6 +1238,7 @@ function moving ()
 			game.attackcursor = nil
 			pl.anispeed = old_anis
 		end
+		return moving_digging_phase(r)
 
 
 	end
@@ -1290,6 +1249,7 @@ function moving ()
 
 
 
+function moving_digging_phase(r)
 	-- digging
 
 	if not NETWORK_CLIENT_PREDICTION
@@ -1613,6 +1573,10 @@ function moving ()
 
 
 
+	return moving_finalize_phase()
+end
+
+function moving_finalize_phase()
 	if is_pressed("d") and (pl.state=='jump' or pl.state=='fall') then
 		pl.flip = 1
 	end
@@ -1709,109 +1673,6 @@ function moving ()
 
 	--dump (allsounds)
 
-	if pl.state == "walk" and pl.iscarry then
-		pl.state = "walk_carry"
-	end
-
-
-	if pl.state == "jump" and pl.iscarry then
-		pl.state = "walk_carry"
-	end
-
-	if pl.state == "idle" and pl.iscarry then
-		pl.state = "idle_carry"
-	end
-
-	if pl.state == "jump" and pl.iscarry then
-		pl.state = "jump_carry"
-	end
-
-	if pl.state == "fall" and pl.iscarry then
-		pl.state = "fall_carry"
-	end
-
-
-	if pl.state == 'idle' then
-		game.idle = (game.idle or 0) + dt
-	else
-		game.idle = 0
-	end
-
-	if fishing and pl.state=='idle' then
-		pl.state = 'fishing'
-	end
-
-	if pl.state~='idle' and pl.state~='fishing' and fishing then
-		fishing = nil
-	end
-
-	--nausea
-	if pl.state=='pullup' and pl.buffs[17] and pl.animation.frame==1
-		and math.random (0,100)<5 then
-		pl.jumpleft = 0
-		pl.state = 'fall'
-	end
-
-	if pl.state=='dig' then
-		--pl.anispeed = pl.diganispeed
-	end
-
-
-
-	if pl.state=='idle' and mousetruemoved_last<1 then
-		if pl.x>mouse_x	then
-			pl.flip = -1
-			else
-			pl.flip = 1
-		end
-	end
-
-
-	if pl.state=='idle' and mousetruemoved_last<1 
-		and mouse_y<pl.y-50 then
-			pl.state = 'headup'
-	end
-
-	if pl.state=='idle' and mousetruemoved_last<1 
-		and mouse_y>pl.y+50 then
-			pl.state = 'headdown'
-	end
-
-
-	-- if pl.state~='dig' then
-	-- 	pl.digxt = nil
-	-- end
-
-
-	--love.timer.sleep(0.1)
-	--print (pl.anispeed.." "..pl.state)
-
-	coord_screen2true (pl)
-	col_add ('player',pl,pl.state,'player','player')
-
-
-	--turbo
-	if pl.turbox and pl.turbox ~= pl.x 
-		and pl.state ~= "fall"
-		and pl.state ~= "jump"
-		then
-			local r = math.abs (pl.turbox - pl.x)*0.05
-			stat_spend ('arms',r)
-	end
-
-	-- last non-falling
-	if pl.stats.body.hp>0 and togo.down==0 then
-		
-		pl.ltx = pl.tx
-		pl.lty = pl.ty
-
-
-	end
-
-	game.pass = nil
-
-	--pl.anispeed = 0.3
-
-
+	MovingPhases.finalize()
 end
 	
