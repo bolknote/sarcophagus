@@ -84,8 +84,8 @@ local network_sound_event_ticks = {}
 local network_event_id = 0
 local network_client_event_id = 0
 local network_client_event_received_id = 0
-local NETWORK_EVENT_QUEUE_LIMIT = 4096
-local network_event_queue_overflowed = false
+local NETWORK_EVENT_QUEUE_LIMIT = 1024
+local NETWORK_SOUND_EVENT_MAX_LAG = 1
 local network_pending_world_deltas = {}
 local network_pending_presentation_events = {}
 
@@ -191,7 +191,6 @@ end
 function multiplayer_reset_network_events(reset_sequence)
 	network_outgoing_events = {}
 	network_sound_event_ticks = {}
-	network_event_queue_overflowed = false
 	if reset_sequence then
 		network_event_id = 0
 		network_client_event_id = 0
@@ -204,8 +203,8 @@ end
 
 function multiplayer_queue_sound_event(name, sound_id, options, actor_id)
 	if not multiplayer or multiplayer.role ~= "host" or not multiplayer.session
-		or (multiplayer.session.state ~= MultiplayerSession.STATE.PLAYING
-			and multiplayer.session.state ~= MultiplayerSession.STATE.RECONNECT_GRACE) then
+		or multiplayer.session.state ~= MultiplayerSession.STATE.PLAYING
+		or multiplayer.resume_phase ~= nil then
 		return false
 	end
 	if NETWORK_SOUND_EVENT_APPLY then return false end
@@ -235,8 +234,9 @@ function multiplayer_queue_sound_event(name, sound_id, options, actor_id)
 	local event_key = table.concat({ actor_id or "world", name, tostring(sound_id) }, ":")
 	if network_sound_event_ticks[event_key] == tick then return true, "coalesced" end
 	if #network_outgoing_events >= NETWORK_EVENT_QUEUE_LIMIT then
-		network_event_queue_overflowed = true
-		return false, "network event queue overflow"
+		-- Sounds are presentation-only and short-lived. Dropping one under
+		-- backpressure is safer than reserving unbounded memory or killing play.
+		return false, "network event queue full"
 	end
 	network_sound_event_ticks[event_key] = tick
 
@@ -275,8 +275,7 @@ function multiplayer_queue_text_event(text, temporary, actor_id)
 	actor_id = actor_id or ACTIVE_ACTOR_ID
 	if actor_id ~= "host" and actor_id ~= "guest" then return false end
 	if #network_outgoing_events >= NETWORK_EVENT_QUEUE_LIMIT then
-		network_event_queue_overflowed = true
-		return false, "network event queue overflow"
+		return false, "network event queue full"
 	end
 
 	network_event_id = network_event_id + 1
@@ -300,9 +299,6 @@ function multiplayer_next_network_event()
 end
 
 function multiplayer_network_catchup_ready()
-	if network_event_queue_overflowed then
-		return false, "event_catchup_overflow"
-	end
 	if network_world_journal then return network_world_journal:ready() end
 	return true
 end
@@ -311,6 +307,12 @@ function multiplayer_apply_network_event(event)
 	if type(event) ~= "table"
 		or (event.kind ~= "sound" and event.kind ~= "text") then
 		return false, "invalid network event"
+	end
+	if event.replayed ~= nil and type(event.replayed) ~= "boolean" then
+		return false, "invalid network replay flag"
+	end
+	if event.kind ~= "sound" and event.replayed ~= nil then
+		return false, "invalid network replay event"
 	end
 	local event_id = event.event_id
 	if type(event_id) ~= "number" or event_id < 1
@@ -408,6 +410,18 @@ function multiplayer_apply_network_event(event)
 	if type(event.play) ~= "boolean" or type(event.kill) ~= "boolean" then
 		return false, "invalid network sound flags"
 	end
+	if event.replayed then
+		local buffered, buffer_status = buffer_for_timeline()
+		if buffered ~= nil then return buffered, buffer_status end
+		-- A sound that was outstanding when the transport died is no longer
+		-- temporally meaningful. Its tombstone still traverses the presentation
+		-- timeline so it cannot skip an earlier buffered text event.
+		network_client_event_received_id = math.max(
+			network_client_event_received_id, event_id
+		)
+		network_client_event_id = math.max(network_client_event_id, event_id)
+		return true, "expired"
+	end
 	local buffered, buffer_status = buffer_for_timeline()
 	if buffered ~= nil then return buffered, buffer_status end
 
@@ -448,6 +462,12 @@ function multiplayer_flush_network_events(render_time)
 	while network_pending_presentation_events[1]
 		and network_pending_presentation_events[1].sample_time <= render_time do
 		local event = table.remove(network_pending_presentation_events, 1)
+		if event.kind == "sound" and network_finite_number(event.sample_time)
+			and render_time - event.sample_time > NETWORK_SOUND_EVENT_MAX_LAG then
+			-- The interpolation clock can jump forward after reconnect. Never turn
+			-- that jump into a burst of audio that happened seconds ago.
+			event.replayed = true
+		end
 		NETWORK_EVENT_TIMELINE_APPLY = true
 		local ok, apply_error = multiplayer_apply_network_event(event)
 		NETWORK_EVENT_TIMELINE_APPLY = nil

@@ -71,10 +71,11 @@ function Protocol.sanitize_utf8(value, maximum)
 	return table.concat(output)
 end
 
--- Version 2 adds application-level acknowledgements and reconnect stream
--- synchronization. Keeping the old version number would let an older host
--- accept a newer client and then disconnect it on the first stream_ack.
-Protocol.VERSION = 2
+-- Version 3 makes reconnect synchronization a real barrier and distinguishes
+-- a stream resume from restarting an interrupted initial snapshot.  Version 2
+-- announced the client as synchronized before replaying its backlog, so the
+-- two wire semantics must never be mixed in one session.
+Protocol.VERSION = 3
 Protocol.SNAPSHOT_VERSION = 1
 Protocol.DEFAULT_GAMEPLAY_PORT = 22122
 Protocol.CHANNEL = {
@@ -90,7 +91,7 @@ Protocol.REQUIRED_CAPABILITIES = {
 	"snapshot-v1",
 	"input-v1",
 	"actions-v1",
-	"reliable-streams-v1",
+	"reliable-streams-v2",
 }
 
 local message_kinds = {
@@ -241,6 +242,13 @@ function Protocol.validate_hello(hello, expected)
 	end
 	if hello.reconnect_token ~= nil and not Identity.valid(hello.reconnect_token) then
 		return false, "invalid_reconnect_token"
+	end
+	if hello.reconnect_token ~= nil then
+		if hello.resume_mode ~= "stream" and hello.resume_mode ~= "snapshot" then
+			return false, "invalid_resume_mode"
+		end
+	elseif hello.resume_mode ~= nil then
+		return false, "invalid_resume_mode"
 	end
 	return true
 end

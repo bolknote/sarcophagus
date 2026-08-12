@@ -68,8 +68,17 @@ local function valid_welcome(payload)
 		or payload.actor_id ~= "guest" then
 		return false
 	end
-	if payload.resumed == true then return true end
+	if payload.resumed == true then
+		if payload.resume_mode ~= "stream" and payload.resume_mode ~= "snapshot" then
+			return false
+		end
+		if payload.resume_mode == "snapshot" then
+			return payload.snapshot_version == Protocol.SNAPSHOT_VERSION
+		end
+		return payload.snapshot_version == nil
+	end
 	return payload.resumed == nil
+		and payload.resume_mode == nil
 		and payload.snapshot_version == Protocol.SNAPSHOT_VERSION
 end
 
@@ -88,6 +97,11 @@ local function valid_stream_ack(payload)
 	return type(payload) == "table"
 		and valid_stream_position(payload.world_sequence)
 		and valid_stream_position(payload.event_id)
+end
+
+local function valid_resume_synced(payload)
+	return valid_stream_ack(payload)
+		and Protocol.validate_identity(payload.session_id)
 end
 
 local function valid_ping(payload)
@@ -131,15 +145,39 @@ function Runtime.new(options)
 		world_outbox = {},
 		world_acked_sequence = 0,
 		world_highest_sequence = 0,
+		world_outbox_bytes = 0,
 		max_world_outbox = math.max(32,
 			math.floor(tonumber(options.max_world_outbox) or 512)),
+		max_world_outbox_bytes = math.max(2 * 1024 * 1024,
+			math.floor(tonumber(options.max_world_outbox_bytes)
+				or (32 * 1024 * 1024))),
+		world_ack_progress_at = nil,
 		event_outbox = {},
 		event_acked_id = 0,
 		event_highest_id = 0,
+		event_outbox_bytes = 0,
 		max_event_outbox = math.max(64,
 			math.floor(tonumber(options.max_event_outbox) or 1024)),
+		max_event_outbox_bytes = math.max(1024 * 1024,
+			math.floor(tonumber(options.max_event_outbox_bytes)
+				or (8 * 1024 * 1024))),
+		event_ack_progress_at = nil,
+		stream_retry_interval = math.max(0.25,
+			tonumber(options.stream_retry_interval) or 2),
+		stream_ack_timeout = math.max(6,
+			tonumber(options.stream_ack_timeout) or 18),
 		received_world_sequence = 0,
 		received_event_id = 0,
+		world_reorder = {},
+		world_reorder_count = 0,
+		world_reorder_bytes = 0,
+		event_reorder = {},
+		event_reorder_count = 0,
+		event_reorder_bytes = 0,
+		stream_ack_dirty = false,
+		stream_ack_interval = math.max(0.01,
+			tonumber(options.stream_ack_interval) or 0.05),
+		next_stream_ack_at = nil,
 		role = "offline",
 		transport = nil,
 		session = nil,
@@ -150,6 +188,7 @@ function Runtime.new(options)
 		client_state = "offline",
 		client_hello = nil,
 		client_welcome = nil,
+		client_resume_mode = nil,
 		assembler = nil,
 		early_snapshot_chunks = {},
 		early_snapshot_bytes = 0,
@@ -158,6 +197,7 @@ function Runtime.new(options)
 		last_error = nil,
 		last_event = nil,
 		approval_request = nil,
+		snapshot_transfer = nil,
 		discovery = nil,
 		browser = nil,
 		next_discovery_refresh = 0,
@@ -196,6 +236,8 @@ function Runtime.new(options)
 		resume_deadline = nil,
 		reconnect_deadline = nil,
 		next_reconnect_attempt = nil,
+		max_poll_events = math.max(1,
+			math.floor(tonumber(options.max_poll_events) or 128)),
 	}, Runtime)
 end
 
@@ -208,20 +250,39 @@ function Runtime:_reset_outboxes()
 	self.world_outbox = {}
 	self.world_acked_sequence = 0
 	self.world_highest_sequence = 0
+	self.world_outbox_bytes = 0
+	self.world_ack_progress_at = nil
 	self.event_outbox = {}
 	self.event_acked_id = 0
 	self.event_highest_id = 0
+	self.event_outbox_bytes = 0
+	self.event_ack_progress_at = nil
+end
+
+function Runtime:_clear_reorder_buffers()
+	self.world_reorder = {}
+	self.world_reorder_count = 0
+	self.world_reorder_bytes = 0
+	self.event_reorder = {}
+	self.event_reorder_count = 0
+	self.event_reorder_bytes = 0
 end
 
 function Runtime:_reset_received_streams()
 	self.received_world_sequence = 0
 	self.received_event_id = 0
+	self:_clear_reorder_buffers()
+	self.stream_ack_dirty = false
+	self.next_stream_ack_at = nil
 end
 
 local function discard_acknowledged(outbox, field, acknowledged)
+	local discarded_bytes = 0
 	while outbox[1] and outbox[1][field] <= acknowledged do
-		table.remove(outbox, 1)
+		local item = table.remove(outbox, 1)
+		discarded_bytes = discarded_bytes + (tonumber(item.bytes) or 0)
 	end
+	return discarded_bytes
 end
 
 function Runtime:_acknowledge_streams(payload)
@@ -232,18 +293,42 @@ function Runtime:_acknowledge_streams(payload)
 	end
 	if payload.world_sequence > self.world_acked_sequence then
 		self.world_acked_sequence = payload.world_sequence
-		discard_acknowledged(self.world_outbox, "sequence", payload.world_sequence)
+		self.world_outbox_bytes = math.max(0, self.world_outbox_bytes
+			- discard_acknowledged(
+				self.world_outbox, "sequence", payload.world_sequence
+			))
+		self.world_ack_progress_at = #self.world_outbox > 0 and clock() or nil
 	end
 	if payload.event_id > self.event_acked_id then
 		self.event_acked_id = payload.event_id
-		discard_acknowledged(self.event_outbox, "event_id", payload.event_id)
+		self.event_outbox_bytes = math.max(0, self.event_outbox_bytes
+			- discard_acknowledged(self.event_outbox, "event_id", payload.event_id))
+		self.event_ack_progress_at = #self.event_outbox > 0 and clock() or nil
 	end
 	return true
 end
 
 function Runtime:_mark_outboxes_for_replay()
-	for _, item in ipairs(self.world_outbox) do item.sent = false end
-	for _, item in ipairs(self.event_outbox) do item.sent = false end
+	for _, item in ipairs(self.world_outbox) do
+		item.sent = false
+		item.sent_at = nil
+	end
+	for _, item in ipairs(self.event_outbox) do
+		item.sent = false
+		item.sent_at = nil
+		if item.event and item.event.kind == "sound" and not item.event.replayed then
+			item.event.replayed = true
+			local encoded, packet = pcall(Protocol.encode, "event", item.event)
+			if not encoded then return false, tostring(packet) end
+			self.event_outbox_bytes = self.event_outbox_bytes
+				- (tonumber(item.bytes) or 0) + #packet
+			item.packet = packet
+			item.bytes = #packet
+		end
+	end
+	self.world_ack_progress_at = #self.world_outbox > 0 and clock() or nil
+	self.event_ack_progress_at = #self.event_outbox > 0 and clock() or nil
+	return true
 end
 
 function Runtime:_neutralize_guest_input()
@@ -259,16 +344,138 @@ function Runtime:_neutralize_guest_input()
 	input.aim = {}
 end
 
-function Runtime:_send_stream_ack()
+function Runtime:_mark_stream_ack_dirty()
+	self.stream_ack_dirty = true
+	self.next_stream_ack_at = self.next_stream_ack_at
+		or (clock() + self.stream_ack_interval)
+end
+
+function Runtime:_flush_stream_ack(force)
 	if self.role ~= "client" or not self.transport or not self.peer then
 		return false, "peer is not connected"
+	end
+	if not self.stream_ack_dirty and not force then return true, "clean" end
+	if not force and clock() < (self.next_stream_ack_at or 0) then
+		return true, "deferred"
 	end
 	local sent, send_error = self.transport:send(self.peer, "stream_ack", {
 		world_sequence = self.received_world_sequence,
 		event_id = self.received_event_id,
 	}, Protocol.CHANNEL.CONTROL, true)
-	if not sent then self.last_error = tostring(send_error) end
+	if sent then
+		self.stream_ack_dirty = false
+		self.next_stream_ack_at = nil
+	else
+		self.last_error = tostring(send_error)
+		self.stream_ack_dirty = true
+		self.next_stream_ack_at = clock() + self.stream_ack_interval
+	end
 	return sent, send_error
+end
+
+function Runtime:_buffer_world_packet(sequence, packet)
+	if self.world_reorder[sequence] then return true, "duplicate" end
+	local bytes = type(packet) == "string" and #packet or 0
+	local maximum_bytes = self.max_world_outbox_bytes
+		+ Replication.MAX_STORED_BYTES + #Replication.WORLD_MAGIC
+	if sequence - self.received_world_sequence > self.max_world_outbox
+		or self.world_reorder_count >= self.max_world_outbox
+		or self.world_reorder_bytes + bytes > maximum_bytes then
+		return false, "world_reorder_buffer_overflow"
+	end
+	self.world_reorder[sequence] = { packet = packet, bytes = bytes }
+	self.world_reorder_count = self.world_reorder_count + 1
+	self.world_reorder_bytes = self.world_reorder_bytes + bytes
+	return true, "buffered"
+end
+
+function Runtime:_apply_world_payload(payload)
+	if type(self.world_delta_applier) ~= "function" then
+		return false, "replication applier is not configured"
+	end
+	local called, accepted, apply_error = pcall(self.world_delta_applier, payload)
+	if not called or accepted == false then
+		return false, not called and accepted
+			or apply_error or "replicated state was rejected"
+	end
+	self.received_world_sequence = payload.sequence
+	return true
+end
+
+function Runtime:_drain_world_reorder()
+	while true do
+		local sequence = self.received_world_sequence + 1
+		local item = self.world_reorder[sequence]
+		if not item then return true end
+		self.world_reorder[sequence] = nil
+		self.world_reorder_count = math.max(0, self.world_reorder_count - 1)
+		self.world_reorder_bytes = math.max(0,
+			self.world_reorder_bytes - (tonumber(item.bytes) or 0))
+		local payload, kind = Replication.decode(item.packet)
+		if not payload then return false, kind end
+		if kind ~= "world" or payload.sequence ~= sequence then
+			return false, "invalid buffered world sequence"
+		end
+		local applied, apply_error = self:_apply_world_payload(payload)
+		if not applied then return false, apply_error end
+	end
+end
+
+function Runtime:_buffer_event(event, encoded_bytes)
+	local event_id = event.event_id
+	if self.event_reorder[event_id] then return true, "duplicate" end
+	local bytes = math.max(0, math.floor(tonumber(encoded_bytes)
+		or Protocol.MAX_MESSAGE_BYTES))
+	local maximum_bytes = self.max_event_outbox_bytes + Protocol.MAX_MESSAGE_BYTES
+	if event_id - self.received_event_id > self.max_event_outbox
+		or self.event_reorder_count >= self.max_event_outbox
+		or self.event_reorder_bytes + bytes > maximum_bytes then
+		return false, "event_reorder_buffer_overflow"
+	end
+	self.event_reorder[event_id] = { event = event, bytes = bytes }
+	self.event_reorder_count = self.event_reorder_count + 1
+	self.event_reorder_bytes = self.event_reorder_bytes + bytes
+	return true, "buffered"
+end
+
+function Runtime:_apply_event_payload(event)
+	if type(self.event_handler) ~= "function" then
+		return false, "network event handler is not configured"
+	end
+	local called, accepted, event_error = pcall(self.event_handler, event)
+	if not called or accepted == false then
+		return false, not called and accepted
+			or event_error or "network event was rejected"
+	end
+	self.received_event_id = event.event_id
+	return true
+end
+
+function Runtime:_drain_event_reorder()
+	while true do
+		local event_id = self.received_event_id + 1
+		local item = self.event_reorder[event_id]
+		if not item then return true end
+		self.event_reorder[event_id] = nil
+		self.event_reorder_count = math.max(0, self.event_reorder_count - 1)
+		self.event_reorder_bytes = math.max(0,
+			self.event_reorder_bytes - (tonumber(item.bytes) or 0))
+		if type(item.event) ~= "table" or item.event.event_id ~= event_id then
+			return false, "invalid buffered event sequence"
+		end
+		local applied, apply_error = self:_apply_event_payload(item.event)
+		if not applied then return false, apply_error end
+	end
+end
+
+function Runtime:_world_outbox_has_capacity()
+	return #self.world_outbox < self.max_world_outbox
+		and self.world_outbox_bytes < self.max_world_outbox_bytes
+end
+
+function Runtime:_event_outbox_has_capacity()
+	return #self.event_outbox < self.max_event_outbox
+		and self.event_outbox_bytes < self.max_event_outbox_bytes
 end
 
 function Runtime:_queue_world_delta(delta)
@@ -277,33 +484,40 @@ function Runtime:_queue_world_delta(delta)
 		or delta.sequence ~= self.world_highest_sequence + 1 then
 		return false, "invalid host world sequence"
 	end
-	if #self.world_outbox >= self.max_world_outbox then
+	if not self:_world_outbox_has_capacity() then
 		return false, "world acknowledgement backlog overflow"
 	end
+	local encoded, packet = pcall(Replication.encode_world, delta)
+	if not encoded then return false, tostring(packet) end
+	local was_empty = #self.world_outbox == 0
 	self.world_highest_sequence = delta.sequence
 	self.world_outbox[#self.world_outbox + 1] = {
 		sequence = delta.sequence,
-		delta = delta,
-		packet = nil,
+		packet = packet,
+		bytes = #packet,
 		sent = false,
+		sent_at = nil,
+		attempts = 0,
 	}
+	self.world_outbox_bytes = self.world_outbox_bytes + #packet
+	if was_empty then self.world_ack_progress_at = clock() end
 	return true
 end
 
 function Runtime:_send_world_outbox(limit)
 	local sent_count = 0
+	local current = clock()
 	for _, item in ipairs(self.world_outbox) do
-		if not item.sent then
-			if not item.packet then
-				local built, packet = pcall(Replication.encode_world, item.delta)
-				if not built then return false, tostring(packet), sent_count end
-				item.packet = packet
-			end
+		local retry_due = item.sent and (not item.sent_at
+			or current - item.sent_at >= self.stream_retry_interval)
+		if not item.sent or retry_due then
 			local sent, send_error = self.transport:send_raw(
 				self.peer, item.packet, Protocol.CHANNEL.WORLD, true
 			)
 			if not sent then return false, tostring(send_error), sent_count end
 			item.sent = true
+			item.sent_at = current
+			item.attempts = (tonumber(item.attempts) or 0) + 1
 			sent_count = sent_count + 1
 			if sent_count >= limit then break end
 		end
@@ -316,36 +530,171 @@ function Runtime:_queue_event(event)
 		or event.event_id ~= self.event_highest_id + 1 then
 		return false, "invalid host event sequence"
 	end
-	if #self.event_outbox >= self.max_event_outbox then
+	if not self:_event_outbox_has_capacity() then
 		return false, "event acknowledgement backlog overflow"
 	end
+	local encoded, packet = pcall(Protocol.encode, "event", event)
+	if not encoded then return false, tostring(packet) end
+	local was_empty = #self.event_outbox == 0
 	self.event_highest_id = event.event_id
 	self.event_outbox[#self.event_outbox + 1] = {
 		event_id = event.event_id,
 		event = event,
+		packet = packet,
+		bytes = #packet,
 		sent = false,
+		sent_at = nil,
+		attempts = 0,
 	}
+	self.event_outbox_bytes = self.event_outbox_bytes + #packet
+	if was_empty then self.event_ack_progress_at = clock() end
 	return true
 end
 
 function Runtime:_send_event_outbox(limit)
 	local sent_count = 0
+	local current = clock()
 	for _, item in ipairs(self.event_outbox) do
-		if not item.sent then
-			local sent, send_error = self.transport:send(
+		local retry_due = item.sent and (not item.sent_at
+			or current - item.sent_at >= self.stream_retry_interval)
+		if not item.sent or retry_due then
+			local sent, send_error = self.transport:send_raw(
 				self.peer,
-				"event",
-				item.event,
+				item.packet,
 				Protocol.CHANNEL.WORLD,
 				true
 			)
 			if not sent then return false, tostring(send_error), sent_count end
 			item.sent = true
+			item.sent_at = current
+			item.attempts = (tonumber(item.attempts) or 0) + 1
 			sent_count = sent_count + 1
 			if sent_count >= limit then break end
 		end
 	end
 	return true, nil, sent_count
+end
+
+local function outbox_has_unsent(outbox)
+	for _, item in ipairs(outbox) do
+		if not item.sent then return true end
+	end
+	return false
+end
+
+function Runtime:_drain_world_stream(limit)
+	limit = math.max(1, math.floor(tonumber(limit) or 1))
+	local sent, send_error, sent_count = self:_send_world_outbox(limit)
+	if not sent then return false, false, send_error, false end
+	while sent_count < limit do
+		if not self:_world_outbox_has_capacity() then
+			return true, false
+		end
+		if type(self.world_delta_provider) ~= "function" then
+			return true, not outbox_has_unsent(self.world_outbox)
+		end
+		local provided, delta = pcall(self.world_delta_provider, self.session)
+		if not provided then return false, false, tostring(delta), true end
+		if delta == nil then
+			return true, not outbox_has_unsent(self.world_outbox)
+		end
+		local queued, queue_error = self:_queue_world_delta(delta)
+		if not queued then return false, false, tostring(queue_error), true end
+		sent, send_error = self:_send_world_outbox(1)
+		if not sent then return false, false, send_error, false end
+		sent_count = sent_count + 1
+	end
+	return true, false
+end
+
+function Runtime:_drain_event_stream(limit)
+	limit = math.max(1, math.floor(tonumber(limit) or 1))
+	local sent, send_error, sent_count = self:_send_event_outbox(limit)
+	if not sent then return false, false, send_error, false end
+	while sent_count < limit do
+		if not self:_event_outbox_has_capacity() then
+			return true, false
+		end
+		if type(self.event_provider) ~= "function" then
+			return true, not outbox_has_unsent(self.event_outbox)
+		end
+		local provided, event = pcall(self.event_provider, self.session)
+		if not provided then return false, false, tostring(event), true end
+		if event == nil then
+			return true, not outbox_has_unsent(self.event_outbox)
+		end
+		if type(event) ~= "table" then
+			return false, false, "invalid network event", true
+		end
+		if self.resume_phase == "sending_sync"
+			and event.kind == "sound" and not event.replayed then
+			-- This event was still in the producer queue when the connection died,
+			-- so it never reached the outbox pass that marks stale audio.
+			event.replayed = true
+		end
+		local queued, queue_error = self:_queue_event(event)
+		if not queued then return false, false, tostring(queue_error), true end
+		sent, send_error = self:_send_event_outbox(1)
+		if not sent then return false, false, send_error, false end
+		sent_count = sent_count + 1
+	end
+	return true, false
+end
+
+function Runtime:_terminate_host_stream(reason)
+	reason = tostring(reason or "network_stream_failed")
+	self.last_error = reason
+	self.snapshot_transfer = nil
+	if self.session then self.session:disconnect(reason, true) end
+	if self.peer then
+		self:_send_peer_and_close("shutdown", { reason = reason })
+	end
+	return false, reason
+end
+
+function Runtime:_advance_resume_sync()
+	if self.role ~= "host" or self.resume_phase ~= "sending_sync"
+		or not self.peer or not self.session then return false end
+	local catchup_ready, catchup_error = self:_catchup_status()
+	if not catchup_ready then return self:_terminate_host_stream(catchup_error) end
+
+	local world_ok, world_complete, world_error, world_fatal =
+		self:_drain_world_stream(32)
+	if not world_ok then
+		if world_fatal then return self:_terminate_host_stream(world_error) end
+		self.last_error = tostring(world_error)
+		return false, world_error
+	end
+	local event_ok, event_complete, event_error, event_fatal =
+		self:_drain_event_stream(64)
+	if not event_ok then
+		if event_fatal then return self:_terminate_host_stream(event_error) end
+		self.last_error = tostring(event_error)
+		return false, event_error
+	end
+	if world_complete and event_complete
+		and #self.world_outbox == 0 and #self.event_outbox == 0 then
+		return self:_complete_resume_sync()
+	end
+	return true, "replaying"
+end
+
+function Runtime:_check_stream_health()
+	if self.role ~= "host" or not self.peer or not self.session
+		or self.session.state ~= Session.STATE.PLAYING
+		or self.resume_phase ~= nil then return true end
+	local current = clock()
+	if #self.world_outbox > 0 and self.world_ack_progress_at
+		and current - self.world_ack_progress_at >= self.stream_ack_timeout then
+		self:_handle_transport_loss("world_stream_ack_timeout", self.peer)
+		return false, "world_stream_ack_timeout"
+	end
+	if #self.event_outbox > 0 and self.event_ack_progress_at
+		and current - self.event_ack_progress_at >= self.stream_ack_timeout then
+		self:_handle_transport_loss("event_stream_ack_timeout", self.peer)
+		return false, "event_stream_ack_timeout"
+	end
+	return true
 end
 
 function Runtime:_complete_resume_sync()
@@ -354,9 +703,14 @@ function Runtime:_complete_resume_sync()
 	local sent, send_error = self.transport:send(
 		self.peer,
 		"resume_synced",
-		{ session_id = self.session.session_id },
-		-- This confirmation and all replayed deltas share a reliable channel,
-		-- which makes their ordering explicit across an ENet reconnect.
+		{
+			session_id = self.session.session_id,
+			world_sequence = self.world_highest_sequence,
+			event_id = self.event_highest_id,
+		},
+		-- Application ACKs prove that the complete backlog was already applied.
+		-- Keeping the barrier on the same reliable channel also orders it after
+		-- any delayed duplicate from the replay.
 		Protocol.CHANNEL.WORLD,
 		true
 	)
@@ -378,7 +732,8 @@ function Runtime:_set_client_state(state)
 		timeout = self.connect_timeout
 	elseif state == "awaiting_approval" then
 		timeout = self.approval_timeout
-	elseif state == "receiving_snapshot" or state == "catching_up" then
+	elseif state == "receiving_snapshot" or state == "catching_up"
+		or state == "resuming_sync" then
 		timeout = self.snapshot_timeout
 	end
 	self.client_deadline = timeout and (clock() + timeout) or nil
@@ -431,6 +786,22 @@ function Runtime:_close_lost_peer(peer)
 	if target == self.peer then self.peer = nil end
 end
 
+function Runtime:_client_resume_mode_for_state()
+	if not self.client_welcome and (self.client_state == "connecting"
+		or self.client_state == "awaiting_approval") then
+		return "initial"
+	end
+	if self.client_state == "receiving_snapshot" then return "snapshot" end
+	if self.client_state == "playing" or self.client_state == "catching_up"
+		or self.client_state == "resuming_sync" then
+		return "stream"
+	end
+	if self.client_state == "reconnecting" or self.client_state == "resuming" then
+		return self.client_resume_mode
+	end
+	return nil
+end
+
 function Runtime:_handle_transport_loss(reason, peer)
 	reason = tostring(reason or "transport_disconnect")
 	local target = peer or self.peer
@@ -441,24 +812,39 @@ function Runtime:_handle_transport_loss(reason, peer)
 	self.host_hello_deadline = nil
 	self.resume_phase = nil
 	self.resume_deadline = nil
+	self.snapshot_transfer = nil
 	self:_close_lost_peer(target)
 	if self.role == "host" then
 		self.approval_request = nil
 		self:_neutralize_guest_input()
 		if self.session then self.session:disconnect(reason, false) end
-		self:_mark_outboxes_for_replay()
+		local replayed, replay_error = self:_mark_outboxes_for_replay()
+		if not replayed then return self:_terminate_host_stream(replay_error) end
 		return true
 	end
-	local reconnectable = self.client_welcome
-		and self.client_welcome.reconnect_token
-		and (self.client_state == "playing"
-			or self.client_state == "catching_up"
-			or self.client_state == "resuming"
-			or self.client_state == "resuming_sync"
-			or self.client_state == "reconnecting")
+	-- Out-of-order packets belong to the dead ENet peer. The host retains every
+	-- item above the cumulative acknowledgement and will replay them in order.
+	self:_clear_reorder_buffers()
+	local resume_mode = self:_client_resume_mode_for_state()
+	local reconnectable = resume_mode == "initial"
+		or (resume_mode and self.client_welcome
+			and self.client_welcome.reconnect_token)
 	if reconnectable then
+		self.client_resume_mode = resume_mode
+		if resume_mode == "snapshot" or resume_mode == "initial" then
+			-- Chunks are bound to one captured snapshot. Never combine a partial
+			-- transfer from the dead peer with the freshly captured retry. Chunks
+			-- may precede WELCOME because snapshot and control use separate ENet
+			-- channels, so this also applies to a pre-WELCOME initial retry.
+			self.assembler = nil
+			self.early_snapshot_chunks = {}
+			self.early_snapshot_bytes = 0
+			self.snapshot_done_tick = nil
+			self.snapshot_ready_tick = nil
+		end
 		self:_set_client_state("reconnecting")
-		self.reconnect_deadline = clock() + self.reconnect_timeout
+		self.reconnect_deadline = self.reconnect_deadline
+			or (clock() + self.reconnect_timeout)
 		self.next_reconnect_attempt = clock() + 0.1
 	else
 		self:_set_client_state("disconnected")
@@ -541,6 +927,7 @@ function Runtime:start_host(options)
 	self.host_hello_deadline = nil
 	self.resume_phase = nil
 	self.resume_deadline = nil
+	self.snapshot_transfer = nil
 	self.last_peer_activity = nil
 	self.next_heartbeat = nil
 	self.session = Session.new({
@@ -640,11 +1027,12 @@ function Runtime:connect(options)
 			"snapshot-v1",
 			"input-v1",
 			"actions-v1",
-			"reliable-streams-v1",
+			"reliable-streams-v2",
 		},
 		client_nonce = Identity.token("client"),
 	})
 	self.client_welcome = nil
+	self.client_resume_mode = nil
 	self.pending_actions = {}
 	self.pending_action_order = {}
 	self.action_retry_accumulator = 0
@@ -677,6 +1065,7 @@ function Runtime:reject_guest(reason)
 		reason = reason or "rejected_by_host",
 	})
 	self.approval_request = nil
+	self.snapshot_transfer = nil
 	return closed, close_error
 end
 
@@ -687,56 +1076,45 @@ function Runtime:kick_guest(reason)
 	reason = reason or "kicked_by_host"
 	local dropped, drop_error = self.session:disconnect(reason, true)
 	if not dropped then return false, drop_error end
+	self.snapshot_transfer = nil
 	return self:_send_peer_and_close("shutdown", { reason = reason })
 end
 
-function Runtime:approve_guest()
-	if self.role ~= "host" or not self.session or not self.peer then
-		return false, "no pending guest"
-	end
+function Runtime:_capture_snapshot_transfer()
 	if type(self.state_provider) ~= "function" then
-		return false, "snapshot state provider is not configured"
+		return nil, "snapshot state provider is not configured"
 	end
-	local spawn = type(self.spawn_provider) == "function" and self.spawn_provider() or {}
-	local approved, welcome = self.session:approve(self.registry.host, spawn)
-	if not approved then return false, welcome end
-
-	local built, stored, meta, chunks = pcall(function()
+	local built, meta, chunks = pcall(function()
 		local state = self.state_provider(self.session)
 		local snapshot = Snapshot.capture(state)
 		local payload, description = Snapshot.serialize(snapshot)
 		local packets, chunked = Snapshot.chunks(payload, description)
-		return payload, chunked, packets
+		return chunked, packets
 	end)
 	if not built then
-		self.last_error = tostring(stored)
-		self.session:disconnect("snapshot_failed", true)
-		self:_send_peer_and_close("reject", { reason = "snapshot_failed" })
-		return false, self.last_error
+		return nil, tostring(meta)
 	end
 	if type(self.world_delta_reset) == "function" then
 		local reset, reset_error = pcall(self.world_delta_reset, meta.tick)
 		if not reset or reset_error == false then
-			self.last_error = tostring(not reset and reset_error
+			return nil, tostring(not reset and reset_error
 				or "could not reset snapshot journal")
-			self.session:disconnect("snapshot_journal_failed", true)
-			self:_send_peer_and_close("reject", {
-				reason = "snapshot_journal_failed",
-			})
-			return false, self.last_error
 		end
 	end
 	local events_reset, event_reset_error = self:_reset_events(true)
 	if not events_reset then
-		self.last_error = event_reset_error
-		self.session:disconnect("snapshot_event_reset_failed", true)
-		self:_send_peer_and_close("reject", {
-			reason = "snapshot_event_reset_failed",
-		})
-		return false, self.last_error
+		return nil, event_reset_error
 	end
 	self:_reset_outboxes()
+	self.snapshot_transfer = { meta = meta, chunks = chunks }
+	return self.snapshot_transfer
+end
 
+function Runtime:_send_snapshot_transfer(welcome)
+	local transfer = self.snapshot_transfer
+	if not transfer or not transfer.meta or type(transfer.chunks) ~= "table" then
+		return false, "snapshot_resume_unavailable"
+	end
 	local sent, send_error = self.transport:send(
 		self.peer,
 		"welcome",
@@ -748,13 +1126,13 @@ function Runtime:approve_guest()
 		sent, send_error = self.transport:send(
 			self.peer,
 			"snapshot_meta",
-			meta,
+			transfer.meta,
 			Protocol.CHANNEL.CONTROL,
 			true
 		)
 	end
 	if sent then
-		for _, packet in ipairs(chunks) do
+		for _, packet in ipairs(transfer.chunks) do
 			sent, send_error = self.transport:send_raw(
 				self.peer,
 				packet,
@@ -768,24 +1146,51 @@ function Runtime:approve_guest()
 		sent, send_error = self.transport:send(
 			self.peer,
 			"snapshot_done",
-			{ tick = meta.tick },
+			{ tick = transfer.meta.tick },
 			Protocol.CHANNEL.CONTROL,
 			true
 		)
 	end
 	if not sent then
-		self.last_error = tostring(send_error)
-		self.session:disconnect("snapshot_send_failed", true)
-		self:_send_peer_and_close("reject", { reason = "snapshot_send_failed" })
-		return false, self.last_error
+		return false, tostring(send_error)
 	end
 	self.transport:flush()
-	local snapshot_sent, snapshot_error = self.session:snapshot_sent(meta.tick)
+	local snapshot_sent, snapshot_error = self.session:snapshot_sent(transfer.meta.tick)
 	if not snapshot_sent then
-		self.last_error = tostring(snapshot_error)
-		self.session:disconnect("snapshot_state_failed", true)
-		self:_send_peer_and_close("reject", { reason = "snapshot_state_failed" })
+		return false, tostring(snapshot_error)
+	end
+	return true
+end
+
+function Runtime:approve_guest()
+	if self.role ~= "host" or not self.session or not self.peer then
+		return false, "no pending guest"
+	end
+	if type(self.state_provider) ~= "function" then
+		return false, "snapshot state provider is not configured"
+	end
+	local spawn = type(self.spawn_provider) == "function" and self.spawn_provider() or {}
+	local approved, welcome = self.session:approve(self.registry.host, spawn)
+	if not approved then return false, welcome end
+
+	local transfer, transfer_error = self:_capture_snapshot_transfer()
+	if not transfer then
+		self.last_error = tostring(transfer_error)
+		self.session:disconnect("snapshot_failed", true)
+		self.snapshot_transfer = nil
+		self:_send_peer_and_close("reject", { reason = "snapshot_failed" })
 		return false, self.last_error
+	end
+	local sent, send_error = self:_send_snapshot_transfer(welcome)
+	if not sent then
+		self.last_error = tostring(send_error)
+		self.approval_request = nil
+		local recovering, recovery_error = self:_handle_transport_loss(
+			"snapshot_send_failed: " .. self.last_error,
+			self.peer
+		)
+		if not recovering then return false, recovery_error end
+		return true, "reconnecting"
 	end
 	self.approval_request = nil
 	return true
@@ -816,7 +1221,8 @@ function Runtime:_host_message(event, message)
 		return self:_fail_host_peer("unexpected guest message", event.peer)
 	end
 	if self.resume_phase and message.kind ~= "ping" and message.kind ~= "pong"
-		and message.kind ~= "resume_ready" and message.kind ~= "disconnect" then
+		and message.kind ~= "resume_ready" and message.kind ~= "stream_ack"
+		and message.kind ~= "disconnect" then
 		return self:_fail_host_peer("guest message received during resume", event.peer)
 	end
 	if message.kind == "ping" or message.kind == "pong" then
@@ -837,47 +1243,147 @@ function Runtime:_host_message(event, message)
 	end
 	if message.kind == "hello" then
 		self.host_hello_deadline = nil
-		if self.session.state == Session.STATE.RECONNECT_GRACE
-			and message.payload.reconnect_token then
+		if message.payload.reconnect_token then
+			if self.session.state ~= Session.STATE.RECONNECT_GRACE then
+				self:_send_peer_and_close("reject", {
+					reason = "resume_expired",
+				}, event.peer)
+				return
+			end
 			local compatible, compatibility_error = Protocol.validate_hello(
 				message.payload,
 				{ game_version = self.game_version, content_hash = self.content_hash }
 			)
-			local resumed, resume_error = false, compatibility_error
-			local invalid_catchup = false
-			if compatible then
-				local catchup_ready, catchup_error = self:_catchup_status()
-				if catchup_ready then
-					resumed, resume_error = self.session:resume(
-						message.payload.reconnect_token
-					)
-				else
-					resume_error = catchup_error
-					invalid_catchup = true
-					self.last_error = catchup_error
-				end
+			if not compatible then
+				self:_send_peer_and_close("reject", {
+					reason = compatibility_error or "resume_failed",
+				}, event.peer)
+				return
 			end
-			if resumed then
-				self.peer = event.peer
-				self.resume_phase = "waiting_ready"
-				self.resume_deadline = clock() + self.connect_timeout
-				local sent, send_error = self.transport:send(event.peer, "welcome", {
+
+			self.peer = event.peer
+			if message.payload.resume_mode == "snapshot" then
+				local resumed, resume_error = self.session:resume_snapshot(
+					message.payload.reconnect_token
+				)
+				if not resumed then
+					self:_send_peer_and_close("reject", {
+						reason = resume_error or "resume_failed",
+					}, event.peer)
+					return
+				end
+				local transfer, transfer_error = self:_capture_snapshot_transfer()
+				if not transfer then
+					self.last_error = tostring(transfer_error)
+					self.session:disconnect("snapshot_failed", true)
+					self.snapshot_transfer = nil
+					self:_send_peer_and_close("reject", {
+						reason = "snapshot_failed",
+					}, event.peer)
+					return
+				end
+				local sent, send_error = self:_send_snapshot_transfer({
 					resumed = true,
+					resume_mode = "snapshot",
 					session_id = self.session.session_id,
 					reconnect_token = self.session.reconnect_token,
 					actor_id = self.session.guest.actor_id,
-				}, Protocol.CHANNEL.CONTROL, true)
+					snapshot_version = Protocol.SNAPSHOT_VERSION,
+				})
 				if not sent then
-					self:_handle_transport_loss("resume_send_failed: "
+					self:_handle_transport_loss("snapshot_resume_send_failed: "
 						.. tostring(send_error), event.peer)
 				end
-			else
-				if invalid_catchup then
-					self.session:disconnect(resume_error, true)
-				end
+				return
+			end
+
+			local catchup_ready, catchup_error = self:_catchup_status()
+			if not catchup_ready then
+				self.last_error = catchup_error
+				self.session:disconnect(catchup_error, true)
+				self.snapshot_transfer = nil
+				self:_send_peer_and_close("reject", {
+					reason = catchup_error,
+				}, event.peer)
+				return
+			end
+			local resumed, resume_error = self.session:resume(
+				message.payload.reconnect_token
+			)
+			if not resumed then
 				self:_send_peer_and_close("reject", {
 					reason = resume_error or "resume_failed",
 				}, event.peer)
+				return
+			end
+			self.resume_phase = "waiting_ready"
+			self.resume_deadline = clock() + self.snapshot_timeout
+			local sent, send_error = self.transport:send(event.peer, "welcome", {
+				resumed = true,
+				resume_mode = "stream",
+				session_id = self.session.session_id,
+				reconnect_token = self.session.reconnect_token,
+				actor_id = self.session.guest.actor_id,
+			}, Protocol.CHANNEL.CONTROL, true)
+			if sent then
+				self.transport:flush()
+			else
+				self:_handle_transport_loss("resume_send_failed: "
+					.. tostring(send_error), event.peer)
+			end
+			return
+		end
+		if self.session.state == Session.STATE.RECONNECT_GRACE then
+			local compatible, compatibility_error = Protocol.validate_hello(
+				message.payload,
+				{ game_version = self.game_version, content_hash = self.content_hash }
+			)
+			if not compatible then
+				self:_send_peer_and_close("reject", {
+					reason = compatibility_error,
+				}, event.peer)
+				return
+			end
+			if message.payload.client_nonce ~= self.session.client_nonce then
+				self:_send_peer_and_close("reject", {
+					reason = "session_not_joinable",
+				}, event.peer)
+				return
+			end
+
+			-- The original connection can die after the host approved it but before
+			-- WELCOME delivered the reconnect token. The nonce from that first HELLO
+			-- is the only secret the client has in this narrow window; reuse it to
+			-- restart a fresh snapshot without replacing the reserved guest actor.
+			self.peer = event.peer
+			local resumed, resume_error = self.session:resume_snapshot(
+				self.session.reconnect_token
+			)
+			if not resumed then
+				self:_send_peer_and_close("reject", {
+					reason = resume_error or "resume_failed",
+				}, event.peer)
+				return
+			end
+			local transfer, transfer_error = self:_capture_snapshot_transfer()
+			if not transfer then
+				self.last_error = tostring(transfer_error)
+				self.session:disconnect("snapshot_failed", true)
+				self.snapshot_transfer = nil
+				self:_send_peer_and_close("reject", {
+					reason = "snapshot_failed",
+				}, event.peer)
+				return
+			end
+			local sent, send_error = self:_send_snapshot_transfer({
+				session_id = self.session.session_id,
+				reconnect_token = self.session.reconnect_token,
+				actor_id = self.session.guest.actor_id,
+				snapshot_version = Protocol.SNAPSHOT_VERSION,
+			})
+			if not sent then
+				self:_handle_transport_loss("snapshot_bootstrap_send_failed: "
+					.. tostring(send_error), event.peer)
 			end
 			return
 		end
@@ -917,7 +1423,10 @@ function Runtime:_host_message(event, message)
 		if not acknowledged then
 			return self:_fail_host_peer(acknowledge_error, event.peer)
 		end
-		self:_mark_outboxes_for_replay()
+		local replayed, replay_error = self:_mark_outboxes_for_replay()
+		if not replayed then
+			return self:_terminate_host_stream(replay_error)
+		end
 		self.resume_phase = "sending_sync"
 		return
 	end
@@ -933,18 +1442,17 @@ function Runtime:_host_message(event, message)
 		if not ready then
 			self.last_error = ready_error
 			self.session:disconnect(ready_error, true)
+			self.snapshot_transfer = nil
 			self:_send_peer_and_close("reject", { reason = ready_error }, event.peer)
 		else
+			self.snapshot_transfer = nil
 			local sent, send_error = self.transport:send(event.peer, "start", {
 				session_id = self.session.session_id,
 				tick = self.session.last_server_tick,
 			}, Protocol.CHANNEL.CONTROL, true)
 			if not sent then
-				self.last_error = tostring(send_error)
-				self.session:disconnect("start_send_failed", true)
-				self:_send_peer_and_close("reject", {
-					reason = "start_send_failed",
-				}, event.peer)
+				self:_handle_transport_loss("start_send_failed: "
+					.. tostring(send_error), event.peer)
 			else
 				self.transport:flush()
 			end
@@ -992,7 +1500,9 @@ function Runtime:_host_message(event, message)
 				if not rolled_back then self.last_error = tostring(rollback_error) end
 			end
 		end
-		if accepted then self.session:record_action_result(action_id, result) end
+		if accepted or action_error == "action_rate_limited" then
+			self.session:record_action_result(action_id, result)
+		end
 		local sent, send_error = self.transport:send(
 			event.peer,
 			"action_result",
@@ -1011,6 +1521,7 @@ function Runtime:_host_message(event, message)
 		self.approval_request = nil
 		self.resume_phase = nil
 		self.resume_deadline = nil
+		self.snapshot_transfer = nil
 		self:_send_peer_and_close()
 	end
 end
@@ -1046,7 +1557,7 @@ function Runtime:_resend_pending_actions()
 	return true
 end
 
-function Runtime:_client_message(message)
+function Runtime:_client_message(message, encoded_bytes)
 	if message.kind == "ping" or message.kind == "pong" then
 		if not valid_ping(message.payload) then
 			return self:_fail_client("invalid heartbeat")
@@ -1074,14 +1585,31 @@ function Runtime:_client_message(message)
 	end
 	if message.kind == "welcome" then
 		local resumed = message.payload.resumed == true
+		local previous_welcome = self.client_welcome
 		if not valid_welcome(message.payload)
 			or (resumed and self.client_state ~= "resuming")
-			or (not resumed and self.client_state ~= "awaiting_approval") then
+			or (not resumed and self.client_state ~= "awaiting_approval")
+			or (resumed and (not previous_welcome
+				or message.payload.session_id ~= previous_welcome.session_id
+				or message.payload.reconnect_token ~= previous_welcome.reconnect_token
+				or message.payload.resume_mode ~= self.client_resume_mode)) then
 			return self:_fail_client("invalid welcome message")
 		end
 		self.client_welcome = message.payload
 		if resumed then
 			self.snapshot_ready_tick = nil
+			-- A validated WELCOME proves that the transport and reserved session
+			-- were restored. Any later interruption gets a fresh reconnect window;
+			-- synchronization itself is governed by client_deadline instead.
+			self.reconnect_deadline = nil
+			self.next_reconnect_attempt = nil
+			self.last_error = nil
+			if message.payload.resume_mode == "snapshot" then
+				self.assembler = nil
+				self.snapshot_done_tick = nil
+				self:_set_client_state("receiving_snapshot")
+				return
+			end
 			self:_set_client_state("resuming_sync")
 			local sent, send_error = self.transport:send(
 				self.peer,
@@ -1098,16 +1626,28 @@ function Runtime:_client_message(message)
 			end
 			self.transport:flush()
 		else
+			self.client_resume_mode = nil
+			self.reconnect_deadline = nil
+			self.next_reconnect_attempt = nil
+			self.last_error = nil
 			self:_set_client_state("receiving_snapshot")
 		end
 		return
 	end
 	if message.kind == "resume_synced" then
 		if self.client_state ~= "resuming_sync" or not self.client_welcome
-			or message.payload.session_id ~= self.client_welcome.session_id then
+			or not valid_resume_synced(message.payload)
+			or message.payload.session_id ~= self.client_welcome.session_id
+			or message.payload.world_sequence ~= self.received_world_sequence
+			or message.payload.event_id ~= self.received_event_id then
 			return self:_fail_client("invalid resume synchronization")
 		end
+		local acknowledged, acknowledge_error = self:_flush_stream_ack(true)
+		if not acknowledged then
+			return self:_handle_transport_loss(acknowledge_error, self.peer)
+		end
 		self:_set_client_state("playing")
+		self.client_resume_mode = nil
 		self.reconnect_deadline = nil
 		self.next_reconnect_attempt = nil
 		self.last_error = nil
@@ -1165,6 +1705,9 @@ function Runtime:_client_message(message)
 		end
 		self.snapshot_ready_tick = nil
 		self:_set_client_state("playing")
+		self.client_resume_mode = nil
+		self.reconnect_deadline = nil
+		self.next_reconnect_attempt = nil
 		self.last_error = nil
 		return
 	end
@@ -1181,7 +1724,8 @@ function Runtime:_client_message(message)
 		if self.client_state ~= "playing" or not valid_action_result(message.payload) then
 			return self:_fail_client("invalid action result")
 		end
-		self:_forget_pending_action(message.payload.action_id)
+		local was_pending = self:_forget_pending_action(message.payload.action_id)
+		if not was_pending then return end
 		if type(self.action_result_handler) == "function" then
 			local called, handler_error = pcall(
 				self.action_result_handler,
@@ -1192,7 +1736,8 @@ function Runtime:_client_message(message)
 		return
 	end
 	if message.kind == "event" then
-		if self.client_state ~= "playing" and self.client_state ~= "catching_up" then
+		if self.client_state ~= "playing" and self.client_state ~= "catching_up"
+			and self.client_state ~= "resuming_sync" then
 			return self:_fail_client("event received before playing")
 		end
 		local event_id = message.payload and message.payload.event_id
@@ -1200,22 +1745,25 @@ function Runtime:_client_message(message)
 			return self:_fail_client("invalid network event sequence")
 		end
 		if event_id <= self.received_event_id then
-			self:_send_stream_ack()
+			self:_mark_stream_ack_dirty()
 			return
 		end
 		if event_id ~= self.received_event_id + 1 then
-			return self:_handle_transport_loss("network event sequence gap", self.peer)
+			local buffered, buffer_error = self:_buffer_event(
+				message.payload,
+				encoded_bytes
+			)
+			if not buffered then
+				return self:_handle_transport_loss(buffer_error, self.peer)
+			end
+			self:_mark_stream_ack_dirty()
+			return
 		end
-		if type(self.event_handler) ~= "function" then
-			return self:_fail_client("network event handler is not configured")
-		end
-		local called, accepted, event_error = pcall(self.event_handler, message.payload)
-		if not called or accepted == false then
-			return self:_fail_client(not called and accepted
-				or event_error or "network event was rejected")
-		end
-		self.received_event_id = event_id
-		self:_send_stream_ack()
+		local applied, apply_error = self:_apply_event_payload(message.payload)
+		if not applied then return self:_fail_client(apply_error) end
+		local drained, drain_error = self:_drain_event_reorder()
+		if not drained then return self:_fail_client(drain_error) end
+		self:_mark_stream_ack_dirty()
 		return
 	end
 	return self:_fail_client("unexpected host message")
@@ -1259,7 +1807,7 @@ function Runtime:_finish_client_snapshot()
 		Protocol.CHANNEL.CONTROL,
 		true
 	)
-	if not sent then return self:_fail_client(send_error) end
+	if not sent then return self:_handle_transport_loss(send_error, self.peer) end
 	self.transport:flush()
 	self.assembler = nil
 	self.snapshot_done_tick = nil
@@ -1271,6 +1819,7 @@ function Runtime:_fail_host_peer(reason, peer)
 	self.last_error = reason
 	if self.session and self.session.state ~= Session.STATE.RECONNECT_GRACE then
 		self.session:disconnect(reason, true)
+		self.snapshot_transfer = nil
 	end
 	self.approval_request = nil
 	self.host_hello_deadline = nil
@@ -1286,7 +1835,9 @@ function Runtime:_receive(event)
 	local channel = event.channelID or event.channel
 	if self.role == "client" and channel == Protocol.CHANNEL.SNAPSHOT then
 		if self.client_state ~= "awaiting_approval"
-			and self.client_state ~= "receiving_snapshot" then
+			and self.client_state ~= "receiving_snapshot"
+			and not (self.client_state == "resuming"
+				and self.client_resume_mode == "snapshot") then
 			return self:_fail_client("unexpected snapshot chunk")
 		end
 		local chunk_index, chunk_error = Snapshot.decode_chunk(event.data)
@@ -1316,7 +1867,8 @@ function Runtime:_receive(event)
 			-- is allowed to expire while the reliable world stream is synchronized.
 			return
 		end
-		if self.client_state ~= "playing" and self.client_state ~= "catching_up" then
+		if self.client_state ~= "playing" and self.client_state ~= "catching_up"
+			and self.client_state ~= "resuming_sync" then
 			return self:_fail_client("replication received before playing")
 		end
 		local expected_channel = packet_kind == "state"
@@ -1331,15 +1883,30 @@ function Runtime:_receive(event)
 				return self:_fail_client("invalid world stream sequence")
 			end
 			if payload.sequence <= self.received_world_sequence then
-				self:_send_stream_ack()
+				self:_mark_stream_ack_dirty()
 				return
 			end
 			if payload.sequence ~= self.received_world_sequence + 1 then
-				return self:_handle_transport_loss("world stream sequence gap", self.peer)
+				local buffered, buffer_error = self:_buffer_world_packet(
+					payload.sequence,
+					event.data
+				)
+				if not buffered then
+					return self:_handle_transport_loss(buffer_error, self.peer)
+				end
+				self:_mark_stream_ack_dirty()
+				return
 			end
 		end
-		local applier = packet_kind == "state" and self.replication_applier
-			or self.world_delta_applier
+		if packet_kind == "world" then
+			local applied, apply_error = self:_apply_world_payload(payload)
+			if not applied then return self:_fail_client(apply_error) end
+			local drained, drain_error = self:_drain_world_reorder()
+			if not drained then return self:_fail_client(drain_error) end
+			self:_mark_stream_ack_dirty()
+			return
+		end
+		local applier = self.replication_applier
 		if type(applier) ~= "function" then
 			return self:_fail_client("replication applier is not configured")
 		end
@@ -1347,10 +1914,6 @@ function Runtime:_receive(event)
 		if not called or accepted == false then
 			return self:_fail_client(not called and accepted
 				or apply_error or "replicated state was rejected")
-		end
-		if packet_kind == "world" and valid_stream_position(payload.sequence) then
-			self.received_world_sequence = payload.sequence
-			self:_send_stream_ack()
 		end
 		return
 	end
@@ -1371,7 +1934,7 @@ function Runtime:_receive(event)
 	if self.role == "host" then
 		self:_host_message(event, message)
 	else
-		self:_client_message(message)
+		self:_client_message(message, #event.data)
 	end
 end
 
@@ -1420,68 +1983,19 @@ function Runtime:_publish(dt)
 		and (#self.world_outbox > 0
 			or type(self.world_delta_provider) == "function") then
 		self.world_accumulator = self.world_accumulator % self.world_interval
-		local sent, send_error, sent_count = self:_send_world_outbox(4)
+		local sent, _, send_error, fatal = self:_drain_world_stream(4)
 		if not sent then
+			if fatal then return self:_terminate_host_stream(send_error) end
 			self.last_error = tostring(send_error)
-			return
-		end
-		for _ = sent_count + 1, 4 do
-			if type(self.world_delta_provider) ~= "function" then break end
-			if #self.world_outbox >= self.max_world_outbox then
-				self.last_error = "world acknowledgement backlog overflow"
-				break
-			end
-			local provided, delta = pcall(self.world_delta_provider, self.session)
-			if not provided then
-				self.last_error = tostring(delta)
-				break
-			end
-			if not delta then break end
-			local queued, queue_error = self:_queue_world_delta(delta)
-			if not queued then
-				self.last_error = tostring(queue_error)
-				break
-			end
-			sent, send_error = self:_send_world_outbox(1)
-			if not sent then
-				self.last_error = tostring(send_error)
-				break
-			end
 		end
 	end
 
 	if #self.event_outbox > 0 or type(self.event_provider) == "function" then
-		local sent, send_error, sent_count = self:_send_event_outbox(32)
+		local sent, _, send_error, fatal = self:_drain_event_stream(32)
 		if not sent then
+			if fatal then return self:_terminate_host_stream(send_error) end
 			self.last_error = tostring(send_error)
 			return
-		end
-		for _ = sent_count + 1, 32 do
-			if type(self.event_provider) ~= "function" then break end
-			if #self.event_outbox >= self.max_event_outbox then
-				self.last_error = "event acknowledgement backlog overflow"
-				break
-			end
-			local provided, event = pcall(self.event_provider, self.session)
-			if not provided then
-				self.last_error = tostring(event)
-				break
-			end
-			if event == nil then break end
-			if type(event) ~= "table" then
-				self.last_error = "invalid network event"
-				break
-			end
-			local queued, queue_error = self:_queue_event(event)
-			if not queued then
-				self.last_error = tostring(queue_error)
-				break
-			end
-			sent, send_error = self:_send_event_outbox(1)
-			if not sent then
-				self.last_error = tostring(send_error)
-				break
-			end
 		end
 	end
 end
@@ -1489,8 +2003,7 @@ end
 function Runtime:_update_reconnect()
 	if self.role ~= "client"
 		or (self.client_state ~= "reconnecting"
-			and self.client_state ~= "resuming"
-			and self.client_state ~= "resuming_sync") then
+			and self.client_state ~= "resuming") then
 		return
 	end
 	local current = clock()
@@ -1523,7 +2036,15 @@ function Runtime:_update_client_timeout()
 		or self.client_state == "awaiting_approval" and "approval_timeout"
 		or self.client_state == "receiving_snapshot" and "snapshot_timeout"
 		or self.client_state == "catching_up" and "catchup_timeout"
+		or self.client_state == "resuming_sync" and "resume_sync_timeout"
 		or "network_timeout"
+	if self.client_state == "connecting"
+		or ((self.client_state == "receiving_snapshot"
+		or self.client_state == "catching_up"
+		or self.client_state == "resuming_sync")
+		and self.client_welcome and self.client_welcome.reconnect_token) then
+		return self:_handle_transport_loss(reason, self.peer)
+	end
 	self.last_error = reason
 	self:_set_client_state("failed")
 	if self.peer then
@@ -1544,7 +2065,8 @@ function Runtime:update(dt)
 		self.browser:update()
 	end
 	if not self.transport then return end
-	for _ = 1, 128 do
+
+	for _ = 1, self.max_poll_events do
 		local event, poll_error = self.transport:poll(0)
 		if poll_error then
 			self.last_error = poll_error
@@ -1566,9 +2088,13 @@ function Runtime:update(dt)
 				local reconnecting = self.client_state == "reconnecting"
 					or self.client_state == "resuming"
 					or self.client_state == "resuming_sync"
-				self:_set_client_state(reconnecting and "resuming" or "awaiting_approval")
+				local retrying_initial = reconnecting
+					and self.client_resume_mode == "initial"
+				self:_set_client_state(reconnecting and not retrying_initial
+					and "resuming" or "awaiting_approval")
 				if reconnecting and self.client_welcome then
 					self.client_hello.reconnect_token = self.client_welcome.reconnect_token
+					self.client_hello.resume_mode = self.client_resume_mode
 				end
 				local sent, send_error = self.transport:send(event.peer, "hello", self.client_hello,
 					Protocol.CHANNEL.CONTROL, true)
@@ -1590,12 +2116,7 @@ function Runtime:update(dt)
 		elseif event.type == "disconnect" then
 			local current_peer = not event.peer or event.peer == self.peer
 			if current_peer and self.role == "host" and self.session then
-				self:_neutralize_guest_input()
-				self.session:disconnect("transport_disconnect", false)
-				self.approval_request = nil
-				self.resume_phase = nil
-				self.resume_deadline = nil
-				self:_mark_outboxes_for_replay()
+				self:_handle_transport_loss("transport_disconnect", event.peer)
 			elseif current_peer then
 				local terminal = self.client_state == "rejected"
 					or self.client_state == "failed"
@@ -1605,17 +2126,8 @@ function Runtime:update(dt)
 				elseif tonumber(event.data) == 1 then
 					self.last_error = self.last_error or "host_closed_connection"
 					self:_set_client_state("disconnected")
-				elseif (self.client_state == "playing"
-					or self.client_state == "catching_up"
-					or self.client_state == "resuming"
-					or self.client_state == "resuming_sync")
-					and self.client_welcome
-					and self.client_welcome.reconnect_token then
-					self:_set_client_state("reconnecting")
-					self.reconnect_deadline = clock() + self.reconnect_timeout
-					self.next_reconnect_attempt = clock() + 0.1
 				else
-					self:_set_client_state("disconnected")
+					self:_handle_transport_loss("transport_disconnect", event.peer)
 				end
 			end
 			if current_peer then
@@ -1626,6 +2138,7 @@ function Runtime:update(dt)
 			end
 		end
 	end
+
 	self:_update_heartbeat()
 	if self.role == "host" and self.session then
 		local current = clock()
@@ -1637,8 +2150,9 @@ function Runtime:update(dt)
 			and current >= self.resume_deadline then
 			self:_handle_transport_loss("resume_sync_timeout", self.peer)
 		elseif self.resume_phase == "sending_sync" then
-			self:_complete_resume_sync()
+			self:_advance_resume_sync()
 		end
+
 		local previous_state = self.session.state
 		local updated, update_error = self.session:update()
 		if not updated then self.last_error = tostring(update_error) end
@@ -1657,7 +2171,14 @@ function Runtime:update(dt)
 			self.last_error = tostring(reason)
 			self:_send_peer_and_close("reject", { reason = reason })
 			self.approval_request = nil
+			self.snapshot_transfer = nil
+		elseif previous_state == Session.STATE.RECONNECT_GRACE
+			and self.session.state == Session.STATE.LISTENING then
+			self.snapshot_transfer = nil
+			self:_reset_outboxes()
 		end
+		self:_check_stream_health()
+
 		if self.session.state == Session.STATE.PLAYING and self.resume_phase == nil
 			and self.session.guest and type(self.simulation_handler) == "function" then
 			local simulated, simulation_error = pcall(
@@ -1669,6 +2190,10 @@ function Runtime:update(dt)
 			if not simulated then self.last_error = tostring(simulation_error) end
 		end
 		self:_publish(dt)
+	end
+
+	if self.role == "client" and self.peer and self.stream_ack_dirty then
+		self:_flush_stream_ack(false)
 	end
 	self:_update_client_timeout()
 	self:_update_reconnect()
@@ -1765,6 +2290,7 @@ function Runtime:prepare_quit()
 	self.connection_port = nil
 	self.client_hello = nil
 	self.client_welcome = nil
+	self.client_resume_mode = nil
 	self.pending_actions = {}
 	self.pending_action_order = {}
 	self.action_retry_accumulator = 0
@@ -1782,6 +2308,7 @@ function Runtime:prepare_quit()
 	self.host_hello_deadline = nil
 	self.resume_phase = nil
 	self.resume_deadline = nil
+	self.snapshot_transfer = nil
 	return true
 end
 
@@ -1811,6 +2338,20 @@ function Runtime:status()
 		discovery_error = self.discovery_error,
 		transport = transport_stats,
 		quality = network_quality(transport_stats),
+		streams = {
+			world_pending = #self.world_outbox,
+			world_bytes = self.world_outbox_bytes,
+			world_acked = self.world_acked_sequence,
+			world_highest = self.world_highest_sequence,
+			event_pending = #self.event_outbox,
+			event_bytes = self.event_outbox_bytes,
+			event_acked = self.event_acked_id,
+			event_highest = self.event_highest_id,
+			world_reorder = self.world_reorder_count,
+			world_reorder_bytes = self.world_reorder_bytes,
+			event_reorder = self.event_reorder_count,
+			event_reorder_bytes = self.event_reorder_bytes,
+		},
 	}
 end
 

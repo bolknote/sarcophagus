@@ -1,4 +1,5 @@
 local Protocol = require("src.network.protocol")
+local Replication = require("src.network.replication")
 
 local EnetTransport = {}
 EnetTransport.__index = EnetTransport
@@ -309,6 +310,22 @@ function EnetTransport:poll(timeout)
 	return event
 end
 
+local faultable_reliable_kinds = {
+	action = true,
+	action_result = true,
+	event = true,
+}
+
+local function faultable_packet(data, channel, reliable)
+	if reliable == false then return true end
+	if channel ~= Protocol.CHANNEL.WORLD then return false end
+	if data:sub(1, #Replication.WORLD_MAGIC) == Replication.WORLD_MAGIC then
+		return true
+	end
+	local decoded = Protocol.decode(data)
+	return decoded and faultable_reliable_kinds[decoded.kind] == true or false
+end
+
 function EnetTransport:send_raw(peer, data, channel, reliable)
 	if self.closed then return false, "transport is closed" end
 	peer = peer or self.peer
@@ -320,13 +337,14 @@ function EnetTransport:send_raw(peer, data, channel, reliable)
 	end
 	self.fault_attempted = self.fault_attempted + 1
 	local profile = self.faults
-	if reliable == false and profile.loss_percent > 0
+	local can_fault = faultable_packet(data, channel, reliable)
+	if can_fault and profile.loss_percent > 0
 		and random_unit(profile) * 100 < profile.loss_percent then
 		self.fault_dropped = self.fault_dropped + 1
 		return true, "fault_drop"
 	end
 	local copies = 1
-	if reliable == false and profile.duplication_percent > 0
+	if can_fault and profile.duplication_percent > 0
 		and random_unit(profile) * 100 < profile.duplication_percent then
 		copies = 2
 		self.fault_duplicated = self.fault_duplicated + 1

@@ -50,6 +50,7 @@ function Session.new(options)
 		dropper = options.dropper,
 		state = Session.STATE.LISTENING,
 		session_id = nil,
+		client_nonce = nil,
 		reconnect_token = nil,
 		pending = nil,
 		guest = nil,
@@ -91,6 +92,7 @@ function Session:begin_join(hello, expected, timestamp)
 	local session_id = self.token_factory("session")
 	if not Identity.valid(session_id) then return false, "invalid_session_token" end
 	self.session_id = session_id
+	self.client_nonce = hello.client_nonce
 	self.pending = { hello = hello }
 	self.state = Session.STATE.AWAITING_APPROVAL
 	self.deadline = now(self, timestamp) + self.approval_timeout
@@ -109,6 +111,7 @@ function Session:reject(reason)
 		return false, "no_pending_join"
 	end
 	self.pending = nil
+	self.client_nonce = nil
 	self.deadline = nil
 	self.state = Session.STATE.LISTENING
 	return true, reason or "rejected_by_host"
@@ -173,6 +176,20 @@ function Session:ready(snapshot_tick)
 	return true
 end
 
+function Session:_remember_action(action_id, key)
+	key = key or (type(action_id) .. ":" .. tostring(action_id))
+	if self.processed_actions[key] then return true end
+	if type(action_id) == "number" then self.last_numeric_action_id = action_id end
+	self.processed_actions[key] = true
+	self.processed_action_order[#self.processed_action_order + 1] = key
+	if #self.processed_action_order > self.max_processed_actions then
+		local expired = table.remove(self.processed_action_order, 1)
+		self.processed_actions[expired] = nil
+		self.processed_action_results[expired] = nil
+	end
+	return true
+end
+
 function Session:accept_action(action_id, timestamp)
 	if self.state ~= Session.STATE.PLAYING then return false, "not_playing" end
 	if not self.protocol.validate_action_id(action_id) then
@@ -195,16 +212,14 @@ function Session:accept_action(action_id, timestamp)
 		(tonumber(self.action_tokens) or self.action_burst)
 			+ elapsed * self.action_rate
 	)
-	if self.action_tokens < 1 then return false, "action_rate_limited" end
-	self.action_tokens = self.action_tokens - 1
-	if type(action_id) == "number" then self.last_numeric_action_id = action_id end
-	self.processed_actions[key] = true
-	self.processed_action_order[#self.processed_action_order + 1] = key
-	if #self.processed_action_order > self.max_processed_actions then
-		local expired = table.remove(self.processed_action_order, 1)
-		self.processed_actions[expired] = nil
-		self.processed_action_results[expired] = nil
+	if self.action_tokens < 1 then
+		-- A lost negative result must not turn into a successful transaction when
+		-- the same application-reliable action is retried after tokens replenish.
+		self:_remember_action(action_id, key)
+		return false, "action_rate_limited"
 	end
+	self.action_tokens = self.action_tokens - 1
+	self:_remember_action(action_id, key)
 	return true
 end
 
@@ -269,6 +284,7 @@ function Session:_finish_drop()
 	end
 	self.registry:remove(guest)
 	self.guest = nil
+	self.client_nonce = nil
 	self.reconnect_token = nil
 	self.deadline = nil
 	self.processed_actions = {}
@@ -283,6 +299,7 @@ function Session:disconnect(reason, clean, timestamp)
 	self.last_disconnect_reason = reason or "disconnected"
 	if not self.guest then
 		self.pending = nil
+		self.client_nonce = nil
 		self.deadline = nil
 		self.state = Session.STATE.LISTENING
 		return true
@@ -291,11 +308,15 @@ function Session:disconnect(reason, clean, timestamp)
 		self.state = Session.STATE.DROPPING
 		return self:_finish_drop()
 	end
+	-- A peer that connects and disappears without proving possession of the
+	-- reconnect token must not extend the reserved slot forever.
+	if self.state == Session.STATE.RECONNECT_GRACE and self.deadline then
+		return true
+	end
 	self.state = Session.STATE.RECONNECT_GRACE
 	self.deadline = now(self, timestamp) + self.reconnect_timeout
 	return true
 end
-
 
 function Session:resume(reconnect_token)
 	if self.state ~= Session.STATE.RECONNECT_GRACE then return false, "not_reconnecting" end
@@ -304,6 +325,16 @@ function Session:resume(reconnect_token)
 	end
 	self.deadline = nil
 	self.state = Session.STATE.PLAYING
+	return true
+end
+
+function Session:resume_snapshot(reconnect_token, timestamp)
+	if self.state ~= Session.STATE.RECONNECT_GRACE then return false, "not_reconnecting" end
+	if type(reconnect_token) ~= "string" or reconnect_token ~= self.reconnect_token then
+		return false, "invalid_reconnect_token"
+	end
+	self.deadline = now(self, timestamp) + self.snapshot_timeout
+	self.state = Session.STATE.SENDING_SNAPSHOT
 	return true
 end
 

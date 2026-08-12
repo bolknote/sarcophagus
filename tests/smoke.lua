@@ -86,6 +86,10 @@ local function install_process_network_test(role, value)
 	local forced_disconnect = (tonumber(os.getenv(
 		"SARCOPHAGUS_NET_DISCONNECT_AFTER"
 	)) or 0) > 0
+	local reconnect_backlog = math.max(2, math.floor(tonumber(os.getenv(
+		"SARCOPHAGUS_PROCESS_RECONNECT_BACKLOG"
+	)) or 2))
+	local process_timeout = reconnect_backlog > 2 and 25 or 12
 	if role == "host" then
 		local action_seen, input_seen = false, false
 		local delta_sequence, event_sequence = 0, 0
@@ -131,7 +135,8 @@ local function install_process_network_test(role, value)
 				}
 			end,
 			world_delta_provider = function()
-				local wanted = forced_disconnect and reconnect_seen and 2 or 1
+				local wanted = forced_disconnect and reconnect_seen
+					and reconnect_backlog or 1
 				if delta_sequence >= wanted then return nil end
 				delta_sequence = delta_sequence + 1
 				return {
@@ -139,19 +144,24 @@ local function install_process_network_test(role, value)
 					tick = 12,
 					cells = {
 						{ x = 1, y = 1, cell = {
-							b = delta_sequence == 1 and 77 or 88,
+							b = delta_sequence,
 						} },
 					},
 				}
 			end,
 			event_provider = function()
-				local wanted = forced_disconnect and reconnect_seen and 2 or 1
-				if event_sequence >= wanted or not action_seen then return nil end
+				local wanted = forced_disconnect and reconnect_seen
+					and reconnect_backlog or 1
+				local reconnect_backlog_ready = forced_disconnect and reconnect_seen
+				if event_sequence >= wanted
+					or (not reconnect_backlog_ready and not action_seen) then
+					return nil
+				end
 				event_sequence = event_sequence + 1
 				return {
 					kind = "process-test",
 					event_id = event_sequence,
-					value = event_sequence == 1 and 91 or 92,
+					value = event_sequence,
 				}
 			end,
 		})
@@ -175,15 +185,24 @@ local function install_process_network_test(role, value)
 				reconnect_completed = true
 			end
 			if runtime:pending_approval() then assert(runtime:approve_guest()) end
-			if action_seen and input_seen and reconnect_completed then
+			local wanted = forced_disconnect and reconnect_backlog or 1
+			if action_seen and input_seen and reconnect_completed
+				and runtime.world_acked_sequence >= wanted
+				and runtime.event_acked_id >= wanted then
 				completion_elapsed = completion_elapsed or elapsed
 				if elapsed - completion_elapsed >= 0.75 then
 					complete(0, "handshake=true input=true action=true reconnect="
 						.. tostring(reconnect_seen))
 				end
 			end
-			if elapsed > 12 then
-				complete(1, "timeout state=" .. tostring(runtime.session.state))
+			if elapsed > process_timeout then
+				local status = runtime:status()
+				complete(1, "timeout state=" .. tostring(runtime.session.state)
+					.. " resume=" .. tostring(runtime.resume_phase)
+					.. " world=" .. tostring(status.streams.world_acked)
+					.. "/" .. tostring(status.streams.world_highest)
+					.. " event=" .. tostring(status.streams.event_acked)
+					.. "/" .. tostring(status.streams.event_highest))
 			end
 		end)
 	else
@@ -193,7 +212,9 @@ local function install_process_network_test(role, value)
 		local action_sent = false
 		local process_input
 		local next_input_send = 0
+		local completion_elapsed
 		local reconnect_seen, reconnect_completed = false, not forced_disconnect
+		local resume_barrier_verified = not forced_disconnect
 		runtime = Runtime.new({
 			registry = registry,
 			state_interval = 0.01,
@@ -212,7 +233,7 @@ local function install_process_network_test(role, value)
 			event_handler = function(value)
 				network_event = value
 				return value.kind == "process-test"
-					and (value.value == 91 or value.value == 92)
+					and value.value == value.event_id
 			end,
 		})
 		local function connect(address, gameplay_port)
@@ -244,6 +265,11 @@ local function install_process_network_test(role, value)
 				reconnect_seen = true
 			elseif reconnect_seen and runtime.client_state == "playing" then
 				reconnect_completed = true
+				assert(world_delta and world_delta.sequence == reconnect_backlog
+					and network_event
+					and network_event.event_id == reconnect_backlog,
+					"client resumed play before applying the reconnect backlog")
+				resume_barrier_verified = true
 			end
 			if discovery_port and runtime.role == "offline" then
 				local records = runtime:servers()
@@ -272,24 +298,33 @@ local function install_process_network_test(role, value)
 					next_input_send = elapsed + 0.05
 				end
 			end
-			if reconnect_completed and discovery_seen and snapshot_seen
+			local wanted = forced_disconnect and reconnect_backlog or 1
+			if reconnect_completed and resume_barrier_verified
+				and discovery_seen and snapshot_seen
 				and replicated and replicated.input_seen
 				and replicated.action_seen and progress_seen and world_delta
-				and world_delta.cells[1].cell.b == (forced_disconnect and 88 or 77)
+				and world_delta.sequence == wanted
+				and world_delta.cells[1].cell.b == wanted
 				and action_result and action_result.ok and network_event
-				and network_event.value == (forced_disconnect and 92 or 91) then
-				complete(0,
-					"snapshot=true state=true progress=true world=true action_result=true event=true discovery="
-						.. tostring(discovery_requested and discovery_seen)
-						.. " reconnect=" .. tostring(reconnect_seen))
+				and network_event.event_id == wanted
+				and network_event.value == wanted then
+				completion_elapsed = completion_elapsed or elapsed
+				if elapsed - completion_elapsed >= 0.25 then
+					complete(0,
+						"snapshot=true state=true progress=true world=true action_result=true event=true discovery="
+							.. tostring(discovery_requested and discovery_seen)
+							.. " reconnect=" .. tostring(reconnect_seen))
+				end
 			end
 			if runtime.client_state == "failed" or runtime.client_state == "rejected" then
 				complete(1, "state=" .. tostring(runtime.client_state)
 					.. " error=" .. tostring(runtime.last_error))
 			end
-			if elapsed > 12 then
+			if elapsed > process_timeout then
 				complete(1, "timeout state=" .. tostring(runtime.client_state)
-					.. " error=" .. tostring(runtime.last_error))
+					.. " error=" .. tostring(runtime.last_error)
+					.. " world=" .. tostring(runtime.received_world_sequence)
+					.. " event=" .. tostring(runtime.received_event_id))
 			end
 		end)
 	end
@@ -522,6 +557,12 @@ local function validate_network_core()
 		assert(client:send_raw(nil, "fault-loss", Protocol.CHANNEL.INPUT, false))
 		assert(client:stats().faults.dropped == 1,
 			"artificial unreliable packet loss was not recorded")
+		assert(client:send(nil, "event", {
+			kind = "fault-test",
+			event_id = 1,
+		}, Protocol.CHANNEL.WORLD, true))
+		assert(client:stats().faults.dropped == 2,
+			"artificial loss did not exercise the reliable application stream")
 		client.faults.loss_percent = 0
 		client.faults.duplication_percent = 100
 		assert(client:send_raw(nil, "fault-duplicate", Protocol.CHANNEL.INPUT, false))
@@ -537,6 +578,25 @@ local function validate_network_core()
 		end
 		assert(duplicates == 2 and client:stats().faults.duplicated == 1,
 			"artificial unreliable packet duplication was not applied")
+		assert(client:send(nil, "event", {
+			kind = "fault-test",
+			event_id = 2,
+		}, Protocol.CHANNEL.WORLD, true))
+		client:flush()
+		local reliable_duplicates = 0
+		deadline = love.timer.getTime() + 2
+		while love.timer.getTime() < deadline and reliable_duplicates < 2 do
+			local event = server:poll(2)
+			local decoded_event = event and event.type == "receive"
+				and Protocol.decode(event.data) or nil
+			if decoded_event and decoded_event.kind == "event"
+				and decoded_event.payload.event_id == 2 then
+				reliable_duplicates = reliable_duplicates + 1
+			end
+		end
+		assert(reliable_duplicates == 2
+			and client:stats().faults.duplicated == 2,
+			"artificial duplication did not exercise the reliable application stream")
 		client.faults.duplication_percent = 0
 		client.faults.latency_ms = 20
 		assert(client:send_raw(nil, "fault-delay", Protocol.CHANNEL.INPUT, false))
@@ -634,11 +694,13 @@ local function validate_network_core()
 		local simulated_input
 		local handled_action
 		local catchup_allowed = true
-		local pending_delta = {
+		local pending_deltas = { {
 			sequence = 1,
 			tick = 2,
 			cells = { { x = 1, y = 1, cell = { b = 12 } } },
-		}
+		} }
+		local pending_events = {}
+		local applied_event
 		runtime_server = Runtime.new({
 			registry = host_registry,
 			state_interval = 0.001,
@@ -676,13 +738,17 @@ local function validate_network_core()
 				}
 			end,
 			world_delta_provider = function()
-				local value = pending_delta
-				pending_delta = nil
-				return value
+				if #pending_deltas == 0 then return nil end
+				return table.remove(pending_deltas, 1)
+			end,
+			event_provider = function()
+				if #pending_events == 0 then return nil end
+				return table.remove(pending_events, 1)
 			end,
 		})
 		runtime_client = Runtime.new({
 			registry = client_registry,
+			max_poll_events = 1,
 			state_interval = 0.001,
 			world_interval = 0.001,
 			state_applier = function(snapshot_state)
@@ -692,6 +758,10 @@ local function validate_network_core()
 			end,
 			replication_applier = function(value) applied_state = value end,
 			world_delta_applier = function(value) applied_world = value end,
+			event_handler = function(value)
+				applied_event = value
+				return value.kind == "runtime-test"
+			end,
 		})
 		local started, runtime_port = runtime_server:start_host({
 			host = "127.0.0.1",
@@ -721,10 +791,41 @@ local function validate_network_core()
 		pump(function() return runtime_server:pending_approval() ~= nil end,
 			"runtime join request did not reach host")
 		assert(runtime_server:approve_guest())
+		local approved_guest = runtime_server.session.guest
+		assert(runtime_client.client_welcome == nil
+			and runtime_client.client_state == "awaiting_approval",
+			"client consumed WELCOME before the pre-welcome recovery test")
+		assert(runtime_server:_handle_transport_loss(
+			"pre-welcome-interruption-test", runtime_server.peer
+		))
+		assert(runtime_client:_handle_transport_loss(
+			"pre-welcome-interruption-test", runtime_client.peer
+		))
+		assert(runtime_client.client_state == "reconnecting"
+			and runtime_client.client_resume_mode == "initial",
+			"pre-welcome interruption did not retain initial handshake identity")
+		pump(function()
+			return runtime_client.client_state == "receiving_snapshot"
+				and applied_snapshot == nil
+		end, "client did not enter an interruptible snapshot transfer")
+		local snapshot_guest = runtime_server.session.guest
+		assert(snapshot_guest == approved_guest,
+			"pre-welcome reconnect replaced the approved guest actor")
+		assert(runtime_server:_handle_transport_loss(
+			"snapshot-interruption-test", runtime_server.peer
+		))
+		assert(runtime_client:_handle_transport_loss(
+			"snapshot-interruption-test", runtime_client.peer
+		))
+		assert(runtime_client.client_state == "reconnecting"
+			and runtime_client.client_resume_mode == "snapshot",
+			"interrupted snapshot did not select snapshot recovery")
 		pump(function()
 			return runtime_server.session.state == Session.STATE.PLAYING
 				and runtime_client.client_state == "playing"
-		end, "runtime snapshot handshake did not reach playing")
+		end, "interrupted runtime snapshot did not restart and reach playing")
+		assert(runtime_server.session.guest == snapshot_guest,
+			"snapshot restart replaced the reserved guest actor")
 		assert(applied_snapshot and applied_snapshot.header.tick == 1,
 			"runtime snapshot was not applied")
 		local runtime_input = InputState.new()
@@ -738,6 +839,20 @@ local function validate_network_core()
 		end, "runtime input/action/replication loop did not complete")
 		assert(applied_world.cells[1].cell.b == 12,
 			"runtime world delta was corrupted")
+		for sequence = 2, 33 do
+			pending_deltas[#pending_deltas + 1] = {
+				sequence = sequence,
+				tick = sequence + 1,
+				cells = { { x = 1, y = 1, cell = { b = sequence } } },
+			}
+		end
+		for event_id = 1, 64 do
+			pending_events[#pending_events + 1] = {
+				kind = "runtime-test",
+				event_id = event_id,
+				value = event_id,
+			}
+		end
 		local original_guest = runtime_server.session.guest
 		assert(runtime_server:_handle_transport_loss(
 			"runtime-test", runtime_server.peer
@@ -751,6 +866,9 @@ local function validate_network_core()
 		end, "runtime reconnect did not resume playing")
 		assert(runtime_server.session.guest == original_guest,
 			"runtime reconnect replaced the guest actor")
+		assert(applied_world and applied_world.sequence == 33
+			and applied_event and applied_event.event_id == 64,
+			"client entered playing before the reliable reconnect backlog was applied")
 		catchup_allowed = false
 		assert(runtime_server:_handle_transport_loss(
 			"runtime-overflow-test", runtime_server.peer
@@ -848,7 +966,7 @@ local function validate_network_core()
 		game_version = "test-version",
 		content_hash = test_content_hash,
 		capabilities = {
-			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v1",
+			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v2",
 		},
 		client_nonce = client_nonce,
 	})
@@ -873,7 +991,7 @@ local function validate_network_core()
 		game_version = "test-version",
 		content_hash = "not-a-sha256",
 		capabilities = {
-			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v1",
+			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v2",
 		},
 		client_nonce = client_nonce,
 	})
@@ -883,8 +1001,72 @@ local function validate_network_core()
 	})
 	assert(not hash_ok and hash_error == "invalid_content_hash",
 		"handshake accepted a malformed content hash")
+	local resume_hello = {}
+	for key, value in pairs(hello) do resume_hello[key] = value end
+	resume_hello.reconnect_token = string.rep("4", 64)
+	local resume_mode_ok, resume_mode_error = Protocol.validate_hello(
+		resume_hello,
+		{ game_version = "test-version", content_hash = test_content_hash }
+	)
+	assert(not resume_mode_ok and resume_mode_error == "invalid_resume_mode",
+		"reconnect handshake accepted an ambiguous recovery mode")
+	resume_hello.resume_mode = "snapshot"
+	assert(Protocol.validate_hello(resume_hello, {
+		game_version = "test-version",
+		content_hash = test_content_hash,
+	}), "snapshot recovery handshake was rejected")
 	assert(not Protocol.decode(string.rep("x", Protocol.MAX_MESSAGE_BYTES + 1)),
 		"oversized protocol message was accepted")
+	local initial_retry_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	initial_retry_runtime.role = "client"
+	initial_retry_runtime.client_state = "awaiting_approval"
+	initial_retry_runtime.peer = {}
+	initial_retry_runtime.early_snapshot_chunks = { "stale-snapshot-chunk" }
+	initial_retry_runtime.early_snapshot_bytes = 20
+	initial_retry_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	assert(initial_retry_runtime:_handle_transport_loss(
+		"initial-handshake-loss", initial_retry_runtime.peer
+	) and initial_retry_runtime.client_state == "reconnecting"
+		and initial_retry_runtime.client_resume_mode == "initial"
+		and #initial_retry_runtime.early_snapshot_chunks == 0
+		and initial_retry_runtime.early_snapshot_bytes == 0,
+		"pre-welcome transport loss retained stale snapshot chunks or was not retried")
+	local repeated_snapshot_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	repeated_snapshot_runtime.role = "client"
+	repeated_snapshot_runtime.client_state = "resuming"
+	repeated_snapshot_runtime.client_resume_mode = "snapshot"
+	repeated_snapshot_runtime.client_welcome = {
+		session_id = string.rep("8", 64),
+		reconnect_token = string.rep("9", 64),
+		actor_id = "guest",
+		snapshot_version = Protocol.SNAPSHOT_VERSION,
+	}
+	repeated_snapshot_runtime.peer = {}
+	repeated_snapshot_runtime.early_snapshot_chunks = { "partial-retry-chunk" }
+	repeated_snapshot_runtime.early_snapshot_bytes = 19
+	repeated_snapshot_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	assert(repeated_snapshot_runtime:_handle_transport_loss(
+		"repeated-snapshot-loss", repeated_snapshot_runtime.peer
+	) and repeated_snapshot_runtime.client_state == "reconnecting"
+		and repeated_snapshot_runtime.client_resume_mode == "snapshot"
+		and #repeated_snapshot_runtime.early_snapshot_chunks == 0,
+		"a repeated snapshot interruption switched to stream recovery")
+	local initial_timeout_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	initial_timeout_runtime.role = "client"
+	initial_timeout_runtime.client_state = "connecting"
+	initial_timeout_runtime.client_deadline = love.timer.getTime() - 1
+	initial_timeout_runtime.peer = {}
+	initial_timeout_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	assert(initial_timeout_runtime:_update_client_timeout()
+		and initial_timeout_runtime.client_state == "reconnecting"
+		and initial_timeout_runtime.client_resume_mode == "initial",
+		"initial connection timeout was not retried")
 
 	local registry = ActorRegistry.new()
 	local host = ActorState.new({ actor_id = "host", actor_role = "host" })
@@ -951,6 +1133,17 @@ local function validate_network_core()
 	local rate_ok, rate_error = session:accept_action("action:61", clock)
 	assert(not rate_ok and rate_error == "action_rate_limited",
 		"guest action burst was not rate limited")
+	assert(session:record_action_result("action:61", {
+		action_id = "action:61",
+		ok = false,
+		error = "action_rate_limited",
+	}))
+	local repeated_rate_ok, repeated_rate_error, repeated_rate_result =
+		session:accept_action("action:61", clock + 10)
+	assert(not repeated_rate_ok and repeated_rate_error == "duplicate_action"
+		and repeated_rate_result and repeated_rate_result.ok == false
+		and repeated_rate_result.error == "action_rate_limited",
+		"a retried rate-limited transaction changed its authoritative result")
 	local input = InputState.new()
 		InputState.set_button(input, "a", true)
 		InputState.advance(input)
@@ -980,15 +1173,26 @@ local function validate_network_core()
 	clock = 10
 	assert(session:disconnect("wifi", false, clock))
 	assert(session.state == Session.STATE.RECONNECT_GRACE)
+	local reconnect_deadline = session.deadline
+	clock = 11
+	assert(session:disconnect("wifi-again", false, clock)
+		and session.deadline == reconnect_deadline,
+		"unauthenticated reconnect churn extended the reserved session")
 	assert(not session:resume(string.rep("0", 64)))
 	assert(session:resume(reconnect_token))
 	assert(session.state == Session.STATE.PLAYING)
 	assert(session:disconnect("wifi", false, clock))
-	clock = 26
+	assert(session:resume_snapshot(reconnect_token, clock)
+		and session.state == Session.STATE.SENDING_SNAPSHOT,
+		"interrupted snapshot could not restart under the reconnect token")
+	assert(session:snapshot_sent(43) and session:ready(43))
+	assert(session:disconnect("wifi", false, clock))
+	clock = 27
 	assert(session:update(clock))
 	assert(drops == 1 and dropped_items == 1,
 		"guest possessions were not dropped exactly once")
-	assert(session.state == Session.STATE.LISTENING and registry.guest == nil,
+	assert(session.state == Session.STATE.LISTENING and registry.guest == nil
+		and session.client_nonce == nil,
 		"expired guest session was not cleaned up")
 	assert(session:update(clock + 100) and drops == 1,
 		"finished session repeated possession drop")
@@ -1118,6 +1322,35 @@ local function validate_network_core()
 	)
 	assert(not chunk_ok and chunk_error == "invalid snapshot chunk size",
 		"snapshot assembler accepted a malformed chunk size")
+	local ready_assembler = assert(NetworkSnapshot.new_assembler(chunk_meta))
+	for _, packet in ipairs(snapshot_chunks) do assert(ready_assembler:add(packet)) end
+	local ready_peer = {}
+	local ready_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		state_applier = function() return true end,
+	})
+	ready_runtime.role = "client"
+	ready_runtime.peer = ready_peer
+	ready_runtime.client_state = "receiving_snapshot"
+	ready_runtime.client_welcome = {
+		session_id = snapshot_session_id,
+		reconnect_token = string.rep("5", 64),
+		actor_id = "guest",
+		snapshot_version = Protocol.SNAPSHOT_VERSION,
+	}
+	ready_runtime.assembler = ready_assembler
+	ready_runtime.snapshot_done_tick = chunk_meta.tick
+	ready_runtime.transport = {
+		send = function(_, _, kind)
+			if kind == "ready" then return false, "temporary ready failure" end
+			return true
+		end,
+		disconnect = function() return true end,
+	}
+	assert(ready_runtime:_finish_client_snapshot()
+		and ready_runtime.client_state == "reconnecting"
+		and ready_runtime.client_resume_mode == "stream",
+		"READY send failure discarded an already applied snapshot")
 
 	local replicated_actor = NetworkReplication.capture_actor(restored_snapshot.guest_actor)
 	local state_packet = NetworkReplication.encode_state({
@@ -1190,20 +1423,25 @@ local function validate_network_core()
 		session_id = string.rep("8", 64),
 	}
 	outbox_runtime.transport = {
-		send_raw = function()
-			outbox_world_attempts = outbox_world_attempts + 1
-			outbox_send_order[#outbox_send_order + 1] = "world"
-			if outbox_world_attempts == 1 then return false, "temporary world failure" end
-			return true
-		end,
-		send = function(_, _, kind)
+		send_raw = function(_, _, packet)
+			local kind = packet:sub(1, 4) == NetworkReplication.WORLD_MAGIC
+				and "world" or assert(Protocol.decode(packet)).kind
 			outbox_send_order[#outbox_send_order + 1] = kind
-			if kind == "event" then
+			if kind == "world" then
+				outbox_world_attempts = outbox_world_attempts + 1
+				if outbox_world_attempts == 1 then
+					return false, "temporary world failure"
+				end
+			elseif kind == "event" then
 				outbox_event_attempts = outbox_event_attempts + 1
 				if outbox_event_attempts == 1 then
 					return false, "temporary event failure"
 				end
 			end
+			return true
+		end,
+		send = function(_, _, kind)
+			outbox_send_order[#outbox_send_order + 1] = kind
 			return true
 		end,
 		flush = function() end,
@@ -1229,20 +1467,81 @@ local function validate_network_core()
 		and not outbox_runtime.world_outbox[1].sent
 		and not outbox_runtime.event_outbox[1].sent,
 		"resume handshake did not mark unacknowledged streams for replay")
-	assert(outbox_runtime:_complete_resume_sync())
-	outbox_runtime:_publish(0.01)
-	assert(outbox_send_order[#outbox_send_order - 2] == "resume_synced"
+	assert(outbox_runtime:_advance_resume_sync())
+	assert(outbox_runtime.resume_phase == "sending_sync"
 		and outbox_send_order[#outbox_send_order - 1] == "world"
 		and outbox_send_order[#outbox_send_order] == "event",
-		"resume confirmation was not ordered before reliable stream replay")
+		"resume replay did not precede its synchronization barrier")
 	assert(outbox_runtime:_acknowledge_streams({
 		world_sequence = 1,
 		event_id = 1,
 	}))
-	assert(#outbox_runtime.world_outbox == 0 and #outbox_runtime.event_outbox == 0,
+	assert(#outbox_runtime.world_outbox == 0 and #outbox_runtime.event_outbox == 0
+		and outbox_runtime.world_outbox_bytes == 0
+		and outbox_runtime.event_outbox_bytes == 0,
 		"acknowledged stream items remained in the outbox")
+	assert(outbox_runtime:_advance_resume_sync())
+	assert(outbox_runtime.resume_phase == nil
+		and outbox_send_order[#outbox_send_order] == "resume_synced",
+		"resume barrier was sent before replay was applied and acknowledged")
 	assert(not outbox_runtime:_queue_event({ kind = "test", event_id = 3 }),
 		"host accepted a gap in the reliable event stream")
+	local source_sound = { kind = "sound", event_id = 1 }
+	local source_sound_available = true
+	local source_sound_runtime = Runtime.new({
+		registry = ActorRegistry.new(),
+		event_provider = function()
+			if not source_sound_available then return nil end
+			source_sound_available = false
+			return source_sound
+		end,
+	})
+	source_sound_runtime.role = "host"
+	source_sound_runtime.peer = {}
+	source_sound_runtime.session = { state = Session.STATE.PLAYING }
+	source_sound_runtime.resume_phase = "sending_sync"
+	source_sound_runtime.transport = {
+		send_raw = function() return true end,
+	}
+	assert(source_sound_runtime:_drain_event_stream(1)
+		and source_sound_runtime.event_outbox[1].event.replayed == true,
+		"sound waiting in the producer queue survived reconnect as fresh audio")
+	local stalled_peer = {}
+	local stalled_disconnect_reason
+	local stalled_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	stalled_runtime.role = "host"
+	stalled_runtime.peer = stalled_peer
+	stalled_runtime.stream_ack_timeout = 6
+	stalled_runtime.world_outbox = { {
+		sequence = 1,
+		packet = "stalled-world",
+		bytes = 13,
+		sent = true,
+	} }
+	stalled_runtime.world_outbox_bytes = 13
+	stalled_runtime.world_ack_progress_at = love.timer.getTime() - 7
+	stalled_runtime.session = {
+		state = Session.STATE.PLAYING,
+		disconnect = function(self, reason)
+			stalled_disconnect_reason = reason
+			self.state = Session.STATE.RECONNECT_GRACE
+			return true
+		end,
+	}
+	stalled_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	stalled_runtime.resume_phase = "waiting_ready"
+	assert(stalled_runtime:_check_stream_health()
+		and stalled_runtime.peer == stalled_peer,
+		"old acknowledgement timer interrupted an authenticated reconnect")
+	stalled_runtime.resume_phase = nil
+	local stalled_ok, stalled_error = stalled_runtime:_check_stream_health()
+	assert(not stalled_ok and stalled_error == "world_stream_ack_timeout"
+		and stalled_disconnect_reason == "world_stream_ack_timeout"
+		and stalled_runtime.peer == nil
+		and not stalled_runtime.world_outbox[1].sent,
+		"stalled application acknowledgements did not trigger recoverable replay")
 
 	local sequence_peer = {}
 	local sequence_event_calls = 0
@@ -1278,22 +1577,33 @@ local function validate_network_core()
 		kind = "event",
 		payload = { kind = "test", event_id = 1 },
 	})
+	assert(sequence_runtime:_flush_stream_ack(true))
 	assert(sequence_event_calls == 0 and sequence_ack_calls == 1,
-		"duplicate reliable event was presented more than once")
+		"duplicate reliable event was presented or not cumulatively acknowledged")
 	sequence_runtime:_client_message({
 		kind = "event",
 		payload = { kind = "test", event_id = 3 },
 	})
-	assert(sequence_disconnected and sequence_runtime.peer == nil
-		and sequence_runtime.client_state == "reconnecting",
-		"event sequence gap did not trigger recoverable reconnect")
+	assert(not sequence_disconnected and sequence_runtime.peer == sequence_peer
+		and sequence_runtime.client_state == "playing"
+		and sequence_runtime.received_event_id == 1
+		and sequence_runtime.event_reorder_count == 1,
+		"event sequence gap was applied or discarded instead of buffered")
+	sequence_runtime:_client_message({
+		kind = "event",
+		payload = { kind = "test", event_id = 2 },
+	})
+	assert(sequence_event_calls == 2
+		and sequence_runtime.received_event_id == 3
+		and sequence_runtime.event_reorder_count == 0,
+		"filling an event gap did not drain the ordered buffered tail")
 
 	local world_gap_peer = {}
-	local world_gap_applied = false
+	local world_gap_applied = 0
 	local world_gap_runtime = Runtime.new({
 		registry = ActorRegistry.new(),
-		world_delta_applier = function()
-			world_gap_applied = true
+		world_delta_applier = function(delta)
+			world_gap_applied = delta.sequence
 			return true
 		end,
 	})
@@ -1316,9 +1626,24 @@ local function validate_network_core()
 			cells = {},
 		}),
 	})
-	assert(not world_gap_applied and world_gap_runtime.peer == nil
-		and world_gap_runtime.client_state == "reconnecting",
-		"world sequence gap was applied instead of recovered")
+	assert(world_gap_applied == 0 and world_gap_runtime.peer == world_gap_peer
+		and world_gap_runtime.client_state == "playing"
+		and world_gap_runtime.received_world_sequence == 0
+		and world_gap_runtime.world_reorder_count == 1,
+		"world sequence gap was applied or discarded instead of buffered")
+	world_gap_runtime:_receive({
+		peer = world_gap_peer,
+		channel = Protocol.CHANNEL.WORLD,
+		data = NetworkReplication.encode_world({
+			sequence = 1,
+			tick = 1,
+			cells = {},
+		}),
+	})
+	assert(world_gap_applied == 2
+		and world_gap_runtime.received_world_sequence == 2
+		and world_gap_runtime.world_reorder_count == 0,
+		"filling a world gap did not drain the ordered buffered tail")
 	local current_peer, stale_peer = {}, {}
 	local stale_disconnect_delivered = false
 	local stale_runtime = Runtime.new({ registry = ActorRegistry.new() })
@@ -1464,21 +1789,36 @@ local function validate_network_core()
 	assert(retry_runtime:send_action({ action_id = 77, action = "retry-test" }))
 	assert(retry_sends == 1 and #retry_runtime.pending_action_order == 1,
 		"client did not retain an unconfirmed action")
+	retry_runtime.client_welcome = {
+		session_id = string.rep("6", 64),
+		reconnect_token = string.rep("7", 64),
+		actor_id = "guest",
+		snapshot_version = Protocol.SNAPSHOT_VERSION,
+	}
+	retry_runtime.client_resume_mode = "stream"
+	retry_runtime.reconnect_deadline = love.timer.getTime() + 0.01
 	retry_runtime.client_state = "resuming"
 	retry_runtime:_client_message({
 		kind = "welcome",
 		payload = {
 			resumed = true,
+			resume_mode = "stream",
 			session_id = string.rep("6", 64),
 			reconnect_token = string.rep("7", 64),
 			actor_id = "guest",
 		},
 	})
-	assert(retry_runtime.client_state == "resuming_sync" and retry_sends == 1,
-		"client replayed actions before stream synchronization")
+	assert(retry_runtime.client_state == "resuming_sync" and retry_sends == 1
+		and retry_runtime.reconnect_deadline == nil
+		and retry_runtime.client_deadline ~= nil,
+		"stream synchronization retained the connect timer or replayed actions early")
 	retry_runtime:_client_message({
 		kind = "resume_synced",
-		payload = { session_id = string.rep("6", 64) },
+		payload = {
+			session_id = string.rep("6", 64),
+			world_sequence = 0,
+			event_id = 0,
+		},
 	})
 	assert(retry_runtime.client_state == "playing" and retry_sends == 2,
 		"client did not retry an unconfirmed action after synchronized reconnect")
@@ -1488,6 +1828,27 @@ local function validate_network_core()
 	})
 	assert(#retry_runtime.pending_action_order == 0,
 		"client retained an acknowledged action")
+	local sync_timeout_runtime = Runtime.new({ registry = ActorRegistry.new() })
+	sync_timeout_runtime.role = "client"
+	sync_timeout_runtime.client_state = "resuming_sync"
+	sync_timeout_runtime.client_resume_mode = "stream"
+	sync_timeout_runtime.client_welcome = {
+		session_id = string.rep("d", 64),
+		reconnect_token = string.rep("e", 64),
+		actor_id = "guest",
+		resumed = true,
+		resume_mode = "stream",
+	}
+	sync_timeout_runtime.client_deadline = love.timer.getTime() - 1
+	sync_timeout_runtime.peer = {}
+	sync_timeout_runtime.transport = {
+		disconnect = function() return true end,
+	}
+	assert(sync_timeout_runtime:_update_client_timeout()
+		and sync_timeout_runtime.client_state == "reconnecting"
+		and sync_timeout_runtime.client_resume_mode == "stream"
+		and sync_timeout_runtime.last_error == "resume_sync_timeout",
+		"stream synchronization timeout was terminal instead of recoverable")
 	local queued_action_attempts = 0
 	local queued_action_runtime = Runtime.new({
 		registry = ActorRegistry.new(),
@@ -1621,9 +1982,26 @@ local function validate_multiplayer_gameplay()
 
 		multiplayer_reset_network_events(true)
 		local previous_role, previous_session = multiplayer.role, multiplayer.session
+		local previous_resume_phase = multiplayer.resume_phase
 		local previous_active_actor = ACTIVE_ACTOR_ID
 		multiplayer.role = "host"
 		multiplayer.session = { state = MultiplayerSession.STATE.PLAYING }
+		multiplayer.session.state = MultiplayerSession.STATE.RECONNECT_GRACE
+		assert(not multiplayer_queue_sound_event(
+			"smoke_disconnected_sound", 5, {}, "host"
+		), "ephemeral sound was queued while the guest was disconnected")
+		assert(multiplayer_queue_text_event(
+			"smoke reconnect text", false, "host"
+		), "durable text was dropped during reconnect grace")
+		assert(multiplayer_next_network_event().kind == "text",
+			"reconnect grace queued an unexpected presentation event")
+		multiplayer_reset_network_events(true)
+		multiplayer.session.state = MultiplayerSession.STATE.PLAYING
+		multiplayer.resume_phase = "sending_sync"
+		assert(not multiplayer_queue_sound_event(
+			"smoke_resume_sound", 5, {}, "host"
+		), "ephemeral sound was queued during stream replay")
+		multiplayer.resume_phase = nil
 		ACTIVE_ACTOR_ID = "guest"
 		-- gravel.ogg is stereo. Network presentation must gracefully fall back
 		-- to non-spatial playback because OpenAL only positions mono sources.
@@ -1631,6 +2009,7 @@ local function validate_multiplayer_gameplay()
 		ACTIVE_ACTOR_ID = previous_active_actor
 		local sound_event = multiplayer_next_network_event()
 		multiplayer.role, multiplayer.session = previous_role, previous_session
+		multiplayer.resume_phase = previous_resume_phase
 		assert(sound_event and sound_event.kind == "sound"
 			and sound_event.actor_id == "guest"
 			and sound_event.x == guest.xt and sound_event.y == guest.yt,
@@ -2115,6 +2494,56 @@ local function validate_multiplayer_gameplay()
 		assert(multiplayer_flush_network_events(aligned_event_time)
 			and #pl.log == aligned_log_before + 1,
 			"presentation event was not shown on its render timestamp")
+		local replay_log_before = #pl.log
+		local replay_time = aligned_event_time + 0.1
+		local replay_text_ok, replay_text_status = multiplayer_apply_network_event({
+			kind = "text",
+			event_id = 2,
+			tick = tonumber(game.network_tick) or 0,
+			sample_time = replay_time,
+			actor_id = "guest",
+			text = "before expired sound",
+			temporary = false,
+		})
+		local replay_sound_ok, replay_sound_status = multiplayer_apply_network_event({
+			kind = "sound",
+			event_id = 3,
+			tick = tonumber(game.network_tick) or 0,
+			sample_time = replay_time + 0.01,
+			name = "expired_reconnect_sound",
+			sound_id = 5,
+			actor_id = "host",
+			x = pl.xt,
+			y = pl.yt,
+			play = false,
+			kill = false,
+			replayed = true,
+		})
+		assert(replay_text_ok and replay_text_status == "buffered"
+			and replay_sound_ok and replay_sound_status == "buffered",
+			"reconnect presentation events did not retain timeline ordering")
+		assert(multiplayer_flush_network_events(replay_time + 0.01)
+			and #pl.log == replay_log_before + 1
+			and not allsounds["net:host:expired_reconnect_sound"],
+			"expired reconnect sound skipped text or produced stale audio")
+		local lagged_sound_time = replay_time + 0.02
+		local lagged_ok, lagged_status = multiplayer_apply_network_event({
+			kind = "sound",
+			event_id = 4,
+			tick = tonumber(game.network_tick) or 0,
+			sample_time = lagged_sound_time,
+			name = "lagged_reconnect_sound",
+			sound_id = 5,
+			actor_id = "host",
+			x = pl.xt,
+			y = pl.yt,
+			play = false,
+			kill = false,
+		})
+		assert(lagged_ok and lagged_status == "buffered"
+			and multiplayer_flush_network_events(lagged_sound_time + 2)
+			and not allsounds["net:host:lagged_reconnect_sound"],
+			"lagged buffered audio burst after interpolation recovery")
 		local gameplay_key_handler = love.keypressed
 		esc_menu()
 		assert(game.escmenu == 1 and #msg.escmenu_guest == 2
