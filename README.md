@@ -127,6 +127,32 @@ The current modernized version in this repository is `0.11.2`.
 Ready-to-run packages are published on the
 [GitHub Releases page](https://github.com/bolknote/sarcophagus/releases).
 
+### Install on macOS from Terminal
+
+On a personal Mac, install the current universal Intel/Apple Silicon build into
+`~/Applications` and launch it with:
+
+```sh
+curl -fsSL https://tinyurl.com/5arcophagus | bash
+```
+
+The short URL redirects directly to the readable
+[installer source](scripts/install-macos.sh) in this repository. The installer
+needs no `sudo` access and does not disable Gatekeeper or change its global
+settings. It downloads a pinned GitHub Release, verifies its pinned SHA-256,
+bundle identifier, version and code signature, then safely replaces an existing
+installation. To install without launching the game, append arguments to Bash:
+
+```sh
+curl -fsSL https://tinyurl.com/5arcophagus | bash -s -- --no-launch
+```
+
+This is a convenient Terminal installation of the ad-hoc-signed build for
+users who explicitly trust this repository; it is not a substitute for Apple
+Developer ID signing and notarization. Managed Macs may still block it, and a
+package downloaded through a browser can still trigger Gatekeeper. Inspect the
+installer source before running it if you are unsure about any shell command.
+
 ### Original development log
 
 The [official devlog](https://acerbial.itch.io/sarcophagus/devlog) documents several milestones from 2019:
@@ -430,6 +456,34 @@ Sarcophagus — авторский sandbox/survival-проект Дмитрия 
 Текущая модернизированная версия в этом репозитории — `0.11.2`.
 Готовые пакеты публикуются на
 [странице GitHub Releases](https://github.com/bolknote/sarcophagus/releases).
+
+### Установка в macOS через Terminal
+
+На личном Mac текущую универсальную сборку для Intel и Apple Silicon можно
+установить в `~/Applications` и сразу запустить одной командой:
+
+```sh
+curl -fsSL https://tinyurl.com/5arcophagus | bash
+```
+
+Короткая ссылка перенаправляет прямо на читаемый
+[исходник установщика](scripts/install-macos.sh) в этом репозитории. Установщик
+не требует `sudo`, не отключает Gatekeeper и не меняет его глобальные настройки.
+Он скачивает закреплённый GitHub Release, проверяет закреплённый в установщике
+SHA-256, bundle identifier, версию и целостность подписи, после чего безопасно
+заменяет предыдущую установку. Чтобы установить игру без автоматического
+запуска:
+
+```sh
+curl -fsSL https://tinyurl.com/5arcophagus | bash -s -- --no-launch
+```
+
+Это удобная Terminal-установка сборки с ad-hoc-подписью для пользователей,
+которые явно доверяют этому репозиторию, а не замена Apple Developer ID и
+нотарификации. Управляемый организацией Mac всё равно может заблокировать
+приложение, а загрузка пакета через браузер по-прежнему может вызвать
+Gatekeeper. Если какая-либо shell-команда вызывает сомнения, перед запуском
+следует прочитать исходник установщика.
 
 ### Оригинальный журнал разработки
 
