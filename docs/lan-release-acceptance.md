@@ -15,10 +15,9 @@ performance pass из `docs/performance-budget.md`.
 - ENet/UDP на gameplay-порту, по умолчанию `22122–22132`.
 
 mDNS пока не добавляется. Multicast + broadcast сохраняют протокол простым, а
-ручной ввод `host[:port]` даёт независимый fallback. В LAN-меню клавиша `M`
-открывает ручной ввод. После шести секунд без ответа меню показывает timeout и
-предлагает этот fallback. В сети с client/AP isolation ручной адрес ожидаемо не
-поможет: узлы физически не могут обмениваться пакетами.
+подключение остаётся полностью автоматическим. LAN-меню ничего не показывает,
+пока не найден доступный мир; технические ошибки и timeout остаются во
+внутреннем диагностическом статусе. Ручного ввода адреса нет.
 
 ## Автоматическая часть
 
@@ -51,13 +50,13 @@ mDNS пока не добавляется. Multicast + broadcast сохраня�
 | Сценарий | Ожидаемый результат | Статус |
 | --- | --- | --- |
 | Оба компьютера в одной Wi‑Fi сети | Автообнаружение ≤ 6 с, join и gameplay | pending |
-| Host Ethernet, guest Wi‑Fi | Автообнаружение или успешный ручной адрес | pending |
+| Host Ethernet, guest Wi‑Fi | Автообнаружение и join | pending |
 | Несколько активных интерфейсов | Найден достижимый адрес, join не зависает | pending |
-| Включённый VPN | LAN работает либо timeout объясним и ручной адрес работает | pending |
+| Включённый VPN | Автообнаружение и join работают без смены настроек | pending |
 | macOS firewall, первый запуск | Системный prompt понятен; после разрешения join работает | pending |
 | Multicast запрещён, broadcast разрешён | Host обнаруживается через broadcast | pending |
-| Multicast и broadcast запрещены | Через 6 с timeout; ручной адрес подключает | pending |
-| Client/AP isolation | Timeout и затем понятная ошибка ручного подключения | pending |
+| Multicast и broadcast запрещены | Мир не предлагается; диагностика фиксирует сеть | pending |
+| Client/AP isolation | Мир не предлагается; меню остаётся чистым | pending |
 | Wi‑Fi отключён во время игры | Reconnect grace без потери/дублирования вещей | pending |
 | Переключение Wi‑Fi ↔ Ethernet | Reconnect либо диагностируемый timeout | pending |
 | Sleep/wake host | Guest не зависает; reconnect или terminal error | pending |

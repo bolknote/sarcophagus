@@ -1,19 +1,53 @@
-local function canvas_matches_window (canvas)
+local function canvas_matches_size (canvas, width, height)
 	if not canvas then return false end
 	local canvas_width, canvas_height = canvas:getPixelDimensions()
-	local window_width, window_height = love.graphics.getPixelDimensions()
-	return canvas_width == window_width and canvas_height == window_height
+	return canvas_width == width and canvas_height == height
 end
 
 local function release_canvas (canvas)
 	if canvas then canvas:release() end
 end
 
+function render_canvas_layout ()
+	local width, height = love.graphics.getDimensions()
+	width, height = math.max(1, math.floor(width)), math.max(1, math.floor(height))
+	local world_width = game and game.gr2x and math.ceil(width / 2) or width
+	local world_height = game and game.gr2x and math.ceil(height / 2) or height
+	return {
+		world_width = world_width,
+		world_height = world_height,
+		water_width = math.ceil(world_width / 2),
+		water_height = math.ceil(world_height / 2),
+		output_width = width,
+		output_height = height,
+	}
+end
+
+local function new_render_canvas(width, height)
+	-- Pixel art does not gain detail from Retina-sized intermediate textures.
+	-- The final high-DPI backbuffer still presents at native resolution, while
+	-- dpiscale=1 avoids clearing and shading millions of redundant pixels.
+	return love.graphics.newCanvas(width, height, { dpiscale = 1 })
+end
+
 function resize_render_canvases ()
-	if canvas_matches_window(gr2x)
-		and canvas_matches_window(smooth2x_canvas)
-		and canvas_matches_window(block_canvas)
-		and canvas_matches_window(water_canvas) then
+	local layout = render_canvas_layout()
+	if canvas_matches_size(gr2x, layout.world_width, layout.world_height)
+		and canvas_matches_size(
+			smooth2x_canvas,
+			layout.output_width,
+			layout.output_height
+		)
+		and canvas_matches_size(
+			block_canvas,
+			layout.world_width,
+			layout.world_height
+		)
+		and canvas_matches_size(
+			water_canvas,
+			layout.water_width,
+			layout.water_height
+		) then
 		return false
 	end
 
@@ -22,10 +56,13 @@ function resize_render_canvases ()
 	release_canvas(block_canvas)
 	release_canvas(water_canvas)
 
-	gr2x = love.graphics.newCanvas()
-	smooth2x_canvas = love.graphics.newCanvas()
-	block_canvas = love.graphics.newCanvas()
-	water_canvas = love.graphics.newCanvas()
+	gr2x = new_render_canvas(layout.world_width, layout.world_height)
+	smooth2x_canvas = new_render_canvas(
+		layout.output_width,
+		layout.output_height
+	)
+	block_canvas = new_render_canvas(layout.world_width, layout.world_height)
+	water_canvas = new_render_canvas(layout.water_width, layout.water_height)
 
 	gr2x:setFilter("nearest", "nearest")
 	smooth2x_canvas:setFilter("nearest", "nearest")

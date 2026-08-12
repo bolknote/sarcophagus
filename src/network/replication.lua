@@ -5,6 +5,7 @@ local Replication = {}
 
 Replication.STATE_MAGIC = "RST3"
 Replication.WORLD_MAGIC = "RWD3"
+Replication.POSE_MAGIC = "RPS1"
 Replication.MAX_RAW_BYTES = 8 * 1024 * 1024
 Replication.MAX_STORED_BYTES = 2 * 1024 * 1024
 Replication.HEADER_SIZE = 8
@@ -38,7 +39,10 @@ local actor_fields = {
 	"truex", "truey", "tx", "ty", "xt", "yt", "state", "oldstate",
 	"flip", "animation", "inv", "invsize", "invselect", "iscarry",
 	"stats", "buffs", "slow", "slowed", "speedstat", "speed",
+	"anispeed", "moving",
 	"jumpx", "jumpy", "jump", "fall", "turbox", "rest", "unrest",
+	"xspeed", "yspeed", "jumpleft", "jumppress", "fell", "cantclimb",
+	"hangcancel", "isclimbing", "iswalking", "jumpxslow", "jumpyslow", "is",
 	"spenddead", "dying", "isdead", "idlecnt", "digcount", "digcountup",
 	"digdone", "digxt", "digyt", "digstart", "digcant", "digback",
 	"digspeed", "diganispeed", "candrop", "canthrow", "throw", "travel",
@@ -74,6 +78,18 @@ for _, field in ipairs(actor_fields) do
 		actor_dynamic_fields[#actor_dynamic_fields + 1] = field
 	end
 end
+
+-- A compact, high-frequency authoritative pose. The full state stream also
+-- contains inventories, stats, mobs and presentation state, so raising its
+-- rate just to make one player jump smoothly wastes CPU and bandwidth.
+local actor_pose_fields = {
+	"actor_version", "actor_id", "actor_role", "ghost", "session_id",
+	"truex", "truey", "tx", "ty", "xt", "yt", "state", "oldstate",
+	"flip", "animation", "anispeed", "moving", "xspeed", "yspeed",
+	"jumpleft", "jumppress",
+	"fell", "cantclimb", "hangcancel", "isclimbing", "iswalking",
+	"jumpxslow", "jumpyslow", "is", "iscarry", "isdead",
+}
 
 local function serializable(value, seen)
 	local kind = type(value)
@@ -118,9 +134,12 @@ function Replication.apply_actor(actor, snapshot, options)
 	options = options or {}
 	for _, field in ipairs(options.fields or actor_fields) do
 		local position = field == "truex" or field == "truey"
+		local preserved = options.preserve_fields
+			and options.preserve_fields[field]
 		local locally_animated = options.preserve_animation
-			and (field == "animation" or field == "oldstate")
-		if not locally_animated and (not position or (not options.defer_position
+		and (field == "animation" or field == "oldstate")
+		if not preserved and not locally_animated
+			and (not position or (not options.defer_position
 			and not options.ignore_position)) then
 			-- Decoded replication packets already own fresh Lua tables. Re-copying
 			-- inventories, stats and animation data here doubled allocations at
@@ -142,7 +161,8 @@ function Replication.apply_actor(actor, snapshot, options)
 end
 
 local function encode(magic, payload)
-	assert(magic == Replication.STATE_MAGIC or magic == Replication.WORLD_MAGIC,
+	assert(magic == Replication.STATE_MAGIC or magic == Replication.WORLD_MAGIC
+		or magic == Replication.POSE_MAGIC,
 		"invalid replication packet kind")
 	local writer = BlobWriter()
 	-- Replication packets are transient and are not checksummed or persisted.
@@ -163,11 +183,16 @@ function Replication.encode_world(payload)
 	return encode(Replication.WORLD_MAGIC, payload)
 end
 
+function Replication.encode_pose(payload)
+	return encode(Replication.POSE_MAGIC, payload)
+end
+
 function Replication.packet_kind(packet)
 	if type(packet) ~= "string" or #packet <= Replication.HEADER_SIZE then return nil end
 	local magic = packet:sub(1, 4)
 	if magic == Replication.STATE_MAGIC then return "state" end
 	if magic == Replication.WORLD_MAGIC then return "world" end
+	if magic == Replication.POSE_MAGIC then return "pose" end
 	return nil
 end
 
@@ -223,6 +248,7 @@ end
 
 Replication.ACTOR_FIELDS = actor_fields
 Replication.ACTOR_DYNAMIC_FIELDS = actor_dynamic_fields
+Replication.ACTOR_POSE_FIELDS = actor_pose_fields
 Replication.ACTOR_PROGRESS_FIELDS = actor_progress_fields
 Replication.SHARED_PROGRESS_FIELDS = shared_progress_fields
 

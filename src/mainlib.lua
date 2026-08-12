@@ -1,5 +1,56 @@
 local ActiveCameraUnion = require("src.active_camera_union")
 local PerformanceMetrics = require("src.performance_metrics")
+local NetworkFixedStep = require("src.network.fixed_step")
+
+local network_airborne_states = {
+	jump = true, jump_carry = true,
+	fall = true, fall_carry = true,
+	hang = true, pullup = true,
+	stepup = true, stepupb = true,
+	climb = true,
+}
+
+local network_predictable_motion_states = {
+	idle = true, idle_carry = true,
+	walk = true, walk_carry = true,
+	fell = true,
+}
+
+-- These states move the actor through animation-frame offsets. They cannot be
+-- predicted as ordinary walking: a delayed or skipped frame leaves the two
+-- peers on opposite sides of a block even when truex/truey are reconciled.
+local network_scripted_motion_states = {
+	stepup = true, stepupb = true,
+	hang = true, pullup = true,
+	climb = true,
+}
+
+local network_motion_fields = {
+	"state", "flip", "anispeed", "moving", "xspeed", "yspeed",
+	"jumpleft", "jumppress",
+	"fell", "cantclimb", "hangcancel", "isclimbing", "iswalking",
+	"jumpxslow", "jumpyslow", "is",
+}
+
+local network_pose_field_allowed
+
+local function network_pose_field_allowlist()
+	if network_pose_field_allowed then return network_pose_field_allowed end
+	-- mainlib.lua is also loaded inside mapthread.lua, where the networking
+	-- stack is intentionally absent. Resolve the global lazily so map generation
+	-- does not acquire a hidden dependency on replication/ENet modules.
+	local replication = rawget(_G, "NetworkReplication")
+	if type(replication) ~= "table"
+		or type(replication.ACTOR_POSE_FIELDS) ~= "table" then
+		return nil
+	end
+	local allowlist = {}
+	for _, field in ipairs(replication.ACTOR_POSE_FIELDS) do
+		allowlist[field] = true
+	end
+	network_pose_field_allowed = allowlist
+	return allowlist
+end
 
 -- SCREEN
 --------------------------------------------------
@@ -228,6 +279,7 @@ end
 
 local network_pending_world_deltas = network_queue_new()
 local network_pending_presentation_events = network_queue_new()
+local network_local_pose_buffer
 
 local network_timeline_anchor_time
 local network_timeline_anchor_sample
@@ -334,6 +386,26 @@ local function network_valid_actor_snapshot(actor, expected_id, expected_role)
 		or not network_finite_number(actor.truey)
 		or type(actor.inv) ~= "table" or type(actor.stats) ~= "table" then
 		return false
+	end
+	local tile_size = math.max(1, tonumber(cf and cf.w) or 32,
+		tonumber(cf and cf.h) or 32)
+	local limit = math.max(1, tonumber(cf and cf.wmax) or 1) * tile_size * 4
+	return math.abs(actor.truex) <= limit and math.abs(actor.truey) <= limit
+end
+
+local function network_valid_pose_snapshot(actor)
+	local allowed_fields = network_pose_field_allowlist()
+	if type(actor) ~= "table" or actor.actor_id ~= "guest"
+		or actor.actor_role ~= "guest"
+		or not network_finite_number(actor.truex)
+		or not network_finite_number(actor.truey)
+		or type(actor.state) ~= "string" or #actor.state > 64
+		or type(actor.animation) ~= "table"
+		or not allowed_fields then
+		return false
+	end
+	for field in pairs(actor) do
+		if not allowed_fields[field] then return false end
 	end
 	local tile_size = math.max(1, tonumber(cf and cf.w) or 32,
 		tonumber(cf and cf.h) or 32)
@@ -1012,22 +1084,33 @@ end
 
 function multiplayer_simulate_guest(actor, input, frame_dt)
 	if not actor or actor.isdead then return true end
+	local runtime = actors and actors:runtime(actor)
+	if not runtime then return false, "guest runtime is missing" end
 	multiplayer_sanitize_guest_aim(actor, input)
 	return ActorContext.run(actors, actor, {
 		input = input,
-		dt = math.min(0.1, math.max(0, tonumber(frame_dt) or 0)),
+		dt = NetworkFixedStep.STEP,
 		camera = vi,
 	}, function()
 		local projectile_ids = {}
 		for id in pairs(proj or {}) do projectile_ids[id] = true end
 		local time_before = tonumber(game.time) or 0
 		local recovery_before = game.recovery
-		local occupied = multiplayer_guest_personal_progress(actor)
-		if not occupied and not game.inputing and not game.craft then
-			moving()
-		end
-		multiplayer_guest_environment_tick(actor)
-		camera_move()
+		local advanced, accumulator, steps = pcall(
+			NetworkFixedStep.advance,
+			runtime.network_authoritative_accumulator,
+			frame_dt,
+			function(fixed_dt)
+				dt = fixed_dt
+				local occupied = multiplayer_guest_personal_progress(actor)
+				if not occupied and not game.inputing and not game.craft then
+					moving()
+				end
+				multiplayer_guest_environment_tick(actor)
+				camera_move()
+				PlayerAnimation.update(actor, fixed_dt, gr)
+			end
+		)
 		local guest_time_delta = math.max(0, (tonumber(game.time) or time_before) - time_before)
 		game.network_time_base = game.network_time_base or time_before
 		game.network_guest_time_delta = math.max(
@@ -1042,11 +1125,13 @@ function multiplayer_simulate_guest(actor, input, frame_dt)
 				if not projectile.truex then coord_screen2true(projectile) end
 			end
 		end
+		if not advanced then error(accumulator, 0) end
+		runtime.network_authoritative_accumulator = accumulator
 		if actor.stats and actor.stats.body and actor.stats.body.hp <= 0 then
 			local respawned, respawn_error = multiplayer_respawn_guest(actor)
 			if not respawned then error(respawn_error) end
 		end
-		PlayerAnimation.update(actor, dt, gr)
+		return true, steps
 	end)
 end
 
@@ -1372,6 +1457,24 @@ function multiplayer_replication_state(session, include_progress)
 	return state
 end
 
+function multiplayer_pose_state(session)
+	local guest = session and session.guest
+	local runtime = guest and actors:runtime(guest) or nil
+	return {
+		pose_schema = 1,
+		tick = math.max(0, math.floor(tonumber(game.network_tick) or 0)),
+		sample_time = tonumber(game.network_clock)
+			or ((tonumber(game.network_tick) or 0) / 30),
+		input_sequence = math.max(0, math.floor(tonumber(
+			runtime and runtime.input and runtime.input.sequence
+		) or 0)),
+		guest_actor = NetworkReplication.capture_actor(
+			guest,
+			NetworkReplication.ACTOR_POSE_FIELDS
+		),
+	}
+end
+
 local function replace_table(target, source)
 	if type(target) ~= "table" then return source or {} end
 	for key in pairs(target) do target[key] = nil end
@@ -1660,6 +1763,151 @@ function multiplayer_each_active_cell(cameras, width, height, callback)
 	)
 end
 
+local function multiplayer_target_motion(snapshot)
+	local motion = {}
+	for _, field in ipairs(network_motion_fields) do
+		motion[field] = snapshot and snapshot[field]
+	end
+	motion.oldstate = snapshot and snapshot.oldstate
+	motion.animation = snapshot and snapshot.animation
+	return motion
+end
+
+local function multiplayer_buffer_local_pose(sample_time, snapshot)
+	if not network_local_pose_buffer then
+		network_local_pose_buffer = NetworkInterpolationBuffer.new({
+			delay = 0.05,
+			maximum_delay = 0.12,
+			maximum_clock_advance = 0.05,
+		})
+	end
+	local latest = network_local_pose_buffer.samples
+		and network_local_pose_buffer.samples[
+			#network_local_pose_buffer.samples
+		]
+	if latest and sample_time < latest.time then
+		return false, "stale authoritative pose sample"
+	end
+	return network_local_pose_buffer:push(
+		sample_time,
+		{
+			actors = {
+				guest = { x = snapshot.truex, y = snapshot.truey },
+			},
+		}
+	)
+end
+
+local function multiplayer_track_local_pose(actor, snapshot, sample_time,
+	input_sequence)
+	local runtime = actor and actors:runtime(actor)
+	if not runtime then return false, false end
+	local was_authoritative = runtime.network_pose_authoritative == true
+	local authoritative = network_airborne_states[snapshot.state] == true
+	runtime.network_pose_authoritative = authoritative
+	runtime.network_pose_input_sequence = input_sequence
+	runtime.network_pose_sample_time = sample_time
+	runtime.network_pose_latest = snapshot
+	if authoritative then
+		actor.network_target_truex = nil
+		actor.network_target_truey = nil
+		actor.network_target_motion = nil
+	end
+	return authoritative, was_authoritative
+end
+
+function multiplayer_apply_pose(pose)
+	if type(pose) ~= "table" or pose.pose_schema ~= 1
+		or not network_validate_serializable(pose, { remaining = 4096 }, 0, {})
+		or not network_nonnegative_integer(pose.tick)
+		or not network_nonnegative_integer(pose.input_sequence)
+		or pose.input_sequence > InputState.MAX_SEQUENCE
+		or not network_finite_number(pose.sample_time)
+		or pose.sample_time < 0
+		or not network_valid_pose_snapshot(pose.guest_actor) then
+		return false, "invalid authoritative pose"
+	end
+	for field in pairs(pose) do
+		if field ~= "pose_schema" and field ~= "tick"
+			and field ~= "sample_time" and field ~= "input_sequence"
+			and field ~= "guest_actor" then
+			return false, "invalid authoritative pose shape"
+		end
+	end
+	if game.network_client and not network_timeline_time_allowed(pose.sample_time) then
+		return false, "authoritative pose time is too far ahead"
+	end
+	local previous_tick = tonumber(game.network_pose_tick) or -1
+	if pose.tick < previous_tick then
+		-- Pose packets are transient and travel independently from the larger
+		-- state stream. Reordering or reconnect catch-up can legitimately leave
+		-- one behind; it is already superseded and must not fail the session.
+		return true, "stale"
+	end
+
+	local pushed, push_error = multiplayer_buffer_local_pose(
+		pose.sample_time,
+		pose.guest_actor
+	)
+	if not pushed then
+		if push_error == "stale authoritative pose sample" then
+			return true, "stale"
+		end
+		return false, push_error
+	end
+
+	game.network_pose_tick = pose.tick
+	local actor = actors and actors.guest
+	if not actor or not actors:runtime(actor) then return true, "unbound" end
+	local authoritative, was_authoritative = multiplayer_track_local_pose(
+		actor,
+		pose.guest_actor,
+		pose.sample_time,
+		pose.input_sequence
+	)
+
+	if authoritative or was_authoritative
+		or network_airborne_states[actor.state] then
+		NetworkReplication.apply_actor(actor, pose.guest_actor, {
+			ignore_position = true,
+			fields = NetworkReplication.ACTOR_POSE_FIELDS,
+		})
+	end
+	if authoritative then
+		actor.network_target_truex = nil
+		actor.network_target_truey = nil
+		actor.network_target_motion = nil
+	else
+		actor.network_target_truex = pose.guest_actor.truex
+		actor.network_target_truey = pose.guest_actor.truey
+		actor.network_target_motion = multiplayer_target_motion(pose.guest_actor)
+	end
+	return true
+end
+
+function multiplayer_apply_local_authoritative_pose()
+	local actor = actors and actors.local_actor
+	local runtime = actor and actors:runtime(actor)
+	if not actor or not runtime or not runtime.network_pose_authoritative
+		or not network_local_pose_buffer then return false end
+	local frame = network_local_pose_buffer:frame()
+	local x, y = NetworkInterpolationBuffer.position(frame, "actors", "guest")
+	if not x or not y then
+		local latest = runtime.network_pose_latest
+		x, y = latest and latest.truex, latest and latest.truey
+	end
+	if not network_finite_number(x) or not network_finite_number(y) then
+		return false
+	end
+	actor.truex, actor.truey = x, y
+	actor.network_target_truex = nil
+	actor.network_target_truey = nil
+	actor.network_target_motion = nil
+	coord_true2screen(actor)
+	actor.xt, actor.yt = actor.tx, actor.ty
+	return true
+end
+
 function multiplayer_apply_replication(state)
 	if type(state) ~= "table" then return false, "invalid replicated state" end
 	local progress_present = state.shared_progress ~= nil
@@ -1733,11 +1981,55 @@ function multiplayer_apply_replication(state)
 		})
 	end
 	if actors.guest and state.guest_actor then
+		local local_guest = actors.local_actor == actors.guest
+		local guest_runtime = local_guest and actors:runtime(actors.guest)
+		local latest_pose_time = guest_runtime
+			and tonumber(guest_runtime.network_pose_sample_time) or nil
+		local newer_pose = type(latest_pose_time) == "number"
+			and latest_pose_time > state.sample_time
+		local preserve_fields
+		if local_guest then
+			-- truex/truey are already deferred below. Their tile derivatives must
+			-- stay on the same predicted timeline or collision checks can use a
+			-- stale cell from the host packet.
+			preserve_fields = {
+				tx = true, ty = true, xt = true, yt = true,
+			}
+			if newer_pose or (
+				network_predictable_motion_states[actors.guest.state]
+				and network_predictable_motion_states[state.guest_actor.state]
+			) then
+				for _, field in ipairs(network_motion_fields) do
+					preserve_fields[field] = true
+				end
+			end
+		end
 		NetworkReplication.apply_actor(actors.guest, state.guest_actor, {
-			defer_position = actors.local_actor == actors.guest,
+			defer_position = local_guest and not newer_pose,
+			ignore_position = newer_pose,
 			preserve_animation = true,
+			preserve_fields = preserve_fields,
 			fields = NetworkReplication.ACTOR_DYNAMIC_FIELDS,
 		})
+		if local_guest and not newer_pose then
+			actors.guest.network_target_motion = multiplayer_target_motion(
+				state.guest_actor
+			)
+			local buffered, buffer_error = multiplayer_buffer_local_pose(
+				state.sample_time,
+				state.guest_actor
+			)
+			if buffered then
+				multiplayer_track_local_pose(
+					actors.guest,
+					state.guest_actor,
+					state.sample_time,
+					nil
+				)
+			elseif buffer_error ~= "stale authoritative pose sample" then
+				return false, buffer_error
+			end
+		end
 	end
 	if progress_present and actors.host and actors.guest then
 		local shared = {}
@@ -2037,14 +2329,6 @@ function multiplayer_send_select_action(slot, instance)
 	})
 end
 
-local network_airborne_states = {
-	jump = true, jump_carry = true,
-	fall = true, fall_carry = true,
-	hang = true, pullup = true,
-	stepup = true, stepupb = true,
-	climb = true,
-}
-
 function multiplayer_reconcile_local_actor(frame_dt)
 	local actor = actors and actors.local_actor
 	if not actor or not actor.network_target_truex or not actor.network_target_truey then
@@ -2052,21 +2336,52 @@ function multiplayer_reconcile_local_actor(frame_dt)
 	end
 	local target_x = actor.network_target_truex
 	local target_y = actor.network_target_truey
+	local target_motion = actor.network_target_motion
+	local target_state = target_motion and target_motion.state or actor.state
 	local current_x = tonumber(actor.truex) or target_x
 	local current_y = tonumber(actor.truey) or target_y
 	local dx, dy = target_x - current_x, target_y - current_y
 	local distance = math.sqrt(dx * dx + dy * dy)
+	local local_airborne = network_airborne_states[actor.state]
+		or math.abs(tonumber(actor.yspeed) or 0) > 0.01
+	local target_airborne = network_airborne_states[target_state]
+		or math.abs(tonumber(target_motion and target_motion.yspeed) or 0) > 0.01
+	local tile_width = math.max(1, tonumber(cf and cf.w) or 32)
+	local tile_height = math.max(1, tonumber(cf and cf.h) or 32)
+	local scripted_mismatch = (network_scripted_motion_states[actor.state]
+		or network_scripted_motion_states[target_state])
+		and (actor.state ~= target_state
+			or distance > math.min(tile_width, tile_height) / 2)
+	local grounded_floor_mismatch = not local_airborne and not target_airborne
+		and math.abs(dy) > tile_height / 4
+	local grounded_horizontal_mismatch = not local_airborne and not target_airborne
+		and math.abs(dx) > tile_width * 0.75
+	local hard_sync = distance > 96 or scripted_mismatch
+		or grounded_floor_mismatch or grounded_horizontal_mismatch
 
-	if distance > 96 then
+	if hard_sync then
 		-- Teleports, respawns and serious prediction errors must converge at
-		-- once. Small LAN latency errors are handled below without repeatedly
-		-- dragging the player towards an already stale packet.
+		-- once. A different grounded floor or scripted movement phase is also a
+		-- collision disagreement: smoothing it leaves the client pressed against
+		-- a block while the host has already stepped on top of it.
 		actor.truex, actor.truey = target_x, target_y
+		if target_motion then
+			for _, field in ipairs(network_motion_fields) do
+				actor[field] = target_motion[field]
+			end
+			actor.oldstate = target_motion.oldstate
+			if type(target_motion.animation) == "table" then
+				actor.animation = target_motion.animation
+			end
+		elseif not target_airborne then
+			actor.xspeed, actor.yspeed = 0, 0
+		end
 	else
-		if not network_airborne_states[actor.state] and math.abs(dy) <= 16 then
+		if not local_airborne and not target_airborne and math.abs(dy) <= 16 then
 			-- A grounded sprite should share the authoritative floor exactly;
 			-- fractional vertical reconciliation made the ghost hover between
-			-- two block rows.
+			-- two block rows. A delayed grounded packet must never pull a locally
+			-- predicted jump back to the floor.
 			actor.truey = target_y
 			dy = 0
 		end
@@ -2083,7 +2398,7 @@ function multiplayer_reconcile_local_actor(frame_dt)
 		if dy ~= 0 then
 			actor.truey = current_y + correction(
 				dy,
-				network_airborne_states[actor.state] and 8 or 4
+				(local_airborne or target_airborne) and 8 or 4
 			)
 		end
 	end
@@ -2093,7 +2408,9 @@ function multiplayer_reconcile_local_actor(frame_dt)
 	-- and producing visible rubber-banding on lower-frame-rate machines.
 	actor.network_target_truex = nil
 	actor.network_target_truey = nil
+	actor.network_target_motion = nil
 	coord_true2screen(actor)
+	actor.xt, actor.yt = actor.tx, actor.ty
 	return true
 end
 
@@ -2120,6 +2437,77 @@ local function preserve_predicted_stats(actor)
 			end
 		end
 	end
+end
+
+function multiplayer_predict_local_actor(frame_dt, input, movement_enabled)
+	local actor = actors and actors.local_actor
+	local runtime = actor and actors:runtime(actor)
+	if not actor or not runtime then return false, "local actor runtime is missing" end
+	local prediction_input = InputState.new()
+	-- Vertical movement and collision transitions are rendered from the compact
+	-- host pose stream. Predict only flat-ground locomotion locally; otherwise a
+	-- delayed input packet starts a second, phase-shifted jump on the client.
+	for _, action in ipairs({ "a", "d", "lshift", "rshift" }) do
+		if InputState.is_down(input, action) then
+			prediction_input.held[action] = true
+		end
+	end
+	prediction_input.aim = StateCopy.copy(input and input.aim or {})
+
+	local previous_input = ACTIVE_INPUT_STATE
+	local previous_prediction = NETWORK_CLIENT_PREDICTION
+	local previous_dt = dt
+	local time_before_prediction = game.time
+	local restore_stats = preserve_predicted_stats(actor)
+	ACTIVE_INPUT_STATE = prediction_input
+	NETWORK_CLIENT_PREDICTION = true
+	local predicted, accumulator, steps = pcall(
+		NetworkFixedStep.advance,
+		runtime.network_prediction_accumulator,
+		frame_dt,
+		function(fixed_dt)
+			dt = fixed_dt
+			local rollback
+			local previous_stepup, previous_lastgodown
+			if movement_enabled then
+				rollback = NetworkReplication.capture_actor(
+					actor,
+					NetworkReplication.ACTOR_POSE_FIELDS
+				)
+				rollback.x, rollback.y = actor.x, actor.y
+				rollback.lx, rollback.ly = actor.lx, actor.ly
+				previous_stepup = game.stepup
+				previous_lastgodown = game.lastgodown
+				moving()
+			end
+			if rollback and network_airborne_states[actor.state] then
+				-- Wait for the host pose instead of letting prediction enter a ledge,
+				-- step-up or jump phase the host has not confirmed yet.
+				NetworkReplication.apply_actor(actor, rollback, {
+					fields = NetworkReplication.ACTOR_POSE_FIELDS,
+				})
+				actor.x, actor.y = rollback.x, rollback.y
+				actor.lx, actor.ly = rollback.lx, rollback.ly
+				game.stepup = previous_stepup
+				game.lastgodown = previous_lastgodown
+			end
+			PlayerAnimation.update(actor, fixed_dt, gr)
+			-- Step-up, pull-up and similar legacy animations move actor.x/y.
+			-- Commit those offsets in the same fixed tick as the host instead of
+			-- leaving truex/truey one render frame behind.
+			coord_screen2true(actor)
+			local position = px2tile(actor.x, actor.y)
+			actor.xt, actor.yt = position.x, position.y
+		end
+	)
+	ACTIVE_INPUT_STATE = previous_input
+	NETWORK_CLIENT_PREDICTION = previous_prediction
+	dt = previous_dt
+	game.time = time_before_prediction
+	restore_stats()
+	if not predicted then error(accumulator, 0) end
+	runtime.network_prediction_accumulator = accumulator
+	return true, steps
 end
 
 function multiplayer_client_update(frame_dt)
@@ -2162,28 +2550,24 @@ function multiplayer_client_update(frame_dt)
 	end
 
 	multiplayer_interpolate_remote_state(dt)
-	multiplayer_reconcile_local_actor(dt)
 	game.moved = false
-	if controls_enabled and not game.inputing and not game.craft and not pl.isdead then
-		local prediction_input = InputState.new()
-		for _, action in ipairs({ "w", "s", "a", "d", "space", "lshift", "rshift" }) do
-			if InputState.is_down(input, action) then
-				prediction_input.held[action] = true
-			end
-		end
-		prediction_input.aim = StateCopy.copy(input and input.aim or {})
-		local previous_input = ACTIVE_INPUT_STATE
-		local previous_prediction = NETWORK_CLIENT_PREDICTION
-		local time_before_prediction = game.time
-		local restore_stats = preserve_predicted_stats(pl)
-		ACTIVE_INPUT_STATE = prediction_input
-		NETWORK_CLIENT_PREDICTION = true
-		local predicted, prediction_error = pcall(moving)
-		ACTIVE_INPUT_STATE = previous_input
-		NETWORK_CLIENT_PREDICTION = previous_prediction
-		game.time = time_before_prediction
-		restore_stats()
-		if not predicted then error(prediction_error, 0) end
+	local pose_authoritative = runtime and runtime.network_pose_authoritative
+	if pose_authoritative then
+		-- The pose stream is already sampled at the visible 30 Hz frame rate and
+		-- interpolated here. Running legacy gravity as well would create the second
+		-- trajectory seen in long jumps and at one-tile ledges.
+		runtime.network_prediction_accumulator = 0
+		multiplayer_apply_local_authoritative_pose()
+	else
+		multiplayer_predict_local_actor(
+			dt,
+			input,
+			controls_enabled and not game.inputing
+				and not game.craft and not pl.isdead
+		)
+		-- Reconcile after flat-ground prediction so the authoritative floor is the
+		-- final position rendered this frame.
+		multiplayer_reconcile_local_actor(dt)
 	end
 	-- The host owns fishing physics and fish depletion. The client receives
 	-- the replicated bobber state and only projects it into its camera.
@@ -2201,7 +2585,6 @@ function multiplayer_client_update(frame_dt)
 			}
 		end
 	end
-	PlayerAnimation.update(pl, dt, gr)
 	for _, actor in ipairs({ actors and actors.host, actors and actors.guest }) do
 		if actor and actor ~= pl then
 			PlayerAnimation.update(actor, dt, gr)
@@ -2282,12 +2665,18 @@ function multiplayer_apply_snapshot(snapshot)
 	game.textinputold = ""
 	game.textinputinfo = ""
 	game.network_tick = snapshot.header.tick or 0
+	game.network_pose_tick = -1
 	game.network_server_time = tonumber(game.network_clock) or 0
 	game.network_render_time = game.network_server_time
 	network_timeline_reset(game.network_server_time)
 	game.network_world_sequence = 0
 	game.network_world_received_sequence = 0
 	network_interpolation_buffer = NetworkInterpolationBuffer.new()
+	network_local_pose_buffer = NetworkInterpolationBuffer.new({
+		delay = 0.05,
+		maximum_delay = 0.12,
+		maximum_clock_advance = 0.05,
+	})
 
 	local host_actor = ActorState.ensure(snapshot.host_actor, {
 		actor_id = "host",

@@ -11,6 +11,8 @@ local required_callbacks = {
 	"simulation_handler",
 	"replication_provider",
 	"replication_applier",
+	"pose_provider",
+	"pose_applier",
 	"world_delta_provider",
 	"world_delta_applier",
 	"world_delta_reset",

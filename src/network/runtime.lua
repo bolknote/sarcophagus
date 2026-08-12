@@ -129,6 +129,8 @@ function Runtime.new(options)
 		simulation_handler = options.simulation_handler,
 		replication_provider = options.replication_provider,
 		replication_applier = options.replication_applier,
+		pose_provider = options.pose_provider,
+		pose_applier = options.pose_applier,
 		world_delta_provider = options.world_delta_provider,
 		world_delta_applier = options.world_delta_applier,
 		world_delta_reset = options.world_delta_reset,
@@ -206,11 +208,14 @@ function Runtime.new(options)
 		display_name = nil,
 		advertisement_id = nil,
 		state_accumulator = 0,
+		pose_accumulator = 0,
 		progress_accumulator = 0,
 		world_accumulator = 0,
 		input_accumulator = 0,
 		state_interval = math.max(1 / 120,
 			tonumber(options.state_interval) or (1 / 15)),
+		pose_interval = math.max(1 / 120,
+			tonumber(options.pose_interval) or (1 / 30)),
 		progress_interval = math.max(0.1,
 			tonumber(options.progress_interval) or 1),
 		world_interval = math.max(1 / 120,
@@ -944,6 +949,7 @@ function Runtime:start_host(options)
 	self.advertisement_id = Identity.public_token("advertisement")
 	self.last_error = nil
 	self.state_accumulator = 0
+	self.pose_accumulator = 0
 	self.progress_accumulator = 0
 	self.world_accumulator = 0
 	self.action_retry_accumulator = 0
@@ -1066,6 +1072,7 @@ function Runtime:connect(options)
 			"input-v1",
 			"actions-v1",
 			"reliable-streams-v2",
+			"pose-v1",
 		},
 		client_nonce = Identity.public_token("client"),
 	})
@@ -1908,7 +1915,8 @@ function Runtime:_receive(event)
 
 	local packet_kind = Replication.packet_kind(event.data)
 	if self.role == "client" and packet_kind then
-		if self.client_state == "resuming_sync" and packet_kind == "state" then
+		if self.client_state == "resuming_sync"
+			and (packet_kind == "state" or packet_kind == "pose") then
 			-- State snapshots are transient. A packet queued on the old connection
 			-- is allowed to expire while the reliable world stream is synchronized.
 			return
@@ -1917,8 +1925,10 @@ function Runtime:_receive(event)
 			and self.client_state ~= "resuming_sync" then
 			return self:_fail_client("replication received before playing")
 		end
-		local expected_channel = packet_kind == "state"
-			and Protocol.CHANNEL.STATE or Protocol.CHANNEL.WORLD
+		local expected_channel = packet_kind == "world"
+			and Protocol.CHANNEL.WORLD
+			or (packet_kind == "pose" and Protocol.CHANNEL.INPUT
+				or Protocol.CHANNEL.STATE)
 		if channel ~= expected_channel then
 			return self:_fail_client("replication received on invalid channel")
 		end
@@ -1954,7 +1964,8 @@ function Runtime:_receive(event)
 			self:_mark_stream_ack_dirty()
 			return
 		end
-		local applier = self.replication_applier
+		local applier = packet_kind == "pose"
+			and self.pose_applier or self.replication_applier
 		if type(applier) ~= "function" then
 			return self:_fail_client("replication applier is not configured")
 		end
@@ -1999,6 +2010,7 @@ function Runtime:_publish(dt)
 	end
 	dt = math.max(0, tonumber(dt) or 0)
 	self.state_accumulator = self.state_accumulator + dt
+	self.pose_accumulator = self.pose_accumulator + dt
 	self.progress_accumulator = self.progress_accumulator + dt
 	self.world_accumulator = self.world_accumulator + dt
 
@@ -2033,6 +2045,35 @@ function Runtime:_publish(dt)
 			elseif not sent then
 				self.last_error = tostring(send_error)
 			end
+		else
+			self.last_error = tostring(packet)
+		end
+	end
+
+	if self.pose_accumulator >= self.pose_interval
+		and type(self.pose_provider) == "function" then
+		self.pose_accumulator = self.pose_accumulator % self.pose_interval
+		local built, packet = pcall(function()
+			local pose = PerformanceMetrics.measure(
+				"pose_capture",
+				self.pose_provider,
+				self.session
+			)
+			return PerformanceMetrics.measure(
+				"pose_encode", Replication.encode_pose, pose
+			)
+		end)
+		if built then
+			local sent, send_error = PerformanceMetrics.measure(
+				"network_publish",
+				self.transport.send_raw,
+				self.transport,
+				self.peer,
+				packet,
+				Protocol.CHANNEL.INPUT,
+				false
+			)
+			if not sent then self.last_error = tostring(send_error) end
 		else
 			self.last_error = tostring(packet)
 		end

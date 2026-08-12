@@ -49,6 +49,7 @@ src/msg.lua
 src/network/content_hash.lua
 src/network/discovery.lua
 src/network/enet_transport.lua
+src/network/fixed_step.lua
 src/network/game_adapter.lua
 src/network/identity.lua
 src/network/interpolation_buffer.lua

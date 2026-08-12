@@ -76,7 +76,6 @@ fi
 
 section "Interpretation"
 printf '%s\n' \
-    '1. No automatic server after 6 s: try manual host/IP entry with M.' \
-    '2. Manual entry also fails: check AP isolation, firewall and UDP gameplay port.' \
-    '3. Compare active interfaces/routes on both machines; temporarily disable VPN only as a diagnostic.' \
-    '4. This report sends no discovery probe and changes no network or firewall setting.'
+    '1. No automatic server after 6 s: check AP isolation, firewall and UDP gameplay port.' \
+    '2. Compare active interfaces/routes on both machines; temporarily disable VPN only as a diagnostic.' \
+    '3. This report sends no discovery probe and changes no network or firewall setting.'

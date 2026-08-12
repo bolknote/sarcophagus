@@ -507,6 +507,7 @@ local function install_process_gameplay_test(role, value)
 		local craft_open_seen, craft_return_seen, craft_recipe_selected
 		local craft_recipe_count, craft_inventory
 		local client_done_at
+		local max_throw_charge = 0
 
 		local host_x = tonumber(pl.xt) or math.floor(cf.wmax / 2)
 		local host_y = tonumber(pl.yt) or math.floor(cf.wmax / 2)
@@ -677,6 +678,13 @@ local function install_process_gameplay_test(role, value)
 				end
 			end
 			local guest = session and session.guest
+			local guest_runtime = guest and actors:runtime(guest)
+			max_throw_charge = math.max(
+				max_throw_charge,
+				tonumber(guest_runtime and guest_runtime.presentation.local_ui.game
+					and guest_runtime.presentation.local_ui.game.throwcd)
+					or 0
+			)
 			if guest and session.state == Session.STATE.PLAYING then
 				local cameras = multiplayer_active_cameras()
 				if #cameras == 2 and math.abs((pl.xt or 0) - (guest.xt or 0)) > screen.x then
@@ -744,7 +752,7 @@ local function install_process_gameplay_test(role, value)
 				))
 			if autosave_done and host_respawned and reunion_done and client_done_at
 				and backlog_acked
-				and elapsed - client_done_at >= 0.5 then
+				and elapsed - client_done_at >= 1.5 then
 				assert(game_load(8), "saved gameplay E2E world could not be reloaded")
 				local loaded = { world, game }
 				for _, uid in ipairs(saved_guest_uids) do
@@ -757,6 +765,9 @@ local function install_process_gameplay_test(role, value)
 				local guest_runtime = session and session.guest
 					and actors:runtime(session.guest)
 				local craft_ui = guest_runtime and guest_runtime.presentation.local_ui.craft
+				local guest = session and session.guest
+				local selected = guest and guest.inv
+					and guest.inv[guest.invselect]
 				complete(1, "timeout state=" .. tostring(session and session.state)
 					.. " seeded=" .. tostring(seeded)
 					.. " autosave=" .. tostring(autosave_done)
@@ -768,6 +779,19 @@ local function install_process_gameplay_test(role, value)
 						.. " pointer=" .. tostring(craft_ui and craft_ui.pointer)
 						.. " recipes=" .. tostring(craft_recipe_count)
 						.. " inv=" .. tostring(craft_inventory)
+					.. " throw=" .. tostring(guest and guest.throw)
+						.. "/" .. tostring(guest and guest.canthrow)
+						.. "/" .. tostring(guest and guest.throwcd)
+						.. "/" .. tostring(selected and selected.e2e_role)
+						.. "/" .. tostring(guest_runtime
+							and guest_runtime.presentation.local_ui.game
+							and guest_runtime.presentation.local_ui.game.throwcd)
+						.. "/max:" .. tostring(max_throw_charge)
+					.. " input_r=" .. tostring(guest_runtime and InputState.is_down(
+						guest_runtime.input,
+						"r"
+					))
+					.. " projectiles=" .. tostring(proj and #proj)
 					.. " error=" .. tostring(multiplayer.last_error))
 			end
 		end)
@@ -792,6 +816,7 @@ local function install_process_gameplay_test(role, value)
 		local observed = {
 			far = false, contention = false, build = false, craft = false,
 			equipment = false, drop = false, throw = false,
+			deaths = false, reunion = false,
 			backlog = not reconnect_required,
 		}
 		local reconnect_world_before, reconnect_event_before
@@ -829,6 +854,7 @@ local function install_process_gameplay_test(role, value)
 			multiplayer:update(frame_dt)
 			if game.network_client and multiplayer.client_state == "playing" then
 				multiplayer_interpolate_remote_state(frame_dt)
+				multiplayer_reconcile_local_actor(frame_dt)
 			end
 			if multiplayer.client_state == "reconnecting"
 				or multiplayer.client_state == "resuming"
@@ -947,7 +973,10 @@ local function install_process_gameplay_test(role, value)
 					end
 				elseif stage == 11 and action_finished() then
 					local selected = pl.inv and pl.inv[pl.invselect]
-					if selected and selected.e2e_role == "throw" then
+					-- Crafting adds authoritative recovery time. Wait until the guest
+					-- can act instead of relying on the old accidental 60 Hz drain.
+					if selected and selected.e2e_role == "throw"
+						and (tonumber(pl.unrest) or 0) <= 0 then
 					input.aim = {
 						world_x = pl.truex + cf.w * 4,
 						world_y = pl.truey - cf.h,
@@ -982,10 +1011,12 @@ local function install_process_gameplay_test(role, value)
 					observed.throw = observed.throw or projectile_tag("throw") ~= nil
 					if observed.throw then stage = 14 end
 				elseif stage == 14 then
-					local deaths = (tonumber(pl.network_deaths) or 0) >= 1
+					observed.deaths = (tonumber(pl.network_deaths) or 0) >= 1
 						and (tonumber(actors.host.deaths) or 0) >= host_deaths_before + 1
-					local reunited = math.abs((actors.host.xt or 0) - (pl.xt or 0)) <= 2
-					if deaths and reunited and observed.backlog
+					observed.reunion = math.abs(
+						(actors.host.xt or 0) - (pl.xt or 0)
+					) <= 2
+					if observed.deaths and observed.reunion and observed.backlog
 						and (not reconnect_required or reconnect_seen) then
 						for name, value in pairs(observed) do
 							assert(value, "gameplay E2E did not observe " .. name)
@@ -1008,6 +1039,11 @@ local function install_process_gameplay_test(role, value)
 						.. "/" .. tostring(multiplayer.received_world_sequence)
 					.. " event=" .. tostring(reconnect_event_before)
 						.. "/" .. tostring(multiplayer.received_event_id)
+					.. " deaths=" .. tostring(observed.deaths)
+					.. " reunion=" .. tostring(observed.reunion)
+					.. " guest_tile=" .. tostring(pl.xt) .. "," .. tostring(pl.yt)
+					.. " host_tile=" .. tostring(actors.host and actors.host.xt)
+						.. "," .. tostring(actors.host and actors.host.yt)
 					.. " error=" .. tostring(multiplayer.last_error))
 			end
 		end)
@@ -1298,6 +1334,28 @@ local function validate_actor_architecture()
 		and guest.animation.frame == 1 and guest.oldstate == "walk",
 		"authoritative state transition did not reset client animation once")
 
+	guest.state = "jump"
+	guest.yspeed = -7
+	guest.tx, guest.ty, guest.xt, guest.yt = 10, 11, 10, 11
+	assert(NetworkReplication.apply_actor(guest, {
+		state = "idle",
+		yspeed = 0,
+		tx = 20, ty = 21, xt = 20, yt = 21,
+	}, {
+		fields = { "state", "yspeed", "tx", "ty", "xt", "yt" },
+		preserve_fields = {
+			state = true, yspeed = true,
+			tx = true, ty = true, xt = true, yt = true,
+		},
+	}))
+	assert(guest.state == "jump" and guest.yspeed == -7
+		and guest.tx == 10 and guest.ty == 11
+		and guest.xt == 10 and guest.yt == 11,
+		"replication overwrote locally predicted movement")
+	local captured_motion = NetworkReplication.capture_actor(guest)
+	assert(captured_motion.yspeed == -7,
+		"replication omitted authoritative movement velocity")
+
 	local legacy = ActorState.ensure({ state = "idle" }, {
 		actor_id = "host",
 		actor_role = "host",
@@ -1369,6 +1427,8 @@ local function validate_network_core()
 	local WorldJournal = require("src.network.world_journal")
 	local Runtime = require("src.network.runtime")
 	local LANDiscovery = require("src.network.discovery")
+	local FixedStep = require("src.network.fixed_step")
+	local PlayerAnimation = require("src.player_animation")
 	local PerformanceBudget = require("src.performance_budget")
 	local PerformanceMetrics = require("src.performance_metrics")
 	do
@@ -1683,6 +1743,7 @@ local function validate_network_core()
 		local client_registry = ActorRegistry.new()
 		local applied_snapshot
 		local applied_state
+		local applied_pose
 		local applied_world
 		local simulated_input
 		local handled_action
@@ -1697,6 +1758,7 @@ local function validate_network_core()
 		runtime_server = Runtime.new({
 			registry = host_registry,
 			state_interval = 0.001,
+			pose_interval = 0.001,
 			world_interval = 0.001,
 			spawn_provider = function()
 				return { truex = 32, truey = 64, tx = 2, ty = 3, xt = 2, yt = 3 }
@@ -1730,6 +1792,18 @@ local function validate_network_core()
 					guest_actor = NetworkReplication.capture_actor(session_state.guest),
 				}
 			end,
+			pose_provider = function(session_state)
+				return {
+					pose_schema = 1,
+					tick = 2,
+					sample_time = 0.1,
+					input_sequence = 1,
+					guest_actor = NetworkReplication.capture_actor(
+						session_state.guest,
+						NetworkReplication.ACTOR_POSE_FIELDS
+					),
+				}
+			end,
 			world_delta_provider = function()
 				if #pending_deltas == 0 then return nil end
 				return table.remove(pending_deltas, 1)
@@ -1743,6 +1817,7 @@ local function validate_network_core()
 			registry = client_registry,
 			max_poll_events = 1,
 			state_interval = 0.001,
+			pose_interval = 0.001,
 			world_interval = 0.001,
 			state_applier = function(snapshot_state)
 				applied_snapshot = snapshot_state
@@ -1750,6 +1825,7 @@ local function validate_network_core()
 				client_registry:bind_guest(snapshot_state.guest_actor, { local_actor = true })
 			end,
 			replication_applier = function(value) applied_state = value end,
+			pose_applier = function(value) applied_pose = value end,
 			world_delta_applier = function(value) applied_world = value end,
 			event_handler = function(value)
 				applied_event = value
@@ -1828,8 +1904,11 @@ local function validate_network_core()
 		assert(runtime_client:send_action({ action_id = "runtime:1", action = "test" }))
 		pump(function()
 			return simulated_input and handled_action == "runtime:1"
-				and applied_state and applied_world
+				and applied_state and applied_pose and applied_world
 		end, "runtime input/action/replication loop did not complete")
+		assert(applied_pose.pose_schema == 1
+			and applied_pose.guest_actor.actor_role == "guest",
+			"runtime authoritative pose was corrupted")
 		assert(applied_world.cells[1].cell.b == 12,
 			"runtime world delta was corrupted")
 		for sequence = 2, 33 do
@@ -1972,6 +2051,7 @@ local function validate_network_core()
 		content_hash = test_content_hash,
 		capabilities = {
 			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v2",
+			"pose-v1",
 		},
 		client_nonce = client_nonce,
 	})
@@ -1997,6 +2077,7 @@ local function validate_network_core()
 		content_hash = "not-a-sha256",
 		capabilities = {
 			"snapshot-v1", "input-v1", "actions-v1", "reliable-streams-v2",
+			"pose-v1",
 		},
 		client_nonce = client_nonce,
 	})
@@ -2447,6 +2528,21 @@ local function validate_network_core()
 		and restored_state.guest_actor.actor_role == "guest"
 		and restored_state.mobs[1].truey == 64,
 		"authoritative state packet did not round-trip")
+	local pose_packet = NetworkReplication.encode_pose({
+		pose_schema = 1,
+		tick = 79,
+		sample_time = 2.5,
+		input_sequence = 9,
+		guest_actor = NetworkReplication.capture_actor(
+			restored_snapshot.guest_actor,
+			NetworkReplication.ACTOR_POSE_FIELDS
+		),
+	})
+	local restored_pose, restored_pose_kind = NetworkReplication.decode(pose_packet)
+	assert(restored_pose_kind == "pose" and restored_pose.tick == 79
+		and restored_pose.input_sequence == 9
+		and restored_pose.guest_actor.actor_role == "guest",
+		"authoritative pose packet did not round-trip")
 	local function smoke_u32_be(value)
 		return string.char(
 			math.floor(value / 2 ^ 24) % 256,
@@ -2525,6 +2621,81 @@ local function validate_network_core()
 		and interpolation.samples[#interpolation.samples]
 			.positions.projectiles[7].x == 4,
 		"a new projectile could not be seeded at its owner's position")
+	do
+		local function simulate_jump(render_hz)
+			local accumulator, y, yspeed, steps = 0, 0, -9.5, 0
+			local frame_count = math.floor(render_hz * 0.2 + 0.5)
+			for _ = 1, frame_count do
+				local executed
+				accumulator, executed = FixedStep.advance(
+					accumulator,
+					1 / render_hz,
+					function()
+						yspeed = math.min(12, yspeed + 0.7)
+						y = y + yspeed
+					end
+				)
+				steps = steps + executed
+			end
+			return y, yspeed, steps, accumulator
+		end
+
+		local expected_y, expected_speed, expected_steps = simulate_jump(60)
+		assert(expected_steps == 6, "fixed-step reference used the wrong tick count")
+		for _, render_hz in ipairs({ 30, 120 }) do
+			local y, yspeed, steps, accumulator = simulate_jump(render_hz)
+			assert(steps == expected_steps
+				and math.abs(y - expected_y) < 1e-9
+				and math.abs(yspeed - expected_speed) < 1e-9
+				and accumulator >= 0 and accumulator < FixedStep.STEP,
+				("network movement diverged at %d FPS"):format(render_hz))
+		end
+		local bounded_calls = 0
+		local bounded_accumulator, bounded_steps = FixedStep.advance(0, 10, function()
+			bounded_calls = bounded_calls + 1
+		end)
+		assert(bounded_steps == FixedStep.MAX_STEPS
+			and bounded_calls == FixedStep.MAX_STEPS
+			and bounded_accumulator >= 0
+			and bounded_accumulator < FixedStep.STEP,
+			"fixed-step catch-up exceeded its stall budget")
+
+		local function simulate_stepup(render_hz)
+			local actor = ActorState.ensure({
+				actor_id = "guest", actor_role = "guest",
+				state = "stepup", oldstate = "stepup",
+				x = 100, y = 100, flip = 1, anispeed = 1,
+				animation = { frame = 1, time = 0, cycle = 0 },
+			})
+			local definitions = {
+				stepup = {
+					cnt = 3, dur = { 1, 1, 1 }, ani = { 2, 3, "walk" },
+					add = { [2] = { 3, -12 }, [3] = { 7, -10 } },
+					exitfr = 1,
+				},
+				walk = { cnt = 1, dur = { 1000 }, ani = { 1 } },
+			}
+			local accumulator = 0
+			for _ = 1, math.floor(render_hz * 0.2 + 0.5) do
+				accumulator = FixedStep.advance(
+					accumulator,
+					1 / render_hz,
+					function(fixed_dt)
+						PlayerAnimation.update(actor, fixed_dt, definitions)
+					end
+				)
+			end
+			return actor
+		end
+		local expected_stepup = simulate_stepup(60)
+		for _, render_hz in ipairs({ 30, 120 }) do
+			local actor = simulate_stepup(render_hz)
+			assert(actor.x == expected_stepup.x and actor.y == expected_stepup.y
+				and actor.state == expected_stepup.state
+				and actor.animation.frame == expected_stepup.animation.frame,
+				("scripted movement diverged at %d FPS"):format(render_hz))
+		end
+	end
 	local journal = WorldJournal.new()
 	local delta_world = { [2] = { [3] = { b = 12, i = { { i = 31 } } } } }
 	assert(journal:record(3, 2) and journal:record(3, 2))
@@ -3493,6 +3664,91 @@ local function validate_multiplayer_gameplay()
 		attacker_mob.hp = hp_before
 		while #sct > sct_before do table.remove(sct) end
 
+		do
+			local live_registry = actors
+			local network_time_base = game.network_time_base
+			local network_guest_time_delta = game.network_guest_time_delta
+			local function simulate_at(render_hz, viewport_width, viewport_height)
+				local registry = ActorRegistry.new()
+				registry:bind_host(StateCopy.copy(pl), StateCopy.copy(vi))
+				local simulated_guest = StateCopy.copy(guest)
+				local simulated_camera = StateCopy.copy(vi)
+				if viewport_width and viewport_height then
+					local ew = viewport_width - 8 * 18
+					local eh = viewport_height - 14 * 15
+					simulated_camera.vixmax = ew / 2 + ew / 10 - 8 * 18
+					simulated_camera.vixmin = ew / 2 - ew / 10 + 8 * 18
+					simulated_camera.viymax = eh / 2
+					simulated_camera.viymin = eh / 2
+					if game.gr2x then
+						simulated_camera.vixmax = simulated_camera.vixmax / 2
+						simulated_camera.vixmin = simulated_camera.vixmin / 2
+						simulated_camera.viymax = simulated_camera.viymax / 2
+						simulated_camera.viymin = simulated_camera.viymin / 2
+					end
+				end
+				local simulated_runtime = select(2, registry:bind_guest(
+					simulated_guest,
+					{ camera = simulated_camera }
+				))
+				InputState.set_button(simulated_runtime.input, "d", true)
+				simulated_runtime.input.aim = {
+					world_x = simulated_guest.truex + 64,
+					world_y = simulated_guest.truey,
+				}
+				actors = registry
+				local ran, run_error = pcall(function()
+					local steps = 0
+					for _ = 1, math.floor(render_hz * 0.2 + 0.5) do
+						local simulated, executed = multiplayer_simulate_guest(
+							simulated_guest,
+							simulated_runtime.input,
+							1 / render_hz
+						)
+						assert(simulated, "guest cross-FPS simulation failed")
+						steps = steps + executed
+					end
+					return {
+						truex = simulated_guest.truex,
+						truey = simulated_guest.truey,
+						xspeed = simulated_guest.xspeed,
+						yspeed = simulated_guest.yspeed,
+						state = simulated_guest.state,
+						steps = steps,
+					}
+				end)
+				actors = live_registry
+				assert(ran, run_error)
+				return run_error
+			end
+
+			local reference = simulate_at(60)
+			assert(reference.steps == 6,
+				"guest cross-FPS reference used the wrong tick count")
+			for _, render_hz in ipairs({ 30, 120 }) do
+				local simulated = simulate_at(render_hz)
+				assert(simulated.steps == reference.steps
+					and math.abs(simulated.truex - reference.truex) < 1e-7
+					and math.abs(simulated.truey - reference.truey) < 1e-7
+					and math.abs(simulated.xspeed - reference.xspeed) < 1e-7
+					and math.abs(simulated.yspeed - reference.yspeed) < 1e-7
+					and simulated.state == reference.state,
+					("guest simulation diverged at %d FPS"):format(render_hz))
+			end
+			for _, viewport in ipairs({ { 1280, 720 }, { 720, 1280 } }) do
+				local simulated = simulate_at(60, viewport[1], viewport[2])
+				assert(simulated.steps == reference.steps
+					and math.abs(simulated.truex - reference.truex) < 1e-7
+					and math.abs(simulated.truey - reference.truey) < 1e-7
+					and simulated.state == reference.state,
+					("guest simulation depends on %dx%d viewport"):format(
+						viewport[1], viewport[2]
+					))
+			end
+			game.network_time_base = network_time_base
+			game.network_guest_time_delta = network_guest_time_delta
+		end
+
 		InputState.set_button(runtime.input, "d", true)
 		runtime.input.aim = {
 			world_x = guest.truex + 64,
@@ -3502,9 +3758,20 @@ local function validate_multiplayer_gameplay()
 		}
 		local host_truex, host_truey = pl.truex, pl.truey
 		local guest_start_x, guest_start_y = guest.truex, guest.truey
-			local simulation_context = capture_host_actor_context()
-			for _ = 1, 45 do multiplayer_simulate_guest(guest, runtime.input, 1 / 30) end
-			assert_host_actor_context(simulation_context, "guest simulation")
+		local simulation_context = capture_host_actor_context()
+		local simulation_steps = 0
+		for _ = 1, 45 do
+			local simulated, steps = multiplayer_simulate_guest(
+				guest,
+				runtime.input,
+				1 / 30
+			)
+			assert(simulated, "guest fixed-step simulation failed")
+			simulation_steps = simulation_steps + steps
+		end
+		assert(simulation_steps == 45,
+			"30 FPS host did not execute the 30 Hz guest simulation")
+		assert_host_actor_context(simulation_context, "guest simulation")
 		assert(pl.truex == host_truex and pl.truey == host_truey,
 			"guest simulation moved the host actor")
 		assert(guest.truex ~= guest_start_x or guest.truey ~= guest_start_y,
@@ -3869,6 +4136,8 @@ local function validate_multiplayer_gameplay()
 		local replication_started = love.timer.getTime()
 		local replication_state = multiplayer_replication_state({ guest = guest })
 		local state_packet = NetworkReplication.encode_state(replication_state)
+		local pose_state = multiplayer_pose_state({ guest = guest })
+		local pose_packet = NetworkReplication.encode_pose(pose_state)
 		local replication_ms = (love.timer.getTime() - replication_started) * 1000
 		local progress_state = multiplayer_replication_state({ guest = guest }, true)
 		local progress_packet = NetworkReplication.encode_state(progress_state)
@@ -3891,12 +4160,18 @@ local function validate_multiplayer_gameplay()
 			"real-world replication state exceeded its packet budget")
 		assert(#state_packet < 16 * 1024,
 			"frequent actor state regressed to a full progress payload")
+		assert(#pose_packet < 2 * 1024,
+			"30 Hz authoritative pose is too large")
 		assert(#progress_packet < NetworkReplication.MAX_STORED_BYTES,
 			"progress replication state exceeded its packet budget")
 		local decoded_state, decoded_kind = NetworkReplication.decode(state_packet)
 		assert(decoded_state and decoded_kind == "state"
 			and decoded_state.actor_schema == 2,
 			"fast LZ4 replication state did not round-trip")
+		local decoded_pose, decoded_pose_kind = NetworkReplication.decode(pose_packet)
+		assert(decoded_pose and decoded_pose_kind == "pose"
+			and decoded_pose.pose_schema == 1,
+			"compact authoritative pose did not round-trip")
 
 		local marker = "multiplayer_smoke_progress"
 		progress_state.shared_progress.visited[marker] = 7
@@ -3910,8 +4185,10 @@ local function validate_multiplayer_gameplay()
 			"shared or personal actor progress was not applied correctly")
 
 		local saved_x, saved_y, saved_state = guest.truex, guest.truey, guest.state
+		local saved_xspeed, saved_yspeed = guest.xspeed, guest.yspeed
 		actors:set_local(guest)
 		guest.state = "idle"
+		guest.yspeed = 0
 		guest.network_target_truex = guest.truex + 5
 		guest.network_target_truey = guest.truey + 3.5
 		assert(multiplayer_reconcile_local_actor(1 / 60)
@@ -3920,7 +4197,37 @@ local function validate_multiplayer_gameplay()
 			and guest.network_target_truex == nil
 			and guest.network_target_truey == nil,
 			"local reconciliation dragged or vertically floated the ghost")
+		guest.truex, guest.truey = saved_x, saved_y
+		guest.state, guest.yspeed = "jump", -5
+		guest.network_target_truex = saved_x
+		guest.network_target_truey = saved_y + 12
+		guest.network_target_motion = { state = "idle", xspeed = 0, yspeed = 0 }
+		assert(multiplayer_reconcile_local_actor(1 / 60)
+			and guest.truey > saved_y and guest.truey < saved_y + 12
+			and guest.state == "jump" and guest.yspeed == -5,
+			"a delayed grounded packet cancelled the predicted jump")
+		guest.truex, guest.truey = saved_x - 18, saved_y + cf.h
+		guest.state, guest.yspeed = "idle", 0
+		guest.network_target_truex = saved_x
+		guest.network_target_truey = saved_y
+		guest.network_target_motion = {
+			state = "idle", oldstate = "idle", xspeed = 0, yspeed = 0,
+			animation = { frame = 1, time = 0, cycle = 0 },
+		}
+		assert(multiplayer_reconcile_local_actor(1 / 60)
+			and guest.truex == saved_x and guest.truey == saved_y
+			and guest.state == "idle" and guest.yspeed == 0,
+			"a grounded client remained beside the host's raised block")
+		guest.truex, guest.truey = saved_x, saved_y
+		guest.network_target_truex = saved_x
+		guest.network_target_truey = saved_y + 120
+		guest.network_target_motion = { state = "idle", xspeed = 0, yspeed = 0 }
+		assert(multiplayer_reconcile_local_actor(1 / 60)
+			and guest.truey == saved_y + 120
+			and guest.state == "idle" and guest.yspeed == 0,
+			"a serious prediction error did not restore host movement state")
 		guest.truex, guest.truey, guest.state = saved_x, saved_y, saved_state
+		guest.xspeed, guest.yspeed = saved_xspeed, saved_yspeed
 		coord_true2screen(guest)
 		actors:set_local(pl)
 		local draw_x, draw_y = ActorRenderer.position(guest, {
@@ -3945,6 +4252,174 @@ local function validate_multiplayer_gameplay()
 			and game.textinputinfo == "" and game.inputing == nil
 			and game.craft == false and game.escmenu == nil,
 			"network snapshot discarded local client UI defaults")
+		do
+			local client_runtime = assert(actors:runtime(pl))
+			local saved_actor = NetworkReplication.capture_actor(pl)
+			local saved_x, saved_y = pl.x, pl.y
+			local base_time = tonumber(game.network_server_time) or 0
+			local jump_pose = NetworkReplication.capture_actor(
+				pl,
+				NetworkReplication.ACTOR_POSE_FIELDS
+			)
+			jump_pose.state, jump_pose.oldstate = "jump", "jump"
+			jump_pose.truex, jump_pose.truey = pl.truex + 18, pl.truey - 24
+			jump_pose.xspeed, jump_pose.yspeed = 3, -5
+			jump_pose.animation = { frame = 2, time = 1, cycle = 1 }
+			assert(multiplayer_apply_pose({
+				pose_schema = 1,
+				tick = 1,
+				sample_time = base_time + 0.05,
+				input_sequence = 1,
+				guest_actor = jump_pose,
+			}) and client_runtime.network_pose_authoritative
+				and pl.state == "jump",
+				"client did not enter host-authoritative jump rendering")
+			assert(multiplayer_apply_local_authoritative_pose()
+				and math.abs(pl.truex - jump_pose.truex) < 1e-7
+				and math.abs(pl.truey - jump_pose.truey) < 1e-7,
+				"authoritative jump pose was re-simulated locally")
+
+			local delayed_state = StateCopy.copy(replication_state)
+			delayed_state.tick = (tonumber(game.network_server_tick) or 0) + 1
+			delayed_state.sample_time = base_time + 0.025
+			delayed_state.time = game.time
+			assert(multiplayer_apply_replication(delayed_state)
+				and client_runtime.network_pose_authoritative
+				and pl.state == "jump",
+				"an older full state overrode a newer authoritative pose")
+
+			local landed_pose = StateCopy.copy(jump_pose)
+			landed_pose.state, landed_pose.oldstate = "idle", "idle"
+			landed_pose.truex, landed_pose.truey =
+				saved_actor.truex, saved_actor.truey
+			landed_pose.xspeed, landed_pose.yspeed = 0, 0
+			landed_pose.animation = { frame = 1, time = 0, cycle = 0 }
+			assert(multiplayer_apply_pose({
+				pose_schema = 1,
+				tick = 2,
+				sample_time = base_time + 0.1,
+				input_sequence = 2,
+				guest_actor = landed_pose,
+			}) and not client_runtime.network_pose_authoritative,
+				"client did not leave host-authoritative jump rendering")
+			assert(multiplayer_reconcile_local_actor(1 / 30)
+				and pl.truex == landed_pose.truex
+				and pl.truey == landed_pose.truey,
+				"landing pose left the ghost below the ledge")
+
+			local newer_state = StateCopy.copy(delayed_state)
+			newer_state.tick = (tonumber(game.network_server_tick) or 0) + 1
+			newer_state.sample_time = base_time + 0.15
+			newer_state.time = game.time
+			for _, field in ipairs(NetworkReplication.ACTOR_POSE_FIELDS) do
+				newer_state.guest_actor[field] = StateCopy.copy(landed_pose[field])
+			end
+			assert(multiplayer_apply_replication(newer_state)
+				and not client_runtime.network_pose_authoritative
+				and pl.state == "idle",
+				"newer full state did not establish the landed pose")
+			local stale_ok, stale_status = multiplayer_apply_pose({
+				pose_schema = 1,
+				tick = 3,
+				sample_time = base_time + 0.125,
+				input_sequence = 3,
+				guest_actor = jump_pose,
+			})
+			assert(stale_ok and stale_status == "stale"
+				and not client_runtime.network_pose_authoritative
+				and pl.state == "idle",
+				"an older pose packet failed or overrode a newer full state")
+
+			local real_moving = moving
+			local prediction_ok, prediction_error = pcall(function()
+				local saw_predicted_jump_input = false
+				moving = function()
+					saw_predicted_jump_input = InputState.is_down(
+						ACTIVE_INPUT_STATE,
+						"w"
+					)
+					pl.state = "fall"
+					pl.y = pl.y + cf.h
+					pl.yspeed = 7
+				end
+				local input = InputState.new()
+				InputState.set_button(input, "w", true)
+				local before_truex, before_truey = pl.truex, pl.truey
+				assert(multiplayer_predict_local_actor(1 / 30, input, true))
+				assert(not saw_predicted_jump_input,
+					"client still starts a second jump before host confirmation")
+				assert(pl.state == "idle" and pl.yspeed == 0
+					and pl.truex == before_truex and pl.truey == before_truey,
+					"client prediction crossed an unconfirmed ledge")
+			end)
+			moving = real_moving
+			assert(prediction_ok, prediction_error)
+
+			NetworkReplication.apply_actor(pl, saved_actor)
+			pl.x, pl.y = saved_x, saved_y
+			client_runtime.network_pose_authoritative = false
+			client_runtime.network_pose_latest = nil
+			client_runtime.network_prediction_accumulator = 0
+			network_local_pose_buffer = NetworkInterpolationBuffer.new({
+				delay = 0.05,
+				maximum_delay = 0.12,
+				maximum_clock_advance = 0.05,
+			})
+			game.network_pose_tick = -1
+			coord_true2screen(pl)
+		end
+		do
+			local client_runtime = assert(actors:runtime(pl))
+			local fields = {
+				"state", "oldstate", "animation", "flip",
+				"x", "y", "truex", "truey", "tx", "ty", "xt", "yt",
+			}
+			local saved = {}
+			for _, field in ipairs(fields) do
+				saved[field] = {
+					present = pl[field] ~= nil,
+					value = StateCopy.copy(pl[field]),
+				}
+			end
+			local saved_accumulator = client_runtime.network_prediction_accumulator
+			local function restore_actor()
+				for _, field in ipairs(fields) do
+					pl[field] = saved[field].present
+						and StateCopy.copy(saved[field].value) or nil
+				end
+				client_runtime.network_prediction_accumulator = 0
+			end
+			local function predict_stepup(render_hz)
+				restore_actor()
+				pl.state, pl.oldstate, pl.flip = "stepup", "stepup", 1
+				pl.animation = { frame = 1, time = 0, cycle = 0 }
+				for _ = 1, math.floor(render_hz * 0.2 + 0.5) do
+					assert(multiplayer_predict_local_actor(
+						1 / render_hz,
+						client_runtime.input,
+						false
+					))
+				end
+				return {
+					truex = pl.truex, truey = pl.truey,
+					state = pl.state,
+					frame = pl.animation.frame,
+					time = pl.animation.time,
+				}
+			end
+			local reference = predict_stepup(60)
+			for _, render_hz in ipairs({ 30, 120 }) do
+				local predicted = predict_stepup(render_hz)
+				assert(math.abs(predicted.truex - reference.truex) < 1e-7
+					and math.abs(predicted.truey - reference.truey) < 1e-7
+					and predicted.state == reference.state
+					and predicted.frame == reference.frame
+					and math.abs(predicted.time - reference.time) < 1e-7,
+					("client step-up prediction diverged at %d FPS"):format(render_hz))
+			end
+			restore_actor()
+			client_runtime.network_prediction_accumulator = saved_accumulator
+		end
 		local aligned_cell_before = world[1][1]
 		local aligned_sample_time = (tonumber(game.network_server_time) or 0) + 0.2
 		local aligned_ok, aligned_status = multiplayer_apply_world_delta({
@@ -4207,10 +4682,11 @@ local function validate_multiplayer_gameplay()
 				:format(tostring(escape_error), tostring(escape_opened),
 					tostring(game.inputing)))
 		game.inputing = nil
-		return ("mode=multiplayer-gameplay moved=%.1f snapshot=%d state=%d progress=%d actors=%d entities=%d presentation=%d encode_ms=%.2f white_ghost=true sound_event=true stereo_audio=true actor_text=true eating_isolated=true damage_isolated=true ui_defaults=true reconciliation=true"):format(
+		return ("mode=multiplayer-gameplay moved=%.1f snapshot=%d state=%d pose=%d progress=%d actors=%d entities=%d presentation=%d encode_ms=%.2f white_ghost=true sound_event=true stereo_audio=true actor_text=true eating_isolated=true damage_isolated=true ui_defaults=true reconciliation=true"):format(
 			math.dist(guest_start_x, guest_start_y, guest.truex, guest.truey),
 			#stored,
 			#state_packet,
+			#pose_packet,
 			#progress_packet,
 			#actor_packet,
 			#entity_packet,
@@ -4742,9 +5218,6 @@ local function validate_settings()
 		local multiplayer_copy = {
 			msg.escmenu_guest[2],
 			msg.menu.lan_found,
-			msg.menu.lan_searching,
-			msg.menu.lan_unavailable,
-			msg.menu.lan_discovery_unavailable,
 		}
 		local function append_multiplayer_copy(value)
 			if type(value) == "string" then
@@ -4832,7 +5305,6 @@ local function validate_display()
     assert(dpi_scale >= 1, "invalid DPI scale")
     assert(math.abs(pixel_width - width * dpi_scale) < 1, "pixel width does not match DPI scale")
     assert(math.abs(pixel_height - height * dpi_scale) < 1, "pixel height does not match DPI scale")
-
     local pixel_font = love.graphics.newFont(
         "assets/fonts/GohuFont-Medium.ttf",
         14,
@@ -5222,20 +5694,14 @@ local function validate_display()
 		"silent LAN discovery has no finite diagnostic state")
 	assert(menu_lan_prompt_state({}) == "searching",
 		"empty LAN discovery does not leave the menu in its searching state")
-	local manual_host, manual_port = menu_parse_lan_address("192.168.1.20:23000")
-	assert(manual_host == "192.168.1.20" and manual_port == 23000,
-		"manual LAN IPv4 address did not parse")
-	local named_host, named_port = menu_parse_lan_address("sarcophagus.local")
-	assert(named_host == "sarcophagus.local"
-		and named_port == MultiplayerProtocol.DEFAULT_GAMEPLAY_PORT,
-		"manual LAN host name did not use the gameplay port")
-	assert(not menu_parse_lan_address("999.1.1.1")
-		and not menu_parse_lan_address("host:70000"),
-		"manual LAN parser accepted an invalid endpoint")
-	assert(type(msg.menu.lan_manual) == "string"
-		and type(msg.menu.lan_manual_prompt) == "string"
-		and type(msg.menu.lan_timeout) == "string",
-		"main menu has no manual-address or timeout fallback")
+	assert(menu_lan_prompt_text("found") == msg.menu.lan_found,
+		"an actionable discovered game is hidden from the menu")
+	for _, state in ipairs({
+		"searching", "unavailable", "discovery_unavailable", "timeout",
+	}) do
+		assert(menu_lan_prompt_text(state) == "",
+			"non-actionable LAN state leaks into the main menu: " .. state)
+	end
 	assert(msg.menu.lan_found:find("J", 1, true)
 		and not msg.menu.lan_found:find("_1_", 1, true),
 		"discovered-game prompt exposes technical data instead of the J action")
@@ -6059,12 +6525,21 @@ local function validate_display_modes()
 		local _, _, restored_window_flags = love.window.getMode()
 		assert(not restored_window_flags.fullscreen,
 			"windowed mode did not return after fullscreen")
+		local layout = render_canvas_layout()
 		local canvas_width, canvas_height = gr2x:getPixelDimensions()
-		local window_pixel_width, window_pixel_height =
-			love.graphics.getPixelDimensions()
-		assert(canvas_width == window_pixel_width
-			and canvas_height == window_pixel_height,
-			"world render targets were not resized with the Retina window")
+		local output_width, output_height = smooth2x_canvas:getPixelDimensions()
+		local water_width, water_height = water_canvas:getPixelDimensions()
+		assert(canvas_width == layout.world_width
+			and canvas_height == layout.world_height
+			and output_width == layout.output_width
+			and output_height == layout.output_height
+			and water_width == layout.water_width
+			and water_height == layout.water_height,
+			"logical render targets were not resized with the Retina window")
+		assert(gr2x:getDPIScale() == 1 and smooth2x_canvas:getDPIScale() == 1
+			and block_canvas:getDPIScale() == 1
+			and water_canvas:getDPIScale() == 1,
+			"pixel-art render targets unexpectedly allocate at Retina density")
 		validate_smooth2x_filter()
 
 		return ("mode=display-modes window=%dx%d fullscreen=%s double=true"):format(

@@ -90,7 +90,6 @@ end
 
 
 function love.textinput(t)
-	if menu_lan_textinput and menu_lan_textinput(t) then return end
     if game.inputing and t~='`' then
     	game.textinput = game.textinput or ""
     	game.textinputold = game.textinputold or ""

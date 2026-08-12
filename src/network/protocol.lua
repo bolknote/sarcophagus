@@ -71,10 +71,10 @@ function Protocol.sanitize_utf8(value, maximum)
 	return table.concat(output)
 end
 
--- Version 4 adds a bounded replication container with raw-size preflight.
--- Version 3 peers cannot parse that wire format, so the protocol version must
--- keep the two implementations apart.
-Protocol.VERSION = 4
+-- Version 5 adds a compact authoritative pose stream. Older peers interpret
+-- its raw packet magic as an invalid control message, so the handshake must
+-- keep the two wire formats apart.
+Protocol.VERSION = 5
 Protocol.SNAPSHOT_VERSION = 1
 Protocol.DEFAULT_GAMEPLAY_PORT = 22122
 Protocol.CHANNEL = {
@@ -91,6 +91,7 @@ Protocol.REQUIRED_CAPABILITIES = {
 	"input-v1",
 	"actions-v1",
 	"reliable-streams-v2",
+	"pose-v1",
 }
 
 local message_kinds = {
