@@ -55,6 +55,7 @@ jobs:
       - name: Run tests and build a reproducible archive
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
+          SARCOPHAGUS_PERFORMANCE_PROFILE: software-ci
           SDL_AUDIODRIVER: dummy
         run: |
           love_bin="$GITHUB_WORKSPACE/.tools/love-11.5/linux-runtime/squashfs-root/AppRun"

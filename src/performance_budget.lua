@@ -1,33 +1,74 @@
 local Budget = {}
 
--- This is the reproducible reference-machine gate. The separate Intel Mac
--- hardware pass remains a release checklist item because CI cannot emulate it.
-Budget.targets = {
-	minimum_samples = 120,
-	minimum_fps = 30,
-	combined_frame_p95_ms = 1000 / 30,
-	memory_growth_kb = 32 * 1024,
-	phases = {
-		frame_update = { p95_ms = 20, p99_ms = 30 },
-		frame_render = { p95_ms = 24, p99_ms = 32 },
-		guest_simulation = { p95_ms = 8, p99_ms = 12 },
-		active_world_scan = { p95_ms = 8, p99_ms = 12 },
-		active_building = { minimum_samples = 30, p95_ms = 3, p99_ms = 6 },
-		reconnect_backlog_replay = {
-			minimum_samples = 30,
-			p95_ms = 8,
-			p99_ms = 12,
-		},
-		replication_capture = { p95_ms = 8, p99_ms = 12 },
-		replication_encode = { p95_ms = 10, p99_ms = 20 },
-		replication_decode = { p95_ms = 10, p99_ms = 20 },
-		network_publish = { p95_ms = 3, p99_ms = 6 },
-		gc_pause = { p95_ms = 4, p99_ms = 8 },
-		-- A separately labelled, deliberately forced full collection is a
-		-- worst-case maintenance pause, not the normal per-frame GC step.
-		gc_full_pause = { max_ms = 200 },
+local common_phases = {
+	frame_update = { p95_ms = 20, p99_ms = 30 },
+	guest_simulation = { p95_ms = 8, p99_ms = 12 },
+	active_world_scan = { p95_ms = 8, p99_ms = 12 },
+	active_building = { minimum_samples = 30, p95_ms = 3, p99_ms = 6 },
+	reconnect_backlog_replay = {
+		minimum_samples = 30,
+		p95_ms = 8,
+		p99_ms = 12,
+	},
+	replication_capture = { p95_ms = 8, p99_ms = 12 },
+	replication_encode = { p95_ms = 10, p99_ms = 20 },
+	replication_decode = { p95_ms = 10, p99_ms = 20 },
+	network_publish = { p95_ms = 3, p99_ms = 6 },
+	gc_pause = { p95_ms = 4, p99_ms = 8 },
+	-- A separately labelled, deliberately forced full collection is a
+	-- worst-case maintenance pause, not the normal per-frame GC step.
+	gc_full_pause = { max_ms = 200 },
+}
+
+local function copy_phases(extra)
+	local result = {}
+	for name, limits in pairs(common_phases) do
+		local copied = {}
+		for key, value in pairs(limits) do copied[key] = value end
+		result[name] = copied
+	end
+	for name, limits in pairs(extra or {}) do result[name] = limits end
+	return result
+end
+
+-- The reference profile is the real-GPU 30 FPS acceptance gate. GitHub's
+-- Ubuntu/Xvfb job deliberately forces llvmpipe, whose wall time measures a
+-- shared runner's software rasterizer rather than any supported game device.
+Budget.profiles = {
+	reference = {
+		minimum_samples = 120,
+		required_phases = { "frame_update", "frame_render" },
+		minimum_fps = 30,
+		combined_frame_p95_ms = 1000 / 30,
+		memory_growth_kb = 32 * 1024,
+		phases = copy_phases({
+			frame_render = { p95_ms = 24, p99_ms = 32 },
+		}),
+	},
+	["software-ci"] = {
+		minimum_samples = 120,
+		required_phases = { "frame_update", "frame_render" },
+		memory_growth_kb = 32 * 1024,
+		phases = copy_phases({
+			-- Rendering must still execute for enough frames to catch crashes and
+			-- resource errors. Its latency is intentionally non-gating on llvmpipe.
+			frame_render = { minimum_samples = 120 },
+		}),
 	},
 }
+
+function Budget.targets_for_profile(name)
+	name = name or "reference"
+	local targets = Budget.profiles[name]
+	if not targets then
+		return nil, "unknown performance profile: " .. tostring(name)
+	end
+	return targets, name
+end
+
+-- This alias remains the default hardware gate for callers that do not select
+-- a profile explicitly.
+Budget.targets = Budget.profiles.reference
 
 local function failure(failures, message)
 	failures[#failures + 1] = message
@@ -37,6 +78,9 @@ function Budget.evaluate(report, targets)
 	targets = targets or Budget.targets
 	local failures = {}
 	local phases = report and report.phases or {}
+	for _, name in ipairs(targets.required_phases or {}) do
+		if not phases[name] then failure(failures, name .. " samples are missing") end
+	end
 
 	for name, limits in pairs(targets.phases or {}) do
 		local phase = phases[name]
@@ -71,7 +115,8 @@ function Budget.evaluate(report, targets)
 			))
 		end
 		local combined = (update.p95_ms or 0) + (render.p95_ms or 0)
-		if combined > targets.combined_frame_p95_ms then
+		if targets.combined_frame_p95_ms
+			and combined > targets.combined_frame_p95_ms then
 			failure(failures, string.format(
 				"combined frame p95 %.3fms > %.3fms (%d FPS budget)",
 				combined,

@@ -122,6 +122,7 @@ local function install_process_network_test(role, value)
 	if role == "host" then
 		local action_seen, input_seen = false, false
 		local idle_input_seen = not idle_test
+		local idle_probe_seen = false
 		local delta_sequence, event_sequence = 0, 0
 		local completion_elapsed
 		local reconnect_seen, reconnect_completed = false, not forced_disconnect
@@ -161,6 +162,10 @@ local function install_process_network_test(role, value)
 				end
 			end,
 			action_handler = function(_, action)
+				if idle_test and action.action == "process-idle-complete" then
+					idle_probe_seen = true
+					return true
+				end
 				action_seen = action.action == "process-test"
 				return action_seen
 			end,
@@ -240,6 +245,13 @@ local function install_process_network_test(role, value)
 					return
 				end
 			end
+			if idle_test and idle_probe_seen
+				and (runtime.session.state == Session.STATE.LISTENING
+					or runtime.session.state == Session.STATE.RECONNECT_GRACE) then
+				complete(0, "handshake=true input=true action=true reconnect="
+					.. tostring(reconnect_seen) .. " idle=true")
+				return
+			end
 			if runtime.session.state == Session.STATE.RECONNECT_GRACE then
 				reconnect_seen = true
 			elseif reconnect_seen and runtime.session.state == Session.STATE.PLAYING then
@@ -251,7 +263,7 @@ local function install_process_network_test(role, value)
 				and runtime.world_acked_sequence >= wanted
 				and runtime.event_acked_id >= wanted then
 				completion_elapsed = completion_elapsed or elapsed
-				if elapsed - completion_elapsed >= idle_seconds + 0.75 then
+				if not idle_test and elapsed - completion_elapsed >= 0.75 then
 					complete(0, "handshake=true input=true action=true reconnect="
 						.. tostring(reconnect_seen)
 						.. " idle=" .. tostring(idle_test))
@@ -272,6 +284,8 @@ local function install_process_network_test(role, value)
 		local discovery_requested = discovery_port ~= nil
 		local discovery_seen = not discovery_requested
 		local action_sent = false
+		local idle_probe_sent = false
+		local idle_probe_result
 		local process_input
 		local input_released = not idle_test
 		local next_input_send = 0
@@ -296,7 +310,13 @@ local function install_process_network_test(role, value)
 				progress_seen = progress_seen or state.progress == true
 			end,
 			world_delta_applier = function(delta) world_delta = delta end,
-			action_result_handler = function(result) action_result = result end,
+			action_result_handler = function(result)
+				if idle_test and result.action_id == 2 then
+					idle_probe_result = result
+				else
+					action_result = result
+				end
+			end,
 			event_handler = function(value)
 				network_event = value
 				return value.kind == "process-test"
@@ -404,7 +424,16 @@ local function install_process_network_test(role, value)
 				and network_event.event_id == wanted
 				and network_event.value == wanted then
 				completion_elapsed = completion_elapsed or elapsed
-				if elapsed - completion_elapsed >= idle_seconds + 0.25 then
+				if idle_test and not idle_probe_sent
+					and elapsed - completion_elapsed >= idle_seconds then
+					assert(runtime:send_action({
+						action_id = 2,
+						action = "process-idle-complete",
+					}))
+					idle_probe_sent = true
+				elseif (idle_test and idle_probe_result and idle_probe_result.ok)
+					or (not idle_test
+						and elapsed - completion_elapsed >= 0.25) then
 					complete(0,
 						"snapshot=true state=true progress=true world=true action_result=true event=true discovery="
 							.. tostring(discovery_requested and discovery_seen)
@@ -1513,6 +1542,36 @@ local function validate_network_core()
 		})
 		assert(accepted and #failures == 0,
 			"valid performance report failed its budget")
+		local software_targets = assert(
+			PerformanceBudget.targets_for_profile("software-ci")
+		)
+		local slow_software_render = {
+			phases = {
+				frame_update = { count = 120, p95_ms = 5, p99_ms = 7 },
+				frame_render = { count = 120, p95_ms = 70, p99_ms = 90 },
+			},
+			memory_growth_kb = 0,
+		}
+		local hardware_ok = PerformanceBudget.evaluate(slow_software_render)
+		local software_ok = PerformanceBudget.evaluate(
+			slow_software_render,
+			software_targets
+		)
+		assert(not hardware_ok and software_ok,
+			"software renderer timing leaked into the hardware FPS gate")
+		local missing_render_ok = PerformanceBudget.evaluate({
+			phases = {
+				frame_update = { count = 120, p95_ms = 5, p99_ms = 7 },
+			},
+			memory_growth_kb = 0,
+		}, software_targets)
+		assert(not missing_render_ok,
+			"software CI accepted a benchmark that never rendered")
+		local unknown_targets, unknown_error =
+			PerformanceBudget.targets_for_profile("unknown")
+		assert(not unknown_targets and unknown_error ==
+			"unknown performance profile: unknown",
+			"unknown performance profile silently bypassed the gate")
 	end
 	local enet_ok, enet = pcall(require, "enet")
 	local socket_ok, socket = pcall(require, "socket")
@@ -3354,6 +3413,19 @@ local function begin_multiplayer_benchmark()
 	local PerformanceMetrics = require("src.performance_metrics")
 	local Replication = require("src.network.replication")
 	local socket = require("socket")
+	local profile_name = os.getenv("SARCOPHAGUS_PERFORMANCE_PROFILE")
+		or "reference"
+	local performance_targets, profile_error =
+		PerformanceBudget.targets_for_profile(profile_name)
+	assert(performance_targets, profile_error)
+	local renderer_name, renderer_version, renderer_vendor, renderer_device =
+		love.graphics.getRendererInfo()
+	local renderer = table.concat({
+		tostring(renderer_name or "unknown"),
+		tostring(renderer_version or "unknown"),
+		tostring(renderer_vendor or "unknown"),
+		tostring(renderer_device or "unknown"),
+	}, "/"):gsub("[\r\n;]", " ")
 	local original_identity = love.filesystem.getIdentity()
 	local test_identity = "sarcophagus-multiplayer-benchmark"
 	love.filesystem.setIdentity(test_identity)
@@ -3464,6 +3536,8 @@ local function begin_multiplayer_benchmark()
 	PerformanceMetrics.activate({
 		scenario = "near-distant-build-reconnect-dense-replication",
 		frames = frame_limit,
+		profile = profile_name,
+		renderer = renderer,
 	})
 
 	local function benchmark_update()
@@ -3576,12 +3650,17 @@ local function begin_multiplayer_benchmark()
 		if frame >= frame_limit and rendered >= frame_limit then
 			PerformanceMetrics.collect_garbage()
 			local report = PerformanceMetrics.deactivate()
-			local accepted, failures = PerformanceBudget.evaluate(report)
+			local accepted, failures = PerformanceBudget.evaluate(
+				report,
+				performance_targets
+			)
 			local formatted = PerformanceMetrics.format(report)
 			if not accepted then
-				complete(1, table.concat(failures, ", ") .. "; " .. formatted)
+				complete(1, "profile=" .. profile_name .. " renderer=" .. renderer
+					.. "; " .. table.concat(failures, ", ") .. "; " .. formatted)
 			else
-				complete(0, "packet=" .. latest_packet_size .. "B; " .. formatted)
+				complete(0, "profile=" .. profile_name .. " renderer=" .. renderer
+					.. "; packet=" .. latest_packet_size .. "B; " .. formatted)
 			end
 		end
 	end
